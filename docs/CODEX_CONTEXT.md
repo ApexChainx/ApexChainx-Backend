@@ -531,3 +531,14 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 - `resolve(db, outage_id, mttr, resolved_at)` — mark resolved (atomic)
 - `list(db, filters, limit, offset)` — paginated list with filter support
 - `search(db, query, filters)` — full-text and filter search
+
+---
+
+## SLA Repository Methods
+
+`app/repositories/sla_repository.py` exposes:
+- `create(db, data)` — persist SLA result
+- `get_latest(db, outage_id)` — fetch most recent result per outage
+- `list(db, filters, limit, offset)` — paginated result list
+- `bulk_create(db, records)` — bulk insert for recompute operations
+- `mark_latest(db, sla_id)` — update `is_latest` flag
