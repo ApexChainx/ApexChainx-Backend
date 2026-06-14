@@ -488,3 +488,9 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 ## Webhook Signing
 
 `app/services/webhook_signing.py` provides HMAC-SHA256 signing for outgoing webhook payloads. The signing key is the webhook `secret` stored per-registration. Signature version metadata is written to the `webhook_signature_metadata` column added in migration `0013_webhook_secret_metadata`.
+
+---
+
+## Metrics Service
+
+`app/services/metrics.py` exposes internal counters for SLA evaluations, payment executions, webhook delivery attempts, and audit log entries. Metrics are in-process only; no external metrics endpoint is exposed in the current release.
