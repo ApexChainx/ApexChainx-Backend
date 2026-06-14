@@ -285,3 +285,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, commit style, and
 - [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md) — Soroban contract integration and payment flow
 - [docs/WEBHOOK_INTEGRATION.md](docs/WEBHOOK_INTEGRATION.md) — webhook signing, delivery, and retry
 - [docs/CODEX_CONTEXT.md](docs/CODEX_CONTEXT.md) — contributor context and session inventory
+
+## Tests
+
+The test suite lives in `tests/`. Key test files:
+
+| File | Coverage |
+|------|----------|
+| `tests/test_outage_lifecycle.py` | Outage create/resolve/search lifecycle |
+| `tests/test_sla_analytics.py` | SLA analytics aggregation |
+| `tests/test_contract_parity.py` | Local vs contract adapter parity |
+| `tests/test_webhook_signature_versioning.py` | Webhook signing and versioning |
+| `tests/test_config_validation.py` | Startup configuration validation |
+| `tests/test_verify_migrations.py` | Alembic migration chain integrity |
+
+Run tests:
+
+```bash
+pytest tests/
+```
