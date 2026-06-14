@@ -979,3 +979,12 @@ When `CONTRACT_EXECUTION_MODE=contract`:
 5. Contract return value is parsed into an SLA outcome
 6. Outcome is persisted to the `sla_results` table
 7. Payment is executed if the outcome requires one
+
+---
+
+## Security: Key Handling
+
+- `STELLAR_POOL_SECRET_KEY` is loaded once at startup and held in memory
+- The secret key is never logged, never returned via any API endpoint, and never written to disk
+- Only the corresponding public key (`STELLAR_POOL_PUBLIC_KEY`) is stored in configuration for reference
+- If the secret key is compromised, rotate it immediately and update the `.env` file on all instances
