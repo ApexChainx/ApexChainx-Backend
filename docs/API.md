@@ -872,3 +872,16 @@ Every request receives an `X-Correlation-ID` response header. To trace a specifi
 GET /api/v1/outages
 X-Correlation-ID: 550e8400-e29b-41d4-a716-446655440000
 ```
+
+---
+
+## Pagination
+
+Endpoints that return lists accept `limit` and `offset` query parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 50 | Maximum records per page |
+| `offset` | integer | 0 | Number of records to skip |
+
+Responses include `total`, `limit`, and `offset` fields for cursor reconstruction.
