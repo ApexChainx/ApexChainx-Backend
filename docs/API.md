@@ -1182,3 +1182,9 @@ Returns a summary of updated records and any computation errors.
 | `Content-Type: application/json` | Yes (POST/PUT) | Required for all request bodies |
 | `Authorization: Bearer {token}` | Yes (protected routes) | JWT access token |
 | `X-Correlation-ID` | No | Optional; generated if absent |
+
+---
+
+## API Versioning
+
+All routes are prefixed with `/api/v1`. The version prefix is configurable via `API_V1_PREFIX` but must start with `/`. Future breaking changes will be introduced under `/api/v2` without removing `/api/v1`.
