@@ -1244,3 +1244,13 @@ Manually trigger an SLA payment for a resolved outage. Normally called automatic
   "ops_team_wallet": "GOPS..."
 }
 ```
+
+### GET `/api/v1/payments/history`
+
+Get payment transaction history.
+
+**Query Parameters:**
+- `start_date` / `end_date` (optional): date range filter
+- `type` (optional): `penalty`, `reward`, `manual`
+- `status` (optional): `pending`, `confirmed`, `failed`
+- `limit` / `offset`: pagination
