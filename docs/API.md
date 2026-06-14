@@ -1407,3 +1407,22 @@ Retrieve a single outage by ID. Returns full record including timeline events an
 ### GET `/api/v1/outages`
 
 List all outages. Supports pagination via `limit` and `offset`. Default sort is `created_at` descending.
+
+---
+
+## SLA Dispute Resolve Endpoint
+
+### POST `/api/v1/sla/disputes/{dispute_id}/resolve`
+
+Close an open dispute.
+
+```json
+{
+  "resolution": "accepted",
+  "notes": "Reviewed engineer call logs — notification delay confirmed"
+}
+```
+
+`resolution` values: `accepted` (outcome overturned), `rejected` (original outcome upheld).
+
+Emits a `dispute.resolved` audit event and a `dispute.resolved` webhook.
