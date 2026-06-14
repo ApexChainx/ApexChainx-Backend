@@ -74,3 +74,5 @@ Dormant or contributor-only paths:
 
 - `app/services/outage_store.py` — legacy helper, not part of the routed runtime
 - `CONTRACT_EXECUTION_MODE` — controls whether the local SLA adapter or the Soroban contract bridge is active
+
+## Outage and SLA Flow
