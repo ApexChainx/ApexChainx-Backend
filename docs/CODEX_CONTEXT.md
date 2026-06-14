@@ -153,7 +153,7 @@ Treat the following as lighter-weight or environment-dependent:
 
 - `auth` and `wallets` are functional but currently backed by in-repo stores
 - `jobs` and `webhooks` depend on worker infrastructure for full operational behavior
-- contract execution depends on `CONTRACT_EXECUTION_MODE`
+- contract execution depends on `CONTRACT_EXECUTION_MODE` (`local` or `contract`)
 
 Treat the following as non-routed or legacy helper paths:
 
