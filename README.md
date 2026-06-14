@@ -30,3 +30,5 @@ It is responsible for:
 - **Analytics** — SLA performance aggregation, trends, snapshots, and CSV/JSON exports
 
 The `outages` and `sla` domains are the strongest and most integration-focused. Other domains (`auth`, `payments`, `wallets`, `jobs`, `webhooks`) are fully routed but vary in infrastructure depth.
+
+## Tech Stack
