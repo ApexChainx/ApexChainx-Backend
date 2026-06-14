@@ -1108,3 +1108,20 @@ Implements token family rotation — a reused refresh token invalidates the enti
 ### POST `/api/v1/auth/logout`
 
 Invalidate the current session. Accepts the access token in the `Authorization: Bearer` header. All tokens in the same token family are revoked.
+
+---
+
+## Outage Bulk Import
+
+### POST `/api/v1/outages/import`
+
+Import multiple outage records in a single request. Maximum `MAX_BULK_OUTAGES_COUNT` records per request (default 1000).
+
+```json
+{
+  "outages": [
+    { "site_name": "DC-West", "severity": "high", "services_affected": ["billing"] },
+    { "site_name": "DC-East", "severity": "medium", "services_affected": ["api"] }
+  ]
+}
+```
