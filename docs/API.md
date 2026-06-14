@@ -1403,3 +1403,7 @@ Update an open outage's metadata. Resolved outages cannot be updated.
 ### GET `/api/v1/outages/{outage_id}`
 
 Retrieve a single outage by ID. Returns full record including timeline events and latest SLA result if resolved.
+
+### GET `/api/v1/outages`
+
+List all outages. Supports pagination via `limit` and `offset`. Default sort is `created_at` descending.
