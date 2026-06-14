@@ -19,3 +19,7 @@ ApexChainx automates SLA compliance tracking, outage resolution, and blockchain-
 - all Soroban contract interactions
 
 The frontend (`apexchainx-fe`) and contracts (`apexchainx-contracts`) depend on this service.
+
+## Dispute Resolution
+
+When a calculated SLA outcome is contested, operators can file a dispute through `/api/v1/sla/disputes`. Disputes are tracked with their own audit trail and can be resolved or rejected by authorised parties. All dispute actions are audit-logged.
