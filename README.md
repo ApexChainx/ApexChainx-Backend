@@ -302,6 +302,8 @@ The test suite lives in `tests/`. Key test files:
 | `tests/test_webhook_signature_versioning.py` | Webhook signing and versioning |
 | `tests/test_config_validation.py` | Startup configuration validation |
 | `tests/test_verify_migrations.py` | Alembic migration chain integrity |
+| `tests/test_analytics_export.py` | CSV and JSON export correctness |
+| `tests/test_payload_guardrails.py` | Payload size middleware enforcement |
 
 Run tests:
 
