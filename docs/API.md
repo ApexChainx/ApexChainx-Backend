@@ -885,3 +885,29 @@ Endpoints that return lists accept `limit` and `offset` query parameters:
 | `offset` | integer | 0 | Number of records to skip |
 
 Responses include `total`, `limit`, and `offset` fields for cursor reconstruction.
+
+---
+
+## SLA Dispute Endpoints
+
+### POST `/api/v1/sla/disputes`
+
+File a dispute against a computed SLA outcome.
+
+**Request Body:**
+```json
+{
+  "outage_id": "OUT001",
+  "sla_result_id": "SLA001",
+  "reason": "MTTR measurement started before engineer was notified"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "dispute_id": "DIS001",
+  "status": "open",
+  "created_at": "2026-01-16T10:00:00Z"
+}
+```
