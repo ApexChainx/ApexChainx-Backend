@@ -397,3 +397,9 @@ Then trigger an event (e.g., resolve an outage) and verify your receiver logs th
 ## Payload Size Limits
 
 Webhook payloads from the ApexChainx backend are always well under the 10 MB request body limit. Receiver endpoints should not impose unreasonably low body size limits (recommend accepting at least 64 KB).
+
+---
+
+## HTTPS Requirement
+
+In production, register only `https://` webhook URLs. Plain HTTP endpoints will receive deliveries but expose payload content to network interception. The signature verification provides integrity guarantees but not confidentiality.
