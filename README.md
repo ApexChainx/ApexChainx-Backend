@@ -241,3 +241,8 @@ This backend is stabilized but not feature-complete. Known limitations:
 # Database
 DATABASE_URL=postgresql://user:password@localhost:5432/apexchainx
 ```
+
+```env
+# Authentication
+JWT_SECRET_KEY=your-jwt-secret-here
+```
