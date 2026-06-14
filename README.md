@@ -172,3 +172,9 @@ alembic upgrade head
 ```
 
 A migration verification helper is available at `tests/test_verify_migrations.py` to validate the Alembic chain and confirm the database matches the head revision.
+
+### Start the API
+
+```bash
+uvicorn app.main:app --reload
+```
