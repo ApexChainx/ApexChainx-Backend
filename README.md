@@ -128,3 +128,10 @@ apexchainx-be/
 - PostgreSQL
 - pip
 - A virtual environment tool (venv or equivalent)
+
+### Clone the Repository
+
+```bash
+git clone https://github.com/ApexChainx/ApexChainx-Backend.git
+cd ApexChainx-Backend
+```
