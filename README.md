@@ -341,7 +341,7 @@ Migrations are managed with Alembic. The chain lives in `alembic/versions/` and 
 - webhook secret metadata and signature versioning
 - job retry tracking and SLA latest backfill
 
-Run `alembic history` to inspect the full chain. Use `tests/test_verify_migrations.py` to confirm your database is at head.
+Run `alembic history --verbose` to inspect the full chain with revision details. Use `tests/test_verify_migrations.py` to confirm your database is at head.
 
 ## Background Tasks
 
