@@ -154,3 +154,13 @@ cp .env.example .env
 ```
 
 **SECURITY WARNING**: Never commit `.env` to version control. The `.env.example` file contains placeholder values only.
+
+### Environment Validation
+
+Startup fails fast on misconfiguration. The following rules are enforced:
+
+- `API_V1_PREFIX` must start with `/`
+- `DATABASE_URL` must include a URL scheme
+- `ALLOWED_ORIGINS` must be valid `http` or `https` origins
+- `STELLAR_NETWORK` and `CONTRACT_EXECUTION_MODE` must be recognised values
+- When `CELERY_TASK_ALWAYS_EAGER=false`, both `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` must be present
