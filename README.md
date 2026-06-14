@@ -135,3 +135,11 @@ apexchainx-be/
 git clone https://github.com/ApexChainx/ApexChainx-Backend.git
 cd ApexChainx-Backend
 ```
+
+### Install Dependencies
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
