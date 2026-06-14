@@ -965,3 +965,17 @@ Stellar accounts require a minimum XLM balance (currently 1 XLM base reserve plu
 ## Soroban Contract Address
 
 The deployed contract address is configured via `SOROBAN_CONTRACT_ID` in `.env`. This value is required when `CONTRACT_EXECUTION_MODE=contract`. The contract must be deployed to the same network as `STELLAR_NETWORK`.
+
+---
+
+## Contract Invocation Flow
+
+When `CONTRACT_EXECUTION_MODE=contract`:
+
+1. Backend constructs a Soroban invocation transaction
+2. Transaction is signed with `STELLAR_POOL_SECRET_KEY`
+3. Transaction is submitted via `STELLAR_SOROBAN_RPC_URL`
+4. Backend polls for the transaction result
+5. Contract return value is parsed into an SLA outcome
+6. Outcome is persisted to the `sla_results` table
+7. Payment is executed if the outcome requires one
