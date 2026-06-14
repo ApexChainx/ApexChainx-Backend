@@ -671,3 +671,9 @@ Do not use `print()` in application code. Use the logger from `app/utils/logging
 ## Stellar Explorer Utility
 
 `app/utils/explorer.py` constructs Stellar Expert URLs for transactions and accounts based on the active `STELLAR_NETWORK` setting. Use this utility when building payment records rather than constructing URLs manually.
+
+---
+
+## Wallet Address Utility
+
+`app/utils/wallet_address.py` validates and normalises Stellar public key format. Call `validate_stellar_address(address)` before persisting any wallet address. Returns `False` for addresses that are not valid G-type Stellar public keys.
