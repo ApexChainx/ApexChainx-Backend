@@ -354,3 +354,15 @@ Rotate a webhook secret without downtime using the `secret_version` field:
 4. After all in-flight deliveries using the old secret complete, remove the old secret from your receiver
 
 The `X-Webhook-Signature-Version` header tells receivers which version was used to sign each delivery.
+
+---
+
+## Retry Schedule
+
+| Attempt | Delay (base + jitter) |
+|---------|----------------------|
+| 1st retry | ~30 seconds |
+| 2nd retry | ~120 seconds |
+| 3rd retry | ~600 seconds |
+
+After 3 failed attempts the delivery is marked `dead_letter`. No further automatic retries occur.
