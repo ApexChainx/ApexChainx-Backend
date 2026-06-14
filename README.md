@@ -304,3 +304,10 @@ Run tests:
 ```bash
 pytest tests/
 ```
+
+## Middleware
+
+| Middleware | File | Behaviour |
+|-----------|------|-----------|
+| Correlation ID | `app/middleware/correlation.py` | Injects `X-Correlation-ID` header on every request and response |
+| Payload size guard | `app/middleware/payload_size.py` | Enforces a cumulative payload size limit; rejects oversized requests |
