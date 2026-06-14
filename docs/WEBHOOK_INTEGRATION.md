@@ -272,3 +272,19 @@ Track these metrics:
 - [RFC 5869: HMAC-based Key Derivation Function](https://tools.ietf.org/html/rfc5869)
 - [ISO 8601 DateTime Format](https://en.wikipedia.org/wiki/ISO_8601)
 - [OWASP: Timing Attack Prevention](https://owasp.org/www-community/attacks/Timing_attack)
+
+## Event Catalogue
+
+| Event Type | Trigger |
+|------------|---------|
+| `outage.created` | New outage record persisted |
+| `outage.updated` | Outage status or metadata changed |
+| `outage.resolved` | Outage marked resolved with MTTR |
+| `sla.evaluated` | SLA outcome computed after outage resolution |
+| `sla.violation` | SLA threshold breached (penalty triggered) |
+| `sla.reward` | SLA met or exceeded (reward triggered) |
+| `payment.initiated` | Stellar payment transaction submitted |
+| `payment.confirmed` | On-chain confirmation received |
+| `payment.failed` | Payment submission failed |
+| `dispute.filed` | SLA dispute submitted |
+| `dispute.resolved` | SLA dispute closed |
