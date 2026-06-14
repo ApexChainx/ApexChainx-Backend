@@ -52,3 +52,12 @@ Every mutating operation emits an audit event through `app/services/audit_log.py
 - Celery workers can be scaled horizontally; each task is idempotent
 - The correlation middleware adds negligible overhead (UUID generation only)
 - Payload size guards prevent oversized requests from reaching the database layer
+
+---
+
+## Future Work
+
+- Replace in-memory `auth` and `wallet` stores with durable PostgreSQL-backed implementations
+- Enable full `CONTRACT_EXECUTION_MODE=contract` path for production SLA settlements
+- Expand dispute resolution workflow with email/webhook notification on state changes
+- Add OpenAPI schema validation tests to CI
