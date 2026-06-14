@@ -585,3 +585,23 @@ Key enums:
 - `SLAOutcome`: `penalty`, `reward`
 - `PaymentStatus`: `pending`, `confirmed`, `failed`
 - `SeverityLevel`: `low`, `medium`, `high`, `critical`
+
+---
+
+## Audit Log Event Types
+
+Key event types emitted by `app/services/audit_log.py`:
+
+| Event Type | Trigger |
+|-----------|---------|
+| `outage.created` | New outage persisted |
+| `outage.resolved` | Outage resolved with MTTR |
+| `sla.computed` | SLA outcome calculated |
+| `sla.recomputed` | Bulk recompute executed |
+| `payment.initiated` | Stellar payment submitted |
+| `payment.confirmed` | On-chain confirmation received |
+| `dispute.filed` | Dispute created |
+| `dispute.resolved` | Dispute closed |
+| `auth.login` | Successful login |
+| `auth.logout` | Session invalidated |
+| `auth.failed` | Failed login attempt |
