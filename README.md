@@ -388,6 +388,9 @@ Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. For product
 
 ## Payments and Wallets
 
+All payment amounts are denominated in USDC on the Stellar network.
+
+
 The `payments` and `wallets` domains handle SLA-triggered financial settlements:
 
 - **Payments** — record and query Stellar payment transactions linked to SLA outcomes
