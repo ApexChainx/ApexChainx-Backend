@@ -61,3 +61,9 @@ Every mutating operation emits an audit event through `app/services/audit_log.py
 - Enable full `CONTRACT_EXECUTION_MODE=contract` path for production SLA settlements
 - Expand dispute resolution workflow with email/webhook notification on state changes
 - Add OpenAPI schema validation tests to CI
+
+---
+
+## Contract Parity
+
+The local SLA adapter and the Soroban contract adapter are required to produce identical outcomes for the same inputs. The test suite (`tests/test_contract_parity.py`) enforces this invariant. Any divergence is a bug.
