@@ -464,3 +464,9 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 ## Session Repository
 
 `app/repositories/session_repository.py` manages active user sessions. Sessions are linked to token families and expire after the JWT TTL. Logout invalidates the session record immediately, preventing further token refresh even within the TTL window.
+
+---
+
+## Analytics Exporter
+
+`app/utils/analytics_exporter.py` handles CSV and JSON serialisation of SLA analytics. It reads from the `sla_analytics_snapshots` table populated by migration `0007_sla_analytics_snapshots`. Export operations are read-only and do not mutate any records.
