@@ -46,3 +46,5 @@ The `outages` and `sla` domains are the strongest and most integration-focused. 
 | Blockchain | Stellar / Soroban |
 
 Dependencies are declared in [requirements.txt](requirements.txt).
+
+## Active Routes
