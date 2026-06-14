@@ -15,3 +15,7 @@ ApexChainx is a 3-repo monorepo split across frontend, backend, and smart contra
 **System flow:** `User → FE → BE → Contracts → BE → FE`
 
 The frontend never calls contracts directly. The backend is the sole bridge between the UI and on-chain execution.
+
+## Overview
+
+`apexchainx-be` is a FastAPI application that serves as the central processing layer for the ApexChainx platform.
