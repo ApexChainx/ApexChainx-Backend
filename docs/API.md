@@ -861,3 +861,14 @@ https://github.com/OpSoll/apexchainx-be/blob/main/postman/ApexChainx-API.json
 ---
 
 For more information, visit our [GitHub repository](https://github.com/OpSoll/apexchainx-be)
+
+---
+
+## Correlation ID
+
+Every request receives an `X-Correlation-ID` response header. To trace a specific request across logs, include the same value as a request header — otherwise the backend generates one automatically.
+
+```http
+GET /api/v1/outages
+X-Correlation-ID: 550e8400-e29b-41d4-a716-446655440000
+```
