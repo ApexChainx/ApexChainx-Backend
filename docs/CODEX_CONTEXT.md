@@ -312,3 +312,9 @@ Key endpoints:
 ## Rate Limiting
 
 The auth domain includes token family tracking and per-user rate limiting. Rate limit state is stored in the database via migration `0008_auth_rate_limiting`. Abuse triggers a short-lived backoff enforced in `app/core/rate_limiter.py`.
+
+---
+
+## Idempotency
+
+SLA settlement and payment execution are idempotent by design. Duplicate execution attempts for the same `outage_id` are detected and return the existing record rather than creating a second payment. Payment deduplication is enforced at the database level via migration `0011_payment_deduplication`.
