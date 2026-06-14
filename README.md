@@ -200,3 +200,10 @@ As of the latest stabilization pass:
 To exercise outage and SLA routes meaningfully, a reachable PostgreSQL instance is required because those routes depend on the database layer.
 
 ## Current Limitations
+
+This backend is stabilized but not feature-complete. Known limitations:
+
+- `auth` and `wallets` are active but currently backed by lightweight in-memory stores rather than durable identity infrastructure
+- `jobs` and `webhooks` are routed, but rely on optional worker infrastructure (Redis, Celery) to be fully operational outside eager or local modes
+- the contract path exists, but the default runtime favors the local adapter mode
+- documentation and contributor expectations should follow the routed API surface, not every helper or legacy module under `app/services`
