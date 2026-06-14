@@ -311,3 +311,11 @@ GET /api/v1/webhooks
 ```
 
 Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
+
+## Deleting a Webhook
+
+```http
+DELETE /api/v1/webhooks/{webhook_id}
+```
+
+Deletes the endpoint and stops all future deliveries. In-flight deliveries already queued may still complete. Returns `204 No Content` on success.
