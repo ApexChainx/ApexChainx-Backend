@@ -507,3 +507,15 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 | Run all tests | `pytest tests/` |
 | Run one test file | `pytest tests/test_outage_lifecycle.py -v` |
 | Start Celery worker | `celery -A app.tasks.celery_app worker --loglevel=info` |
+
+---
+
+## Celery Worker Start
+
+To run background tasks in worker mode:
+
+```bash
+celery -A app.tasks.celery_app worker --loglevel=info
+```
+
+Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_TASK_ALWAYS_EAGER=false` to route tasks to the worker instead of executing in-process.
