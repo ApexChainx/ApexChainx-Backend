@@ -1,6 +1,7 @@
 # ApexChainx API Documentation
 
-Version: 1.0.0  
+Version: 1.0.0
+
 Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (production) - WIP
 
 ## Table of Contents
