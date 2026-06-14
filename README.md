@@ -222,6 +222,9 @@ This backend is stabilized but not feature-complete. Known limitations:
 
 ### For Contributors
 
+See [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md) for Stellar-specific security requirements including key management and testnet/mainnet separation.
+
+
 **Never commit sensitive information:**
 
 - API keys, secret keys, or passwords
