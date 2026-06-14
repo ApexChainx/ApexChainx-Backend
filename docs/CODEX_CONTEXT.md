@@ -418,3 +418,9 @@ When SLA policy thresholds change, existing resolved outages can be recomputed i
 ## Policy Version Pinning
 
 SLA results are stamped with the policy version that was active at computation time. This allows historical results to be compared against current policy without ambiguity. Policy version is stored on the `sla_results` table.
+
+---
+
+## Clock Source Normalization
+
+All timestamps are stored and compared in UTC. The SLA calculator normalises input timestamps to UTC before computing MTTR. Clock skew between the submitting client and the server is not compensated — use NTP-synchronized clients in production.
