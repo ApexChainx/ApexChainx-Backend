@@ -476,3 +476,9 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 ## Wallet Registry
 
 `app/services/wallet_registry.py` manages the mapping between entity IDs and Stellar public keys. In the current release this uses an in-memory store. Persistence via the `wallets` database table (migration `0010_wallet_persistence`) is the planned next step.
+
+---
+
+## Job Cleanup
+
+`app/services/job_cleanup.py` prunes completed and failed job records older than a configurable retention window. This prevents unbounded growth of the jobs table. The cleanup is triggered as a periodic Celery beat task when a worker is running.
