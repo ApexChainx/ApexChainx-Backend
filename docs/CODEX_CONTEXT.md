@@ -430,3 +430,19 @@ All timestamps are stored and compared in UTC. The SLA calculator normalises inp
 ## Deterministic MTTR Boundaries
 
 MTTR boundary computation is deterministic: given the same `created_at` and `resolved_at`, the same MTTR and SLA outcome are always produced. This property enables safe recompute and contract parity testing.
+
+---
+
+## Outage Lifecycle States
+
+```
+created → updated → resolved
+              ↓
+         (SLA computed)
+              ↓
+     penalty or reward outcome
+              ↓
+     (optional) payment triggered
+```
+
+An outage can only be resolved once. Resolved outages are immutable — subsequent updates return `409 Conflict`.
