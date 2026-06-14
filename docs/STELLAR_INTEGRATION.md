@@ -876,3 +876,14 @@ A: Soroban contract invocations cost a few cents in XLM, much cheaper than other
 | `contract` | SLA computed by invoking the deployed Soroban contract via HTTPX |
 
 Switch to `contract` mode only when a deployed contract address is configured and the Stellar network is reachable.
+
+---
+
+## Testnet Setup
+
+For local development against the Stellar testnet:
+
+1. Generate a keypair using the [Stellar Laboratory](https://laboratory.stellar.org)
+2. Fund the account using the [Friendbot faucet](https://friendbot.stellar.org)
+3. Set `STELLAR_NETWORK=testnet` and `STELLAR_POOL_SECRET_KEY=<your-secret>` in `.env`
+4. Set `CONTRACT_EXECUTION_MODE=contract` to exercise the full Soroban path
