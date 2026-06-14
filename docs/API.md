@@ -1477,3 +1477,9 @@ Attach a root cause analysis to a resolved outage.
   "remediation": "BGP config reviewed and hardened; runbook updated"
 }
 ```
+
+---
+
+## Outage Import Validation
+
+The bulk import endpoint (`POST /api/v1/outages/import`) validates each record before persisting any. If any record fails validation, the entire batch is rejected with a `422` response listing all field errors per record index. Partial imports are not supported.
