@@ -2,7 +2,7 @@
 
 Version: 1.0.0
 
-Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (production) - WIP
+Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (production)
 
 ## Table of Contents
 
