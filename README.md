@@ -274,3 +274,7 @@ If you discover a security vulnerability:
 1. Do not create a public issue
 2. Email security@apexchainx.com with details
 3. Allow time for the issue to be addressed before public disclosure
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, commit style, and PR process.
