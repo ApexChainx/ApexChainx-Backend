@@ -1254,3 +1254,17 @@ Get payment transaction history.
 - `type` (optional): `penalty`, `reward`, `manual`
 - `status` (optional): `pending`, `confirmed`, `failed`
 - `limit` / `offset`: pagination
+
+---
+
+## Outage Timeline Events
+
+Each outage maintains an ordered timeline of events. Timeline entries are appended at each state change and are immutable. The `schema_version` field on each event enables forward-compatible parsing.
+
+**Event types in the timeline:**
+- `created` — outage record first persisted
+- `updated` — metadata change
+- `escalated` — severity changed upward
+- `resolved` — outage closed with MTTR
+- `sla_evaluated` — SLA outcome computed
+- `payment_triggered` — Stellar payment initiated
