@@ -1044,3 +1044,14 @@ Export SLA records in CSV or JSON format.
 - `status` — filter by SLA status (optional)
 
 **Response**: File download with appropriate `Content-Type` header (`text/csv` or `application/json`).
+
+---
+
+## Snapshot Endpoints
+
+### GET `/api/v1/sla/snapshots`
+
+Returns point-in-time SLA performance snapshots. Each snapshot captures the state of all active outages and their SLA status at a given moment.
+
+**Query Parameters:**
+- `at` — ISO 8601 timestamp for the snapshot (optional, defaults to now)
