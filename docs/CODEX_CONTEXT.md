@@ -294,3 +294,15 @@ Key endpoints:
 - POST /api/v1/sla/disputes
 - GET /api/v1/sla/disputes
 - GET /api/v1/sla/disputes/{dispute_id}
+
+---
+
+## Key Terms
+
+| Term | Definition |
+|------|-----------|
+| MTTR | Mean Time to Resolve — the primary SLA compliance metric |
+| SLA | Service Level Agreement — defines penalty/reward thresholds |
+| Correlation ID | UUID injected per request for cross-system tracing |
+| Contract adapter | Soroban bridge activated when `CONTRACT_EXECUTION_MODE=contract` |
+| Local adapter | Default in-process SLA execution path |
