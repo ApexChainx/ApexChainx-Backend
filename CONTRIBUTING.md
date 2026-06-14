@@ -36,7 +36,7 @@ There are many ways to contribute to ApexChainx:
 - Freighter wallet (for Stellar features)
 
 **For Backend (apexchainx-be):**
-- Python 3.9 or higher
+- Python 3.11 or higher
 - pip and virtualenv
 - Git
 
