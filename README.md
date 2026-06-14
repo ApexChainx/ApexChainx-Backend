@@ -4,7 +4,7 @@
 
 > FastAPI backend for automated SLA management, outage tracking, Stellar blockchain payments, and audit infrastructure.
 
-## Repository Architecture
+## Architecture
 
 ApexChainx is a 3-repo monorepo split across frontend, backend, and smart contracts:
 
