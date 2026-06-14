@@ -368,3 +368,18 @@ All error responses follow a consistent envelope:
 ```
 
 Validation errors from Pydantic return `422 Unprocessable Entity` with a `detail` array describing each field failure.
+
+---
+
+## Adding a New Domain
+
+To add a new domain to the routed runtime:
+
+1. Create `app/models/{domain}.py` — Pydantic request/response schemas
+2. Create `app/models/orm/{domain}.py` — SQLAlchemy ORM model
+3. Create `app/repositories/{domain}_repository.py` — DB access
+4. Create `app/services/{domain}_service.py` — business logic
+5. Create `app/api/v1/endpoints/{domain}.py` — FastAPI route handlers
+6. Register the router in `app/api/v1/router.py`
+7. Write an Alembic migration under `alembic/versions/`
+8. Add tests under `tests/`
