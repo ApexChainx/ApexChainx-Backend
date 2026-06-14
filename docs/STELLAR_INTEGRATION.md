@@ -994,3 +994,14 @@ When `CONTRACT_EXECUTION_MODE=contract`:
 ## Retry on Payment Failure
 
 If a Stellar payment fails (insufficient funds, account not found, network timeout), the backend schedules a retry via Celery. Retry attempts are tracked in the payment record's `attempt_count` field. After `MAX_PAYMENT_RETRIES` (default 3) attempts, the payment is marked `failed` and an audit event is emitted.
+
+---
+
+## Stellar Explorer Links
+
+Each confirmed payment record includes an `explorer_url` field pointing to the transaction on Stellar Expert:
+
+- **Testnet**: `https://stellar.expert/explorer/testnet/tx/{hash}`
+- **Mainnet**: `https://stellar.expert/explorer/public/tx/{hash}`
+
+The correct URL is selected automatically based on `STELLAR_NETWORK`.
