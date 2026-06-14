@@ -320,6 +320,12 @@ Run tests:
 pytest tests/
 ```
 
+Run a single test file:
+
+```bash
+pytest tests/test_outage_lifecycle.py -v
+```
+
 ## Middleware
 
 | Middleware | File | Behaviour |
