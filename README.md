@@ -48,3 +48,5 @@ The `outages` and `sla` domains are the strongest and most integration-focused. 
 Dependencies are declared in [requirements.txt](requirements.txt).
 
 ## Active Routes
+
+The app entrypoint is [app/main.py](app/main.py). Routes are wired through [app/api/v1/router.py](app/api/v1/router.py).
