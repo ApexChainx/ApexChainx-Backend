@@ -236,3 +236,8 @@ This backend is stabilized but not feature-complete. Known limitations:
 - Show secure patterns (environment variables, secure key management)
 
 ### Environment Variables Reference
+
+```env
+# Database
+DATABASE_URL=postgresql://user:password@localhost:5432/apexchainx
+```
