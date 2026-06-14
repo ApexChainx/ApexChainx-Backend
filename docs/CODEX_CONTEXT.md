@@ -458,3 +458,9 @@ Payment deduplication is enforced at the database level via a unique constraint 
 ## Token Family Security
 
 The auth system uses token families to detect refresh token reuse attacks. Each refresh creates a new token family member. Using a previously rotated refresh token invalidates the entire family, forcing re-login. This is implemented in `app/repositories/token_family_repository.py`.
+
+---
+
+## Session Repository
+
+`app/repositories/session_repository.py` manages active user sessions. Sessions are linked to token families and expire after the JWT TTL. Logout invalidates the session record immediately, preventing further token refresh even within the TTL window.
