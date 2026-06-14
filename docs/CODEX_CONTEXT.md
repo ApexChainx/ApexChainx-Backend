@@ -665,3 +665,9 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 - `service`: always `apexchainx-be`
 
 Do not use `print()` in application code. Use the logger from `app/utils/logging.py`.
+
+---
+
+## Stellar Explorer Utility
+
+`app/utils/explorer.py` constructs Stellar Expert URLs for transactions and accounts based on the active `STELLAR_NETWORK` setting. Use this utility when building payment records rather than constructing URLs manually.
