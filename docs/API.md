@@ -970,3 +970,15 @@ Locked accounts return `429 Too Many Requests` with a `Retry-After` header.
 | `MAX_AFFECTED_SERVICES_COUNT` | 100 | Services per outage |
 | `MAX_DESCRIPTION_LENGTH` | 5000 | Outage description |
 | `MAX_WEBHOOK_EVENTS_COUNT` | 50 | Events per webhook |
+
+---
+
+## SLA Analytics Endpoints
+
+### GET `/api/v1/sla/analytics/dashboard`
+
+Returns aggregated SLA performance metrics:
+- total outages evaluated
+- violation rate
+- average MTTR
+- total penalties and rewards issued
