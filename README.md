@@ -334,3 +334,15 @@ Migrations are managed with Alembic. The chain lives in `alembic/versions/` and 
 - job retry tracking and SLA latest backfill
 
 Run `alembic history` to inspect the full chain. Use `tests/test_verify_migrations.py` to confirm your database is at head.
+
+## Background Tasks
+
+Background task modules live in `app/tasks/`:
+
+| Module | Purpose |
+|--------|---------|
+| `celery_app.py` | Celery application factory |
+| `sla_tasks.py` | Async SLA computation and settlement tasks |
+| `webhook_tasks.py` | Async webhook delivery with retry logic |
+
+Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. For production use set `CELERY_TASK_ALWAYS_EAGER=false` and provide Redis URLs.
