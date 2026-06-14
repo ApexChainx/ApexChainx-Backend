@@ -80,6 +80,7 @@ source .venv/bin/activate
 # On Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env
+# Edit .env — never commit it
 # Edit .env with your config
 alembic upgrade head
 uvicorn app.main:app --reload
