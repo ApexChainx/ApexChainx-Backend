@@ -324,3 +324,14 @@ SLA settlement and payment execution are idempotent by design. Duplicate executi
 ## Correlation IDs
 
 Every request receives an `X-Correlation-ID` header injected by `app/middleware/correlation.py`. The value propagates through audit log entries, SLA records, and payment records so that the full lifecycle of any request can be reconstructed from logs alone.
+
+---
+
+## Middleware Stack
+
+Requests pass through two middleware layers before reaching route handlers:
+
+1. **Correlation middleware** (`app/middleware/correlation.py`) — injects or propagates `X-Correlation-ID`
+2. **Payload size guard** (`app/middleware/payload_size.py`) — rejects bodies exceeding `MAX_REQUEST_BODY_SIZE_BYTES`
+
+Both are applied globally to all routes.
