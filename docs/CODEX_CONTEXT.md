@@ -16,7 +16,7 @@ It is responsible for:
 ## Tech Stack
 
 - Framework: FastAPI
-- Language: Python (3.9+)
+- Language: Python (3.11+)
 - Database: PostgreSQL via SQLAlchemy
 - Auth: lightweight in-repo auth store
 - Blockchain: Soroban-aware backend bridge with configurable execution mode
