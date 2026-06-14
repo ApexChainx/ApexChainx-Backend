@@ -540,3 +540,14 @@ Your contributions make ApexChainx better for everyone. We appreciate your time 
 ---
 
 **Happy coding! 🚀**
+
+---
+
+## Common Mistakes to Avoid
+
+- Do not push directly to `main` — all changes must go through a PR
+- Do not commit `.env` files — use `.env.example` for documentation
+- Do not add floating version ranges to `requirements.txt` — pin exact versions
+- Do not put business logic in route handlers — it belongs in services
+- Do not expose private keys via API responses or logs
+- Do not skip tests — all PRs require passing test suite
