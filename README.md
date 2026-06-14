@@ -164,3 +164,11 @@ Startup fails fast on misconfiguration. The following rules are enforced:
 - `ALLOWED_ORIGINS` must be valid `http` or `https` origins
 - `STELLAR_NETWORK` and `CONTRACT_EXECUTION_MODE` must be recognised values
 - When `CELERY_TASK_ALWAYS_EAGER=false`, both `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` must be present
+
+### Run Migrations
+
+```bash
+alembic upgrade head
+```
+
+A migration verification helper is available at `tests/test_verify_migrations.py` to validate the Alembic chain and confirm the database matches the head revision.
