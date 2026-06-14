@@ -20,6 +20,8 @@ The frontend never calls contracts directly. The backend is the sole bridge betw
 
 ## Overview
 
+ApexChainx is a 3-repo
+
 `apexchainx-be` is a FastAPI application that serves as the central processing layer for the ApexChainx platform.
 
 It is responsible for:
@@ -399,3 +401,7 @@ The `payments` and `wallets` domains handle SLA-triggered financial settlements:
 - **Payments** — record and query Stellar payment transactions linked to SLA outcomes
 - **Wallets** — register and resolve Stellar wallet addresses per entity
 - Both are fully routed but backed by in-memory stores in the current release; persistence is planned for a future iteration.
+
+## Changelog
+
+See [git log](https://github.com/ApexChainx/ApexChainx-Backend/commits/main) for the full commit history.
