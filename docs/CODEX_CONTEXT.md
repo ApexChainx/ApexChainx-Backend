@@ -553,3 +553,14 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 - `get_by_outage(db, outage_id)` — fetch payment linked to outage
 - `update_status(db, payment_id, status, tx_hash)` — update after confirmation
 - `list(db, filters, limit, offset)` — paginated list with date and status filters
+
+---
+
+## Services vs Repositories: Boundary Rules
+
+| Layer | Allowed | Not Allowed |
+|-------|---------|-------------|
+| Route handler | Call services, return responses | Query DB directly, business logic |
+| Service | Business logic, call repositories | Import other services' repositories |
+| Repository | SQLAlchemy queries only | Business logic, HTTP calls |
+| Utility | Pure functions, no DB/HTTP | Side effects |
