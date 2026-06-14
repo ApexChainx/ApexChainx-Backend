@@ -98,3 +98,14 @@ Values are configurable via `app/services/sla/config.py`.
 ## Dependency Policy
 
 All Python dependencies are pinned to exact versions in `requirements.txt`. No version ranges are used. This ensures reproducible builds and makes dependency updates an explicit, reviewed change.
+
+---
+
+## Monitoring Recommendations
+
+For production deployments, monitor:
+- `/health/readiness` for database connectivity
+- Celery worker queue depth (Redis list length)
+- Stellar pool wallet USDC balance
+- Webhook dead-letter rate
+- Auth lockout rate (indicator of credential stuffing)
