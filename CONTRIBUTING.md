@@ -622,3 +622,16 @@ When your PR requires a database change:
 3. Include both `upgrade()` and `downgrade()` functions
 4. Test the migration with `alembic upgrade head` and `alembic downgrade -1`
 5. Include the migration in the same PR as the code that depends on it
+
+---
+
+## Security Review Checklist
+
+Before submitting a PR, verify:
+
+- [ ] No secrets, keys, or credentials in any committed file
+- [ ] No private keys exposed via API responses or logs
+- [ ] Input validation present on all new endpoints (Pydantic schemas)
+- [ ] Authentication required on all protected routes
+- [ ] No new floating dependency version ranges
+- [ ] `.env.example` updated if new environment variables were added
