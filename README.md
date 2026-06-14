@@ -246,3 +246,10 @@ DATABASE_URL=postgresql://user:password@localhost:5432/apexchainx
 # Authentication
 JWT_SECRET_KEY=your-jwt-secret-here
 ```
+
+```env
+# Stellar Blockchain
+STELLAR_NETWORK=testnet
+STELLAR_POOL_SECRET_KEY=your-stellar-secret-key-here
+CONTRACT_EXECUTION_MODE=local
+```
