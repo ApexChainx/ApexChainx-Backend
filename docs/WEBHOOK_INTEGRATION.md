@@ -403,3 +403,9 @@ Webhook payloads from the ApexChainx backend are always well under the 10 MB req
 ## HTTPS Requirement
 
 In production, register only `https://` webhook URLs. Plain HTTP endpoints will receive deliveries but expose payload content to network interception. The signature verification provides integrity guarantees but not confidentiality.
+
+---
+
+## Filtering Events by Type
+
+When registering a webhook, specify only the event types you need. Receiving unnecessary events increases delivery load and receiver processing overhead. Use the tightest event filter that covers your use case.
