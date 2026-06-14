@@ -28,3 +28,5 @@ It is responsible for:
 - **Stellar payments** — bridge to Soroban smart contracts for SLA-triggered settlements
 - **Webhook delivery** — signed, versioned event delivery with retry and idempotency support
 - **Analytics** — SLA performance aggregation, trends, snapshots, and CSV/JSON exports
+
+The `outages` and `sla` domains are the strongest and most integration-focused. Other domains (`auth`, `payments`, `wallets`, `jobs`, `webhooks`) are fully routed but vary in infrastructure depth.
