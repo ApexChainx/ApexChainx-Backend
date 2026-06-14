@@ -1019,3 +1019,9 @@ Memo format: `APEX:{outage_id}` (truncated to 28 bytes per Stellar memo limit).
 ## Trustline Requirements
 
 Before a wallet can receive USDC, it must have an active USDC trustline. The backend validates this before submitting a payment. If the trustline is missing, the payment is held in `pending` state and an operator notification is emitted via webhook (`payment.blocked_no_trustline`).
+
+---
+
+## XDR and Horizon Response Parsing
+
+Soroban contract results are returned as XDR-encoded values. The contract adapter in `app/services/contracts/` decodes the XDR result into a Python dict before passing it to the SLA service. Contributors extending the contract adapter must handle XDR decoding correctly — use the `stellar-sdk` library, not manual byte parsing.
