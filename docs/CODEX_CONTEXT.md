@@ -446,3 +446,9 @@ created → updated → resolved
 ```
 
 An outage can only be resolved once. Resolved outages are immutable — subsequent updates return `409 Conflict`.
+
+---
+
+## Payment Deduplication
+
+Payment deduplication is enforced at the database level via a unique constraint on `(outage_id, payment_type)` added in migration `0011_payment_deduplication`. Attempting to execute a second payment for the same outage returns the existing record with `409 Conflict`.
