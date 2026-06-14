@@ -1,6 +1,6 @@
 # Contributing to ApexChainx
 
-First off, thank you for considering contributing to ApexChainx! It's people like you that make ApexChainx such a great tool for network operations teams.
+First off, thank you for considering contributing to ApexChainx! It's people like you that make ApexChainx such a great tool for service operators managing SLA compliance and outage resolution.
 
 ## 🌊 Participating in Stellar Wave
 
