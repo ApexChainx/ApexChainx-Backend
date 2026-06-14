@@ -616,3 +616,21 @@ ORM models live in `app/models/orm/`. Each model:
 - defines `id` as UUID primary key
 - includes `created_at` with server default `now()`
 - never exposes SQLAlchemy internals to API responses
+
+---
+
+## Database Session Management
+
+Sessions are managed via a FastAPI dependency injected into route handlers:
+
+```python
+from app.db.session import get_db
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
+@router.get("/outages")
+def list_outages(db: Session = Depends(get_db)):
+    ...
+```
+
+Sessions are committed and closed automatically by the dependency. Do not call `db.commit()` in repositories — commit in services or use explicit transactions.
