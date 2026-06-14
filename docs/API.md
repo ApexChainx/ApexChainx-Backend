@@ -950,3 +950,11 @@ List background job records. Each entry reflects a Celery task with retry state,
 ### GET `/api/v1/jobs/{job_id}`
 
 Retrieve a single job record by ID including last attempt timestamp and error detail.
+
+---
+
+## Rate Limiting
+
+Auth endpoints enforce per-user rate limiting. After `AUTH_MAX_FAILED_ATTEMPTS` consecutive failures within `AUTH_RATE_LIMIT_WINDOW_SECONDS`, the account is locked for `AUTH_LOCKOUT_DURATION_MINUTES` minutes.
+
+Locked accounts return `429 Too Many Requests` with a `Retry-After` header.
