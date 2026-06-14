@@ -113,7 +113,19 @@ Key endpoints:
 
 ---
 
-### 6. Authentication
+### 6. Audit Logging
+
+Responsible for:
+- recording all state-changing operations
+- correlating events via `X-Correlation-ID`
+- immutable append-only log
+
+Key endpoints:
+- GET /api/v1/audit
+
+---
+
+### 7. Authentication
 
 Responsible for:
 - login
