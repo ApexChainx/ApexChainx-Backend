@@ -605,3 +605,14 @@ Key event types emitted by `app/services/audit_log.py`:
 | `auth.login` | Successful login |
 | `auth.logout` | Session invalidated |
 | `auth.failed` | Failed login attempt |
+
+---
+
+## ORM Model Conventions
+
+ORM models live in `app/models/orm/`. Each model:
+- extends `Base` from `app/db/base_class.py`
+- uses `__tablename__` matching the migration table name
+- defines `id` as UUID primary key
+- includes `created_at` with server default `now()`
+- never exposes SQLAlchemy internals to API responses
