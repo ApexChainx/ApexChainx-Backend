@@ -1,5 +1,7 @@
 # ApexChainx Backend
 
+![Python](https://img.shields.io/badge/python-3.11+-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green) ![PostgreSQL](https://img.shields.io/badge/postgres-15+-blue) ![Stellar](https://img.shields.io/badge/Stellar-Soroban-blueviolet) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
+
 > FastAPI backend for automated SLA management, outage tracking, Stellar blockchain payments, and audit infrastructure.
 
 ## Repository Architecture
