@@ -320,3 +320,17 @@ SLA analytics are served through `/api/v1/sla` and support:
 - trend windows over configurable time ranges
 - point-in-time snapshots
 - CSV and JSON export via `app/utils/analytics_exporter.py`
+
+## Database Migrations
+
+Migrations are managed with Alembic. The chain lives in `alembic/versions/` and covers:
+
+- initial tables (outages, SLA results, payments)
+- operational tables and audit correlation
+- SLA analytics snapshots and latest-flag
+- token families and auth rate limiting
+- wallet persistence and payment deduplication
+- webhook secret metadata and signature versioning
+- job retry tracking and SLA latest backfill
+
+Run `alembic history` to inspect the full chain. Use `tests/test_verify_migrations.py` to confirm your database is at head.
