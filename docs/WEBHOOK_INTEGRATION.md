@@ -497,3 +497,23 @@ Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_
   }
 }
 ```
+
+---
+
+## Event Payload: `dispute.filed`
+
+```json
+{
+  "schema_version": "1",
+  "event": "dispute.filed",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T13:00:00.000000",
+  "data": {
+    "dispute_id": "DIS001",
+    "outage_id": "OUT001",
+    "sla_result_id": "SLA001",
+    "reason": "MTTR measurement started before engineer notification",
+    "status": "open"
+  }
+}
+```
