@@ -958,3 +958,15 @@ Retrieve a single job record by ID including last attempt timestamp and error de
 Auth endpoints enforce per-user rate limiting. After `AUTH_MAX_FAILED_ATTEMPTS` consecutive failures within `AUTH_RATE_LIMIT_WINDOW_SECONDS`, the account is locked for `AUTH_LOCKOUT_DURATION_MINUTES` minutes.
 
 Locked accounts return `429 Too Many Requests` with a `Retry-After` header.
+
+---
+
+## Input Validation Limits Reference
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `MAX_REQUEST_BODY_SIZE_BYTES` | 10485760 | 10 MB max body |
+| `MAX_BULK_OUTAGES_COUNT` | 1000 | Bulk import cap |
+| `MAX_AFFECTED_SERVICES_COUNT` | 100 | Services per outage |
+| `MAX_DESCRIPTION_LENGTH` | 5000 | Outage description |
+| `MAX_WEBHOOK_EVENTS_COUNT` | 50 | Events per webhook |
