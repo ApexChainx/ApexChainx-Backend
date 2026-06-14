@@ -56,7 +56,7 @@ The app entrypoint is [app/main.py](app/main.py). Routes are wired through [app/
 Current active routes:
 
 - `/health` — liveness and readiness probes
-- `/api/v1/audit`
+- `/api/v1/audit` — immutable event audit log
 - `/api/v1/jobs`
 - `/api/v1/outages`
 - `/api/v1/sla`
