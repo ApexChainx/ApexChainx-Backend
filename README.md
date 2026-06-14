@@ -227,3 +227,10 @@ This backend is stabilized but not feature-complete. Known limitations:
 - Blockchain private keys
 - JWT signing secrets
 - External service credentials
+
+**Documentation examples must:**
+
+- Use placeholder values clearly marked as examples
+- Never include real credentials or keys
+- Include security warnings where sensitive operations are discussed
+- Show secure patterns (environment variables, secure key management)
