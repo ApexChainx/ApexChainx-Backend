@@ -1228,3 +1228,19 @@ A resolved SLA record contains:
 | `created_at` | datetime | Outage start timestamp |
 | `resolved_at` | datetime | Resolution timestamp |
 | `correlation_id` | UUID | Originating request correlation ID |
+
+---
+
+## SLA Payment Trigger
+
+### POST `/api/v1/payments/process-sla`
+
+Manually trigger an SLA payment for a resolved outage. Normally called automatically after SLA evaluation. Use this endpoint to retry a failed payment.
+
+```json
+{
+  "outage_id": "OUT001",
+  "operator_wallet": "GOPER...",
+  "ops_team_wallet": "GOPS..."
+}
+```
