@@ -119,3 +119,5 @@ apexchainx-be/
 ├── requirements.txt
 └── README.md
 ```
+
+## Local Setup
