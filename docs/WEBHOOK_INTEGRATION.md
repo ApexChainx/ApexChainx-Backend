@@ -378,3 +378,16 @@ After 3 failed attempts the delivery is marked `dead_letter`. No further automat
 | `5xx` | Retry scheduled (transient failure) |
 | Timeout (>10s) | Retry scheduled |
 | Connection error | Retry scheduled |
+
+---
+
+## Testing Your Endpoint Locally
+
+Use [ngrok](https://ngrok.com) or [localtunnel](https://localtunnel.me) to expose a local server during development:
+
+```bash
+ngrok http 3000
+# Copy the https URL and register it as your webhook endpoint
+```
+
+Then trigger an event (e.g., resolve an outage) and verify your receiver logs the delivery.
