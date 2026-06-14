@@ -1125,3 +1125,18 @@ Import multiple outage records in a single request. Maximum `MAX_BULK_OUTAGES_CO
   ]
 }
 ```
+
+---
+
+## Outage Search
+
+### GET `/api/v1/outages/search`
+
+Full-text and filter-based outage search.
+
+**Query Parameters:**
+- `q` — keyword search across site name, description
+- `severity` — `low`, `medium`, `high`, `critical`
+- `status` — `open`, `resolved`
+- `start` / `end` — date range for `created_at`
+- `limit` / `offset` — pagination
