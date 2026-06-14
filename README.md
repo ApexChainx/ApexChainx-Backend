@@ -143,3 +143,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### Configure Environment
+
+Copy the example environment file and fill in your values:
+
+```bash
+cp .env.example .env
+# Edit .env with your actual configuration values
+```
+
+**SECURITY WARNING**: Never commit `.env` to version control. The `.env.example` file contains placeholder values only.
