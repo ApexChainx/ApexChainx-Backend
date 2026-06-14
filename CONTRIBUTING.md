@@ -138,6 +138,7 @@ npm run type-check
 **Backend:**
 ```bash
 pytest
+pytest -v
 pytest --cov=app --cov-report=html
 black app/
 flake8 app/
