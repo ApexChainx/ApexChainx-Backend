@@ -391,3 +391,9 @@ ngrok http 3000
 ```
 
 Then trigger an event (e.g., resolve an outage) and verify your receiver logs the delivery.
+
+---
+
+## Payload Size Limits
+
+Webhook payloads from the ApexChainx backend are always well under the 10 MB request body limit. Receiver endpoints should not impose unreasonably low body size limits (recommend accepting at least 64 KB).
