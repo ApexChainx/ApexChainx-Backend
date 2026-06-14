@@ -959,3 +959,9 @@ The backend polls Horizon for transaction confirmation after submission. Confirm
 ## Minimum Account Reserve
 
 Stellar accounts require a minimum XLM balance (currently 1 XLM base reserve plus 0.5 XLM per trustline). Recipient wallets must meet this requirement before a USDC payment can be received. Validate wallet activation before executing SLA payments in production.
+
+---
+
+## Soroban Contract Address
+
+The deployed contract address is configured via `SOROBAN_CONTRACT_ID` in `.env`. This value is required when `CONTRACT_EXECUTION_MODE=contract`. The contract must be deployed to the same network as `STELLAR_NETWORK`.
