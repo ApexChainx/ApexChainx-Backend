@@ -477,3 +477,23 @@ Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_
   }
 }
 ```
+
+---
+
+## Event Payload: `outage.resolved`
+
+```json
+{
+  "schema_version": "1",
+  "event": "outage.resolved",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T11:45:00.000000",
+  "data": {
+    "outage_id": "OUT001",
+    "site_name": "DC-West",
+    "severity": "high",
+    "mttr_minutes": 95,
+    "resolved_at": "2026-06-14T11:44:50.000000"
+  }
+}
+```
