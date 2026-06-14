@@ -1079,3 +1079,16 @@ Returns:
   "expires_in": 3600
 }
 ```
+
+### POST `/api/v1/auth/register`
+
+Register a new user account.
+
+```json
+{
+  "username": "operator@example.com",
+  "password": "secure-password-min-12-chars"
+}
+```
+
+Returns `201 Created` with the new user record (excluding password).
