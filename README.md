@@ -346,6 +346,19 @@ Migrations are managed with Alembic. The chain lives in `alembic/versions/` and 
 
 Run `alembic history --verbose` to inspect the full chain with revision details. Use `tests/test_verify_migrations.py` to confirm your database is at head.
 
+Key revisions:
+
+| Revision | Description |
+|----------|-------------|
+|  | Initial tables: outages, SLA results, payments |
+|  | Operational tables and audit events |
+|  | SLA analytics snapshots |
+|  | Token families |
+|  | Wallet persistence |
+|  | Payment deduplication |
+|  | Audit correlation IDs |
+|  | Webhook signature versioning |
+
 ## Background Tasks
 
 Background task modules live in `app/tasks/`:
