@@ -1,21 +1,18 @@
 # ApexChainx Backend
 
-Backend API and integration layer for the ApexChainx system.
+> FastAPI backend for automated SLA management, outage tracking, Stellar blockchain payments, and audit infrastructure.
 
-This repository sits in the middle of the 3-repo architecture:
+This repository is the integration layer in the ApexChainx 3-repo architecture:
 
-- `apexchainx-fe` -> frontend
-- `apexchainx-be` -> backend and integration layer
-- `apexchainx-contracts` -> Soroban smart contracts
+| Repo | Role |
+|------|------|
+| `apexchainx-fe` | Frontend UI |
+| `apexchainx-be` | **Backend and integration layer** (this repo) |
+| `apexchainx-contracts` | Soroban smart contracts |
 
-System flow:
+**System flow:** `User → FE → BE → Contracts → BE → FE`
 
-`User -> FE -> BE -> Contracts -> BE -> FE`
-
-Important rule:
-
-- the frontend does not call contracts directly
-- the backend is the bridge between UI and contract execution
+> The frontend never calls contracts directly. The backend is the sole bridge between the UI and contract execution.
 
 ## Overview
 
