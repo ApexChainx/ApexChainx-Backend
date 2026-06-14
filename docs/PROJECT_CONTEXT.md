@@ -148,3 +148,15 @@ The frontend (`apexchainx-fe`) depends on the API contract defined in `docs/API.
 | `payments` | Permanent |
 | `jobs` | Pruned after configurable window (default 30 days) |
 | `webhook_deliveries` | Pruned after configurable window (default 90 days) |
+
+---
+
+## Environment Tiers
+
+| Tier | Purpose | Notes |
+|------|---------|-------|
+| `local` | Developer workstation | Eager Celery, testnet Stellar |
+| `staging` | Pre-production integration | Worker Celery, testnet Stellar |
+| `production` | Live | Worker Celery, mainnet Stellar, managed DB |
+
+Secrets must be completely separate between tiers. Never copy production credentials to local or staging.
