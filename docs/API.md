@@ -1426,3 +1426,21 @@ Close an open dispute.
 `resolution` values: `accepted` (outcome overturned), `rejected` (original outcome upheld).
 
 Emits a `dispute.resolved` audit event and a `dispute.resolved` webhook.
+
+---
+
+## Wallet Balance Endpoint
+
+### GET `/api/v1/wallets/{address}/balance`
+
+Query the live USDC balance of a Stellar wallet address. This calls Horizon directly and returns the current ledger state.
+
+Response:
+```json
+{
+  "address": "GOPS...",
+  "usdc_balance": "1234.50",
+  "xlm_balance": "10.00",
+  "network": "testnet"
+}
+```
