@@ -865,3 +865,14 @@ A: Soroban contract invocations cost a few cents in XLM, much cheaper than other
 ---
 
 **Need help?** Open an issue on GitHub or join our Discord community!
+
+---
+
+## Execution Mode Summary
+
+| `CONTRACT_EXECUTION_MODE` | Behaviour |
+|--------------------------|-----------|
+| `local` (default) | SLA computed in-process by `sla_calculator.py`; no Soroban call |
+| `contract` | SLA computed by invoking the deployed Soroban contract via HTTPX |
+
+Switch to `contract` mode only when a deployed contract address is configured and the Stellar network is reachable.
