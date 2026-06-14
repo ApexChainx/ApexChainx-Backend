@@ -953,3 +953,9 @@ Both are required when `CONTRACT_EXECUTION_MODE=contract`.
 ## Transaction Confirmation
 
 The backend polls Horizon for transaction confirmation after submission. Confirmation is recorded in the payment record as `confirmed_at`. If confirmation is not received within the polling window, the payment status remains `pending` and a retry is scheduled.
+
+---
+
+## Minimum Account Reserve
+
+Stellar accounts require a minimum XLM balance (currently 1 XLM base reserve plus 0.5 XLM per trustline). Recipient wallets must meet this requirement before a USDC payment can be received. Validate wallet activation before executing SLA payments in production.
