@@ -992,3 +992,20 @@ Returns SLA performance over a rolling time window. Supports:
 ### GET `/api/v1/sla/performance/aggregation`
 
 Aggregates SLA outcomes grouped by severity, region, or service. Useful for identifying systemic underperformance patterns.
+
+---
+
+## Wallet Endpoints
+
+### POST `/api/v1/wallets`
+
+Register a Stellar wallet address for an entity.
+
+```json
+{
+  "entity_id": "ORG001",
+  "address": "GOPS..."
+}
+```
+
+Private keys are never accepted or stored by this endpoint.
