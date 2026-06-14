@@ -85,3 +85,14 @@ The core backend lifecycle for outage resolution and SLA settlement:
 4. Persist the resulting SLA record and emit an audit event
 5. Optionally trigger a Stellar payment via the contract adapter
 6. Return the resolved outage and SLA result to the frontend
+
+Key implementation files:
+
+| File | Role |
+|------|------|
+| `app/api/v1/endpoints/outages.py` | Outage route handlers |
+| `app/api/v1/endpoints/sla.py` | SLA route handlers |
+| `app/repositories/outage_repository.py` | Outage DB access |
+| `app/repositories/sla_repository.py` | SLA DB access |
+| `app/services/sla/sla_calculator.py` | MTTR-based SLA computation |
+| `app/services/sla/config.py` | SLA policy configuration |
