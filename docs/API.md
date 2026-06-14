@@ -1104,3 +1104,7 @@ Exchange a valid refresh token for a new access token.
 ```
 
 Implements token family rotation — a reused refresh token invalidates the entire token family.
+
+### POST `/api/v1/auth/logout`
+
+Invalidate the current session. Accepts the access token in the `Authorization: Bearer` header. All tokens in the same token family are revoked.
