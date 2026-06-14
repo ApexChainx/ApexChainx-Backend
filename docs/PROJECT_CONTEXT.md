@@ -109,3 +109,9 @@ For production deployments, monitor:
 - Stellar pool wallet USDC balance
 - Webhook dead-letter rate
 - Auth lockout rate (indicator of credential stuffing)
+
+---
+
+## Changelog Policy
+
+All changes are tracked via git. The commit history on `main` is the canonical changelog. Commits follow the `type(scope): description` convention. Breaking changes are noted in the commit body.
