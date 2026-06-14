@@ -75,8 +75,8 @@ npm run dev
 **Backend:**
 ```bash
 cd apexchainx-be
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your config
