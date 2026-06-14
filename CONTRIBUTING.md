@@ -551,3 +551,15 @@ Your contributions make ApexChainx better for everyone. We appreciate your time 
 - Do not put business logic in route handlers — it belongs in services
 - Do not expose private keys via API responses or logs
 - Do not skip tests — all PRs require passing test suite
+
+---
+
+## Reporting a Bug
+
+When filing a bug report, include:
+
+1. **Steps to reproduce** — the exact sequence of actions
+2. **Expected behaviour** — what should have happened
+3. **Actual behaviour** — what actually happened
+4. **Environment** — Python version, OS, database version
+5. **Logs** — relevant error output (redact any secrets)
