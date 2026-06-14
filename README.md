@@ -198,3 +198,5 @@ As of the latest stabilization pass:
 - `/health` returns `200`
 
 To exercise outage and SLA routes meaningfully, a reachable PostgreSQL instance is required because those routes depend on the database layer.
+
+## Current Limitations
