@@ -306,3 +306,9 @@ Key endpoints:
 | Correlation ID | UUID injected per request for cross-system tracing |
 | Contract adapter | Soroban bridge activated when `CONTRACT_EXECUTION_MODE=contract` |
 | Local adapter | Default in-process SLA execution path |
+
+---
+
+## Rate Limiting
+
+The auth domain includes token family tracking and per-user rate limiting. Rate limit state is stored in the database via migration `0008_auth_rate_limiting`. Abuse triggers a short-lived backoff enforced in `app/core/rate_limiter.py`.
