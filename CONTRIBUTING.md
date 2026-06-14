@@ -172,6 +172,9 @@ git commit -m "test: add unit tests for SLA calculator"
 ```
 
 **Types:**
+
+Scope is optional but encouraged: `feat(sla): add bulk recompute endpoint`
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `docs`: Documentation changes
