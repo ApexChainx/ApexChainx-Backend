@@ -67,3 +67,18 @@ Every mutating operation emits an audit event through `app/services/audit_log.py
 ## Contract Parity
 
 The local SLA adapter and the Soroban contract adapter are required to produce identical outcomes for the same inputs. The test suite (`tests/test_contract_parity.py`) enforces this invariant. Any divergence is a bug.
+
+---
+
+## SLA Severity Tiers
+
+SLA thresholds and penalty/reward amounts are configured per severity tier. The default tiers are:
+
+| Severity | MTTR Threshold | Penalty | Reward |
+|----------|---------------|---------|--------|
+| `low` | 240 min | 50 USDC | 10 USDC |
+| `medium` | 120 min | 200 USDC | 50 USDC |
+| `high` | 60 min | 500 USDC | 100 USDC |
+| `critical` | 30 min | 1500 USDC | 300 USDC |
+
+Values are configurable via `app/services/sla/config.py`.
