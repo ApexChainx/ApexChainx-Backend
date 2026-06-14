@@ -1461,3 +1461,19 @@ Update a registered webhook's URL, events, secret, or status.
 ```
 
 Only provided fields are updated. Re-enabling a disabled webhook resets the failure counter.
+
+---
+
+## Outage RCA Endpoint
+
+### POST `/api/v1/outages/{outage_id}/rca`
+
+Attach a root cause analysis to a resolved outage.
+
+```json
+{
+  "root_cause": "Misconfigured BGP route caused traffic blackholing",
+  "contributing_factors": ["scheduled maintenance overlap", "incomplete runbook"],
+  "remediation": "BGP config reviewed and hardened; runbook updated"
+}
+```
