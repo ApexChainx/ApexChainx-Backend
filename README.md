@@ -188,3 +188,5 @@ The backend will be available at:
 | Liveness | `http://localhost:8000/health/liveness` |
 | Readiness | `http://localhost:8000/health/readiness` |
 | Legacy health | `http://localhost:8000/health` |
+
+## Verification Notes
