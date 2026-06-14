@@ -400,3 +400,9 @@ Both penalty amount and reward amount are configurable per severity tier.
 ## Webhook Delivery Infrastructure
 
 Webhook delivery is handled by `app/tasks/webhook_tasks.py` as a Celery task. When `CELERY_TASK_ALWAYS_EAGER=true`, tasks execute synchronously in-process (no Redis required). In production, set `CELERY_TASK_ALWAYS_EAGER=false` and run a Celery worker alongside the API process.
+
+---
+
+## Analytics Snapshot Backfill
+
+The migration `0012_sla_latest_backfill.py` populates the `is_latest` flag on existing SLA records. This flag allows the analytics layer to efficiently query only the most recent SLA result per outage without a subquery on every request.
