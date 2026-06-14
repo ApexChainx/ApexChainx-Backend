@@ -1316,3 +1316,21 @@ Resolve an open outage and trigger SLA evaluation.
 ```
 
 This operation atomically resolves the outage, computes the SLA outcome, persists the SLA record, emits audit events, and optionally triggers a Stellar payment.
+
+---
+
+## SLA Calculate Endpoint
+
+### POST `/api/v1/sla/calculate`
+
+Compute an SLA outcome without persisting it. Useful for previewing the outcome before committing.
+
+```json
+{
+  "outage_id": "OUT001",
+  "mttr_minutes": 95,
+  "severity": "high"
+}
+```
+
+Returns the computed outcome and amount without writing to the database.
