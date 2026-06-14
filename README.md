@@ -16,7 +16,7 @@ ApexChainx is a 3-repo monorepo split across frontend, backend, and smart contra
 
 **System flow:** `User → FE → BE → Contracts → BE → FE`
 
-The frontend never calls contracts directly. The backend is the sole bridge between the UI and on-chain execution.
+The frontend never calls contracts directly. The backend is the sole bridge between the UI and on-chain execution. All Soroban interactions are brokered exclusively through `apexchainx-be`.
 
 ## Overview
 
