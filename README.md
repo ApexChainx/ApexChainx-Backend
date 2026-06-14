@@ -60,7 +60,7 @@ Current active routes:
 - `/api/v1/jobs`
 - `/api/v1/outages`
 - `/api/v1/sla`
-- `/api/v1/sla/disputes`
+- `/api/v1/sla/disputes` — file, list, and resolve SLA disputes
 - `/api/v1/auth`
 - `/api/v1/payments`
 - `/api/v1/webhooks`
