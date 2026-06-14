@@ -303,3 +303,11 @@ Content-Type: application/json
 ```
 
 Response includes a `webhook_id` used for all future management operations.
+
+## Listing Registered Webhooks
+
+```http
+GET /api/v1/webhooks
+```
+
+Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
