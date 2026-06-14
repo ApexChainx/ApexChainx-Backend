@@ -938,3 +938,15 @@ Return the immutable audit event log. All state-changing operations across outag
 - `event_type` (optional): filter by event type
 - `start` / `end` (optional): ISO 8601 date range
 - `limit` / `offset` (optional): pagination
+
+---
+
+## Jobs Endpoints
+
+### GET `/api/v1/jobs`
+
+List background job records. Each entry reflects a Celery task with retry state, status, and scheduling metadata.
+
+### GET `/api/v1/jobs/{job_id}`
+
+Retrieve a single job record by ID including last attempt timestamp and error detail.
