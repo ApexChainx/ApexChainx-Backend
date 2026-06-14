@@ -452,3 +452,9 @@ An outage can only be resolved once. Resolved outages are immutable — subseque
 ## Payment Deduplication
 
 Payment deduplication is enforced at the database level via a unique constraint on `(outage_id, payment_type)` added in migration `0011_payment_deduplication`. Attempting to execute a second payment for the same outage returns the existing record with `409 Conflict`.
+
+---
+
+## Token Family Security
+
+The auth system uses token families to detect refresh token reuse attacks. Each refresh creates a new token family member. Using a previously rotated refresh token invalidates the entire family, forcing re-login. This is implemented in `app/repositories/token_family_repository.py`.
