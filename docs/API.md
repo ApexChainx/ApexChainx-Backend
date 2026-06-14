@@ -1092,3 +1092,15 @@ Register a new user account.
 ```
 
 Returns `201 Created` with the new user record (excluding password).
+
+### POST `/api/v1/auth/refresh`
+
+Exchange a valid refresh token for a new access token.
+
+```json
+{
+  "refresh_token": "eyJ..."
+}
+```
+
+Implements token family rotation — a reused refresh token invalidates the entire token family.
