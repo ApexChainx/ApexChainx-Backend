@@ -366,3 +366,15 @@ The `X-Webhook-Signature-Version` header tells receivers which version was used 
 | 3rd retry | ~600 seconds |
 
 After 3 failed attempts the delivery is marked `dead_letter`. No further automatic retries occur.
+
+---
+
+## Response Code Handling
+
+| Receiver Response | Action |
+|------------------|--------|
+| `2xx` | Delivery marked `delivered`, no retry |
+| `4xx` | Delivery dead-lettered immediately (permanent failure) |
+| `5xx` | Retry scheduled (transient failure) |
+| Timeout (>10s) | Retry scheduled |
+| Connection error | Retry scheduled |
