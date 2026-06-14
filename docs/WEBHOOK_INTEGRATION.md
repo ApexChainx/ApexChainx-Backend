@@ -435,3 +435,24 @@ Each webhook payload includes a `schema_version` field. Receivers should check t
 ## Delivery Latency
 
 Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_ALWAYS_EAGER=true`), delivery is synchronous and occurs within the API request cycle. In worker mode, delivery occurs within seconds of event emission under normal load. Under high load or worker backlog, delivery may be delayed.
+
+---
+
+## Event Payload: `sla.violation`
+
+```json
+{
+  "schema_version": "1",
+  "event": "sla.violation",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T12:00:00.000000",
+  "data": {
+    "outage_id": "OUT001",
+    "mttr_minutes": 95,
+    "threshold_minutes": 60,
+    "severity": "high",
+    "penalty_amount": 500.00,
+    "currency": "USDC"
+  }
+}
+```
