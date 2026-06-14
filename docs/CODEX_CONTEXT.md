@@ -542,3 +542,14 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 - `list(db, filters, limit, offset)` — paginated result list
 - `bulk_create(db, records)` — bulk insert for recompute operations
 - `mark_latest(db, sla_id)` — update `is_latest` flag
+
+---
+
+## Payment Repository Methods
+
+`app/repositories/payment_repository.py` exposes:
+- `create(db, data)` — persist payment record
+- `get(db, payment_id)` — fetch by ID
+- `get_by_outage(db, outage_id)` — fetch payment linked to outage
+- `update_status(db, payment_id, status, tx_hash)` — update after confirmation
+- `list(db, filters, limit, offset)` — paginated list with date and status filters
