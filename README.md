@@ -35,6 +35,8 @@ The `outages` and `sla` domains are the strongest and most integration-focused. 
 
 ## Tech Stack
 
+All runtime dependencies are pinned in [requirements.txt](requirements.txt). No floating version ranges are used.
+
 | Component | Technology |
 |-----------|------------|
 | Language | Python 3.11+ |
