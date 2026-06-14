@@ -115,3 +115,14 @@ For production deployments, monitor:
 ## Changelog Policy
 
 All changes are tracked via git. The commit history on `main` is the canonical changelog. Commits follow the `type(scope): description` convention. Breaking changes are noted in the commit body.
+
+---
+
+## Contributor Onboarding
+
+New contributors should:
+1. Read `README.md` for setup
+2. Read `CONTRIBUTING.md` for branch and commit conventions
+3. Read `docs/CODEX_CONTEXT.md` for domain and architecture context
+4. Run `pytest tests/` to verify a working local environment
+5. Pick an issue from the backlog scoped to one domain
