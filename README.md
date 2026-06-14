@@ -219,3 +219,11 @@ This backend is stabilized but not feature-complete. Known limitations:
 - Database connection strings with credentials
 - JWT secrets or encryption keys
 - Personal access tokens
+
+**Always use environment variables for:**
+
+- Database credentials
+- API keys and secrets
+- Blockchain private keys
+- JWT signing secrets
+- External service credentials
