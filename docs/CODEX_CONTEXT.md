@@ -470,3 +470,9 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 ## Analytics Exporter
 
 `app/utils/analytics_exporter.py` handles CSV and JSON serialisation of SLA analytics. It reads from the `sla_analytics_snapshots` table populated by migration `0007_sla_analytics_snapshots`. Export operations are read-only and do not mutate any records.
+
+---
+
+## Wallet Registry
+
+`app/services/wallet_registry.py` manages the mapping between entity IDs and Stellar public keys. In the current release this uses an in-memory store. Persistence via the `wallets` database table (migration `0010_wallet_persistence`) is the planned next step.
