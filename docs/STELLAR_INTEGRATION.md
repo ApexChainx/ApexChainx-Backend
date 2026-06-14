@@ -1005,3 +1005,11 @@ Each confirmed payment record includes an `explorer_url` field pointing to the t
 - **Mainnet**: `https://stellar.expert/explorer/public/tx/{hash}`
 
 The correct URL is selected automatically based on `STELLAR_NETWORK`.
+
+---
+
+## Memo Field
+
+SLA payments include a Stellar transaction memo containing the `outage_id`. This allows on-chain verification of which outage a payment settles, independent of the backend database.
+
+Memo format: `APEX:{outage_id}` (truncated to 28 bytes per Stellar memo limit).
