@@ -394,3 +394,9 @@ MTTR (Mean Time to Resolve) is computed as the difference in minutes between the
 - If MTTR > threshold → **penalty** outcome
 
 Both penalty amount and reward amount are configurable per severity tier.
+
+---
+
+## Webhook Delivery Infrastructure
+
+Webhook delivery is handled by `app/tasks/webhook_tasks.py` as a Celery task. When `CELERY_TASK_ALWAYS_EAGER=true`, tasks execute synchronously in-process (no Redis required). In production, set `CELERY_TASK_ALWAYS_EAGER=false` and run a Celery worker alongside the API process.
