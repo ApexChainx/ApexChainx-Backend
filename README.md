@@ -209,3 +209,13 @@ This backend is stabilized but not feature-complete. Known limitations:
 - documentation and contributor expectations should follow the routed API surface, not every helper or legacy module under `app/services`
 
 ## Security Guidelines
+
+### For Contributors
+
+**Never commit sensitive information:**
+
+- API keys, secret keys, or passwords
+- Private keys for any blockchain network
+- Database connection strings with credentials
+- JWT secrets or encryption keys
+- Personal access tokens
