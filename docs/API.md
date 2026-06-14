@@ -1268,3 +1268,17 @@ Each outage maintains an ordered timeline of events. Timeline entries are append
 - `resolved` — outage closed with MTTR
 - `sla_evaluated` — SLA outcome computed
 - `payment_triggered` — Stellar payment initiated
+
+---
+
+## Idempotency Keys
+
+For operations that trigger payments or SLA evaluations, include an `X-Idempotency-Key` header to prevent duplicate processing on network retries:
+
+```http
+POST /api/v1/sla/calculate
+X-Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+Content-Type: application/json
+```
+
+If the same key is received within the deduplication window, the original response is returned without re-executing the operation.
