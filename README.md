@@ -346,3 +346,11 @@ Background task modules live in `app/tasks/`:
 | `webhook_tasks.py` | Async webhook delivery with retry logic |
 
 Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. For production use set `CELERY_TASK_ALWAYS_EAGER=false` and provide Redis URLs.
+
+## Payments and Wallets
+
+The `payments` and `wallets` domains handle SLA-triggered financial settlements:
+
+- **Payments** — record and query Stellar payment transactions linked to SLA outcomes
+- **Wallets** — register and resolve Stellar wallet addresses per entity
+- Both are fully routed but backed by in-memory stores in the current release; persistence is planned for a future iteration.
