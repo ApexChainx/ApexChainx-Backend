@@ -1298,3 +1298,21 @@ Resolve multiple disputes in a single request.
   "notes": "MTTR recalculated after log review confirmed engineer notification delay"
 }
 ```
+
+---
+
+## SLA Resolve Endpoint
+
+### POST `/api/v1/outages/{outage_id}/resolve`
+
+Resolve an open outage and trigger SLA evaluation.
+
+```json
+{
+  "mttr_minutes": 95,
+  "resolved_at": "2026-06-14T11:44:50Z",
+  "resolution_notes": "Root cause identified and patched"
+}
+```
+
+This operation atomically resolves the outage, computes the SLA outcome, persists the SLA record, emits audit events, and optionally triggers a Stellar payment.
