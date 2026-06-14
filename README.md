@@ -32,3 +32,17 @@ It is responsible for:
 The `outages` and `sla` domains are the strongest and most integration-focused. Other domains (`auth`, `payments`, `wallets`, `jobs`, `webhooks`) are fully routed but vary in infrastructure depth.
 
 ## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Language | Python 3.11+ |
+| Framework | FastAPI |
+| ORM | SQLAlchemy |
+| Database | PostgreSQL |
+| Migrations | Alembic |
+| Settings | Pydantic Settings |
+| Task Queue | Celery |
+| HTTP Client | HTTPX |
+| Blockchain | Stellar / Soroban |
+
+Dependencies are declared in [requirements.txt](requirements.txt).
