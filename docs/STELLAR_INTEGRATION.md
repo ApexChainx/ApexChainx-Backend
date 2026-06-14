@@ -947,3 +947,9 @@ Ensure the pool wallet holds a sufficient USDC trustline before executing paymen
 | `STELLAR_SOROBAN_RPC_URL` | Used exclusively for Soroban contract invocation |
 
 Both are required when `CONTRACT_EXECUTION_MODE=contract`.
+
+---
+
+## Transaction Confirmation
+
+The backend polls Horizon for transaction confirmation after submission. Confirmation is recorded in the payment record as `confirmed_at`. If confirmation is not received within the polling window, the payment status remains `pending` and a retry is scheduled.
