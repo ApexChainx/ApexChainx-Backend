@@ -429,3 +429,9 @@ A webhook is automatically set to `disabled` after exhausting all retries across
 ## Schema Version Field
 
 Each webhook payload includes a `schema_version` field. Receivers should check this field and handle unknown versions gracefully (log and acknowledge) rather than rejecting the delivery. This ensures forward compatibility as new event data fields are added.
+
+---
+
+## Delivery Latency
+
+Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_ALWAYS_EAGER=true`), delivery is synchronous and occurs within the API request cycle. In worker mode, delivery occurs within seconds of event emission under normal load. Under high load or worker backlog, delivery may be delayed.
