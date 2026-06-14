@@ -63,3 +63,9 @@ Current active routes:
 - `/api/v1/payments`
 - `/api/v1/webhooks`
 - `/api/v1/wallets`
+
+Module maturity:
+
+- **Strongest integration**: `outages`, `sla`, `audit`
+- **Active with lighter implementations**: `auth`, `payments`, `wallets`
+- **Infrastructure-dependent**: `jobs`, `webhooks`, `sla/disputes` (require Redis and Celery for full behavior)
