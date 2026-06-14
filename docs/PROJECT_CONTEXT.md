@@ -37,3 +37,9 @@ The default `STELLAR_NETWORK=testnet` setting ensures no real assets are moved d
 | `CELERY_TASK_ALWAYS_EAGER` | `true` | `false` |
 | Redis / Celery worker | optional | required |
 | PostgreSQL | local instance | managed instance |
+
+---
+
+## Audit Trail Design
+
+Every mutating operation emits an audit event through `app/services/audit_log.py`. Events are append-only. No audit record can be deleted through the API. The `correlation_id` field on each event links it to the originating HTTP request, enabling full request-to-database tracing.
