@@ -92,3 +92,9 @@ Values are configurable via `app/services/sla/config.py`.
 - Private keys for Stellar wallets are never accepted via API — only public keys are stored
 - The payload size guard prevents DoS via oversized request bodies
 - Correlation IDs enable post-hoc security investigation of any request
+
+---
+
+## Dependency Policy
+
+All Python dependencies are pinned to exact versions in `requirements.txt`. No version ranges are used. This ensures reproducible builds and makes dependency updates an explicit, reviewed change.
