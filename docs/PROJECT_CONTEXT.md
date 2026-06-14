@@ -126,3 +126,37 @@ New contributors should:
 3. Read `docs/CODEX_CONTEXT.md` for domain and architecture context
 4. Run `pytest tests/` to verify a working local environment
 5. Pick an issue from the backlog scoped to one domain
+
+---
+
+## Cross-repo API Contract
+
+The frontend (`apexchainx-fe`) depends on the API contract defined in `docs/API.md`. Any endpoint shape change that removes or renames fields is a **breaking change** and requires:
+1. A version bump in the API (new `/api/v2` prefix)
+2. A corresponding update to the frontend
+3. A deprecation notice on the old endpoint before removal
+
+---
+
+## Data Retention
+
+| Table | Retention Policy |
+|-------|-----------------|
+| `outages` | Permanent |
+| `sla_results` | Permanent |
+| `audit_events` | Permanent (append-only) |
+| `payments` | Permanent |
+| `jobs` | Pruned after configurable window (default 30 days) |
+| `webhook_deliveries` | Pruned after configurable window (default 90 days) |
+
+---
+
+## Environment Tiers
+
+| Tier | Purpose | Notes |
+|------|---------|-------|
+| `local` | Developer workstation | Eager Celery, testnet Stellar |
+| `staging` | Pre-production integration | Worker Celery, testnet Stellar |
+| `production` | Live | Worker Celery, mainnet Stellar, managed DB |
+
+Secrets must be completely separate between tiers. Never copy production credentials to local or staging.

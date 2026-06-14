@@ -1254,3 +1254,232 @@ Get payment transaction history.
 - `type` (optional): `penalty`, `reward`, `manual`
 - `status` (optional): `pending`, `confirmed`, `failed`
 - `limit` / `offset`: pagination
+
+---
+
+## Outage Timeline Events
+
+Each outage maintains an ordered timeline of events. Timeline entries are appended at each state change and are immutable. The `schema_version` field on each event enables forward-compatible parsing.
+
+**Event types in the timeline:**
+- `created` — outage record first persisted
+- `updated` — metadata change
+- `escalated` — severity changed upward
+- `resolved` — outage closed with MTTR
+- `sla_evaluated` — SLA outcome computed
+- `payment_triggered` — Stellar payment initiated
+
+---
+
+## Idempotency Keys
+
+For operations that trigger payments or SLA evaluations, include an `X-Idempotency-Key` header to prevent duplicate processing on network retries:
+
+```http
+POST /api/v1/sla/calculate
+X-Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+Content-Type: application/json
+```
+
+If the same key is received within the deduplication window, the original response is returned without re-executing the operation.
+
+---
+
+## Bulk Operations
+
+### POST `/api/v1/sla/disputes/bulk-resolve`
+
+Resolve multiple disputes in a single request.
+
+```json
+{
+  "dispute_ids": ["DIS001", "DIS002"],
+  "resolution": "accepted",
+  "notes": "MTTR recalculated after log review confirmed engineer notification delay"
+}
+```
+
+---
+
+## SLA Resolve Endpoint
+
+### POST `/api/v1/outages/{outage_id}/resolve`
+
+Resolve an open outage and trigger SLA evaluation.
+
+```json
+{
+  "mttr_minutes": 95,
+  "resolved_at": "2026-06-14T11:44:50Z",
+  "resolution_notes": "Root cause identified and patched"
+}
+```
+
+This operation atomically resolves the outage, computes the SLA outcome, persists the SLA record, emits audit events, and optionally triggers a Stellar payment.
+
+---
+
+## SLA Calculate Endpoint
+
+### POST `/api/v1/sla/calculate`
+
+Compute an SLA outcome without persisting it. Useful for previewing the outcome before committing.
+
+```json
+{
+  "outage_id": "OUT001",
+  "mttr_minutes": 95,
+  "severity": "high"
+}
+```
+
+Returns the computed outcome and amount without writing to the database.
+
+---
+
+## SLA Status Endpoint
+
+### GET `/api/v1/sla/status/{outage_id}`
+
+Retrieve the latest SLA result for a given outage. Returns `404` if the outage has not been resolved yet.
+
+Response includes `outcome`, `amount`, `policy_version`, `is_latest`, and `computed_at`.
+
+---
+
+## SLA Execute Payment
+
+### POST `/api/v1/sla/execute-payment`
+
+Manually execute the Stellar payment for an already-computed SLA result.
+
+```json
+{
+  "sla_result_id": "SLA001"
+}
+```
+
+Returns the payment record. Idempotent — returns existing payment if already executed.
+
+---
+
+## Outage Create Endpoint
+
+### POST `/api/v1/outages`
+
+Create a new outage record.
+
+```json
+{
+  "site_name": "DC-West",
+  "severity": "high",
+  "services_affected": ["billing", "api"],
+  "description": "Complete network failure at primary router"
+}
+```
+
+Returns the created outage with a generated `id` and `created_at` timestamp.
+
+---
+
+## Outage Update Endpoint
+
+### PUT `/api/v1/outages/{outage_id}`
+
+Update an open outage's metadata. Resolved outages cannot be updated.
+
+```json
+{
+  "severity": "critical",
+  "services_affected": ["billing", "api", "auth"],
+  "description": "Updated: affecting 3 services after further investigation"
+}
+```
+
+---
+
+## Outage Get Endpoint
+
+### GET `/api/v1/outages/{outage_id}`
+
+Retrieve a single outage by ID. Returns full record including timeline events and latest SLA result if resolved.
+
+### GET `/api/v1/outages`
+
+List all outages. Supports pagination via `limit` and `offset`. Default sort is `created_at` descending.
+
+---
+
+## SLA Dispute Resolve Endpoint
+
+### POST `/api/v1/sla/disputes/{dispute_id}/resolve`
+
+Close an open dispute.
+
+```json
+{
+  "resolution": "accepted",
+  "notes": "Reviewed engineer call logs — notification delay confirmed"
+}
+```
+
+`resolution` values: `accepted` (outcome overturned), `rejected` (original outcome upheld).
+
+Emits a `dispute.resolved` audit event and a `dispute.resolved` webhook.
+
+---
+
+## Wallet Balance Endpoint
+
+### GET `/api/v1/wallets/{address}/balance`
+
+Query the live USDC balance of a Stellar wallet address. This calls Horizon directly and returns the current ledger state.
+
+Response:
+```json
+{
+  "address": "GOPS...",
+  "usdc_balance": "1234.50",
+  "xlm_balance": "10.00",
+  "network": "testnet"
+}
+```
+
+---
+
+## Webhook Update Endpoint
+
+### PATCH `/api/v1/webhooks/{webhook_id}`
+
+Update a registered webhook's URL, events, secret, or status.
+
+```json
+{
+  "url": "https://new-endpoint.example.com/hooks",
+  "status": "active"
+}
+```
+
+Only provided fields are updated. Re-enabling a disabled webhook resets the failure counter.
+
+---
+
+## Outage RCA Endpoint
+
+### POST `/api/v1/outages/{outage_id}/rca`
+
+Attach a root cause analysis to a resolved outage.
+
+```json
+{
+  "root_cause": "Misconfigured BGP route caused traffic blackholing",
+  "contributing_factors": ["scheduled maintenance overlap", "incomplete runbook"],
+  "remediation": "BGP config reviewed and hardened; runbook updated"
+}
+```
+
+---
+
+## Outage Import Validation
+
+The bulk import endpoint (`POST /api/v1/outages/import`) validates each record before persisting any. If any record fails validation, the entire batch is rejected with a `422` response listing all field errors per record index. Partial imports are not supported.

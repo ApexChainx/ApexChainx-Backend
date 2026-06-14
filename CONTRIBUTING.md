@@ -1,6 +1,6 @@
 # Contributing to ApexChainx
 
-First off, thank you for considering contributing to ApexChainx! It's people like you that make ApexChainx such a great tool for network operations teams.
+First off, thank you for considering contributing to ApexChainx! It's people like you that make ApexChainx such a great tool for service operators managing SLA compliance and outage resolution.
 
 ## 🌊 Participating in Stellar Wave
 
@@ -36,7 +36,7 @@ There are many ways to contribute to ApexChainx:
 - Freighter wallet (for Stellar features)
 
 **For Backend (apexchainx-be):**
-- Python 3.9 or higher
+- Python 3.11 or higher
 - pip and virtualenv
 - Git
 
@@ -58,7 +58,7 @@ There are many ways to contribute to ApexChainx:
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/OpSoll/apexchainx-fe.git
+   git remote add upstream https://github.com/ApexChainx/ApexChainx-Frontend.git
    ```
 
 ### Setup Development Environment
@@ -75,12 +75,15 @@ npm run dev
 **Backend:**
 ```bash
 cd apexchainx-be
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
+# On Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env
+# Edit .env — never commit it
 # Edit .env with your config
-uvicorn main:app --reload
+alembic upgrade head
+uvicorn app.main:app --reload
 ```
 
 **Smart Contracts:**
@@ -135,10 +138,11 @@ npm run type-check
 **Backend:**
 ```bash
 pytest
+pytest -v
 pytest --cov=app --cov-report=html
-black app/
-flake8 app/
-mypy app/
+black app/          # auto-format
+flake8 app/         # lint
+mypy app/           # type-check
 ```
 
 **Smart Contracts:**
@@ -168,14 +172,18 @@ git commit -m "test: add unit tests for SLA calculator"
 ```
 
 **Types:**
+
+Scope is optional but encouraged: `feat(sla): add bulk recompute endpoint`
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `docs`: Documentation changes
 - `style`: Code style changes (formatting, semicolons, etc.)
-- `refactor`: Code refactoring
+- `refactor`: Code refactoring without behaviour change
 - `test`: Adding or updating tests
 - `chore`: Maintenance tasks
 - `perf`: Performance improvements
+- `ci`: CI/CD configuration changes
 
 ### 5. Push and Create Pull Request
 
@@ -184,7 +192,7 @@ git push origin feature/wallet-integration
 ```
 
 Then open a pull request on GitHub with:
-- **Clear title** following conventional commit format
+- **Clear title** following conventional commit format (keep under 70 characters)
 - **Description** of what you changed and why
 - **Screenshots** (for UI changes)
 - **Testing notes** (how you tested the changes)
@@ -532,3 +540,98 @@ Your contributions make ApexChainx better for everyone. We appreciate your time 
 ---
 
 **Happy coding! 🚀**
+
+---
+
+## Common Mistakes to Avoid
+
+- Do not push directly to `main` — all changes must go through a PR
+- Do not commit `.env` files — use `.env.example` for documentation
+- Do not add floating version ranges to `requirements.txt` — pin exact versions
+- Do not put business logic in route handlers — it belongs in services
+- Do not expose private keys via API responses or logs
+- Do not skip tests — all PRs require passing test suite
+
+---
+
+## Reporting a Bug
+
+When filing a bug report, include:
+
+1. **Steps to reproduce** — the exact sequence of actions
+2. **Expected behaviour** — what should have happened
+3. **Actual behaviour** — what actually happened
+4. **Environment** — Python version, OS, database version
+5. **Logs** — relevant error output (redact any secrets)
+
+---
+
+## Proposing a Feature
+
+Before opening a feature request:
+
+1. Check existing issues to avoid duplicates
+2. Describe the problem the feature solves — not just the solution
+3. Consider the scope: does this belong in the backend, frontend, or contracts?
+4. Outline acceptance criteria — what does "done" look like?
+
+---
+
+## Code Review Expectations
+
+- PRs are reviewed within 48 hours on business days
+- Address all reviewer comments before requesting re-review
+- Use `Resolve conversation` only after the concern is addressed, not to dismiss it
+- Breaking changes require explicit sign-off from a maintainer
+
+---
+
+## Documentation-only PRs
+
+PRs that only modify `.md` files do not require test coverage but must:
+- Be factually accurate and consistent with the routed runtime
+- Not introduce references to legacy module paths or old names
+- Follow the same commit convention as code PRs
+
+---
+
+## Test Coverage Expectations
+
+- New service functions must have at least one unit test
+- New route handlers must have at least one integration test
+- Bug fixes must include a regression test that would have caught the bug
+- Tests must pass locally before opening a PR (`pytest tests/`)
+
+---
+
+## Dependency Management
+
+- Add new Python dependencies with an exact version: `package==1.2.3`
+- Update `requirements.txt` and commit it as part of the PR that introduces the dependency
+- Do not add dev-only tools to `requirements.txt` — they belong in a separate `requirements-dev.txt`
+- Flag any dependency with a known CVE before merging
+
+---
+
+## Database Migration Guidelines
+
+When your PR requires a database change:
+
+1. Create a new migration file under `alembic/versions/` with the next sequential number
+2. Name the file descriptively: `NNNN_short_description.py`
+3. Include both `upgrade()` and `downgrade()` functions
+4. Test the migration with `alembic upgrade head` and `alembic downgrade -1`
+5. Include the migration in the same PR as the code that depends on it
+
+---
+
+## Security Review Checklist
+
+Before submitting a PR, verify:
+
+- [ ] No secrets, keys, or credentials in any committed file
+- [ ] No private keys exposed via API responses or logs
+- [ ] Input validation present on all new endpoints (Pydantic schemas)
+- [ ] Authentication required on all protected routes
+- [ ] No new floating dependency version ranges
+- [ ] `.env.example` updated if new environment variables were added

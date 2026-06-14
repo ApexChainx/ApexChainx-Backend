@@ -519,3 +519,167 @@ celery -A app.tasks.celery_app worker --loglevel=info
 ```
 
 Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_TASK_ALWAYS_EAGER=false` to route tasks to the worker instead of executing in-process.
+
+---
+
+## Outage Repository Methods
+
+`app/repositories/outage_repository.py` exposes:
+- `create(db, data)` — persist new outage
+- `get(db, outage_id)` — fetch by ID
+- `update(db, outage_id, data)` — partial update
+- `resolve(db, outage_id, mttr, resolved_at)` — mark resolved (atomic)
+- `list(db, filters, limit, offset)` — paginated list with filter support
+- `search(db, query, filters)` — full-text and filter search
+
+---
+
+## SLA Repository Methods
+
+`app/repositories/sla_repository.py` exposes:
+- `create(db, data)` — persist SLA result
+- `get_latest(db, outage_id)` — fetch most recent result per outage
+- `list(db, filters, limit, offset)` — paginated result list
+- `bulk_create(db, records)` — bulk insert for recompute operations
+- `mark_latest(db, sla_id)` — update `is_latest` flag
+
+---
+
+## Payment Repository Methods
+
+`app/repositories/payment_repository.py` exposes:
+- `create(db, data)` — persist payment record
+- `get(db, payment_id)` — fetch by ID
+- `get_by_outage(db, outage_id)` — fetch payment linked to outage
+- `update_status(db, payment_id, status, tx_hash)` — update after confirmation
+- `list(db, filters, limit, offset)` — paginated list with date and status filters
+
+---
+
+## Services vs Repositories: Boundary Rules
+
+| Layer | Allowed | Not Allowed |
+|-------|---------|-------------|
+| Route handler | Call services, return responses | Query DB directly, business logic |
+| Service | Business logic, call repositories | Import other services' repositories |
+| Repository | SQLAlchemy queries only | Business logic, HTTP calls |
+| Utility | Pure functions, no DB/HTTP | Side effects |
+
+---
+
+## Pydantic Schema Conventions
+
+- Request schemas are named `{Domain}Create`, `{Domain}Update`
+- Response schemas are named `{Domain}Response`, `{Domain}ListResponse`
+- ORM models live in `app/models/orm/` and are never exposed directly to route handlers
+- All datetime fields use `datetime` type (not `str`) — FastAPI serialises to ISO 8601 automatically
+
+---
+
+## Enum Conventions
+
+Enums used across the API are defined in `app/models/enums.py`. Always reference the enum class, not raw strings, in service and repository code to benefit from type safety and refactoring support.
+
+Key enums:
+- `OutageStatus`: `open`, `resolved`
+- `SLAOutcome`: `penalty`, `reward`
+- `PaymentStatus`: `pending`, `confirmed`, `failed`
+- `SeverityLevel`: `low`, `medium`, `high`, `critical`
+
+---
+
+## Audit Log Event Types
+
+Key event types emitted by `app/services/audit_log.py`:
+
+| Event Type | Trigger |
+|-----------|---------|
+| `outage.created` | New outage persisted |
+| `outage.resolved` | Outage resolved with MTTR |
+| `sla.computed` | SLA outcome calculated |
+| `sla.recomputed` | Bulk recompute executed |
+| `payment.initiated` | Stellar payment submitted |
+| `payment.confirmed` | On-chain confirmation received |
+| `dispute.filed` | Dispute created |
+| `dispute.resolved` | Dispute closed |
+| `auth.login` | Successful login |
+| `auth.logout` | Session invalidated |
+| `auth.failed` | Failed login attempt |
+
+---
+
+## ORM Model Conventions
+
+ORM models live in `app/models/orm/`. Each model:
+- extends `Base` from `app/db/base_class.py`
+- uses `__tablename__` matching the migration table name
+- defines `id` as UUID primary key
+- includes `created_at` with server default `now()`
+- never exposes SQLAlchemy internals to API responses
+
+---
+
+## Database Session Management
+
+Sessions are managed via a FastAPI dependency injected into route handlers:
+
+```python
+from app.db.session import get_db
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
+@router.get("/outages")
+def list_outages(db: Session = Depends(get_db)):
+    ...
+```
+
+Sessions are committed and closed automatically by the dependency. Do not call `db.commit()` in repositories — commit in services or use explicit transactions.
+
+---
+
+## Settings Module
+
+`app/core/config.py` uses Pydantic Settings to load and validate all environment variables at startup. Access settings via the `get_settings()` function (cached singleton). Never read `os.environ` directly in application code — always go through `get_settings()`.
+
+---
+
+## Lock Module
+
+`app/core/lock.py` provides a lightweight advisory lock mechanism used to prevent concurrent SLA recompute operations on the same outage. Uses a database-level advisory lock via PostgreSQL `pg_try_advisory_lock`. Do not use Python threading primitives for cross-process synchronisation.
+
+---
+
+## Cache Module
+
+`app/utils/cache.py` provides a simple in-process LRU cache for SLA policy configuration reads. Cache entries expire after a configurable TTL. Invalidate the cache after any policy configuration update to ensure the next SLA computation uses the new values.
+
+---
+
+## Logging
+
+`app/utils/logging.py` configures structured JSON logging. All log entries include:
+- `timestamp` (UTC)
+- `level`
+- `message`
+- `correlation_id` (if available in request context)
+- `service`: always `apexchainx-be`
+
+Do not use `print()` in application code. Use the logger from `app/utils/logging.py`.
+
+---
+
+## Stellar Explorer Utility
+
+`app/utils/explorer.py` constructs Stellar Expert URLs for transactions and accounts based on the active `STELLAR_NETWORK` setting. Use this utility when building payment records rather than constructing URLs manually.
+
+---
+
+## Wallet Address Utility
+
+`app/utils/wallet_address.py` validates and normalises Stellar public key format. Call `validate_stellar_address(address)` before persisting any wallet address. Returns `False` for addresses that are not valid G-type Stellar public keys.
+
+---
+
+## Correlation Utility
+
+`app/utils/correlation.py` provides helpers for reading and setting the correlation ID in the current request context. Use `get_correlation_id()` inside services when you need to attach the ID to audit events or log entries outside of the request-response cycle.

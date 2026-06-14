@@ -435,3 +435,97 @@ Each webhook payload includes a `schema_version` field. Receivers should check t
 ## Delivery Latency
 
 Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_ALWAYS_EAGER=true`), delivery is synchronous and occurs within the API request cycle. In worker mode, delivery occurs within seconds of event emission under normal load. Under high load or worker backlog, delivery may be delayed.
+
+---
+
+## Event Payload: `sla.violation`
+
+```json
+{
+  "schema_version": "1",
+  "event": "sla.violation",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T12:00:00.000000",
+  "data": {
+    "outage_id": "OUT001",
+    "mttr_minutes": 95,
+    "threshold_minutes": 60,
+    "severity": "high",
+    "penalty_amount": 500.00,
+    "currency": "USDC"
+  }
+}
+```
+
+---
+
+## Event Payload: `payment.confirmed`
+
+```json
+{
+  "schema_version": "1",
+  "event": "payment.confirmed",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T12:01:00.000000",
+  "data": {
+    "payment_id": "pay-001",
+    "transaction_hash": "abc123...",
+    "amount": 500.00,
+    "currency": "USDC",
+    "outage_id": "OUT001",
+    "confirmed_at": "2026-06-14T12:00:55.000000"
+  }
+}
+```
+
+---
+
+## Event Payload: `outage.resolved`
+
+```json
+{
+  "schema_version": "1",
+  "event": "outage.resolved",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T11:45:00.000000",
+  "data": {
+    "outage_id": "OUT001",
+    "site_name": "DC-West",
+    "severity": "high",
+    "mttr_minutes": 95,
+    "resolved_at": "2026-06-14T11:44:50.000000"
+  }
+}
+```
+
+---
+
+## Event Payload: `dispute.filed`
+
+```json
+{
+  "schema_version": "1",
+  "event": "dispute.filed",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T13:00:00.000000",
+  "data": {
+    "dispute_id": "DIS001",
+    "outage_id": "OUT001",
+    "sla_result_id": "SLA001",
+    "reason": "MTTR measurement started before engineer notification",
+    "status": "open"
+  }
+}
+```
+
+---
+
+## Webhook Logging
+
+Log every webhook delivery attempt on the receiver side, including:
+- `webhook_id` and `event` type
+- receipt timestamp
+- signature verification result
+- processing outcome
+
+This log is essential for debugging delivery issues and satisfying audit requirements.

@@ -988,3 +988,59 @@ When `CONTRACT_EXECUTION_MODE=contract`:
 - The secret key is never logged, never returned via any API endpoint, and never written to disk
 - Only the corresponding public key (`STELLAR_POOL_PUBLIC_KEY`) is stored in configuration for reference
 - If the secret key is compromised, rotate it immediately and update the `.env` file on all instances
+
+---
+
+## Retry on Payment Failure
+
+If a Stellar payment fails (insufficient funds, account not found, network timeout), the backend schedules a retry via Celery. Retry attempts are tracked in the payment record's `attempt_count` field. After `MAX_PAYMENT_RETRIES` (default 3) attempts, the payment is marked `failed` and an audit event is emitted.
+
+---
+
+## Stellar Explorer Links
+
+Each confirmed payment record includes an `explorer_url` field pointing to the transaction on Stellar Expert:
+
+- **Testnet**: `https://stellar.expert/explorer/testnet/tx/{hash}`
+- **Mainnet**: `https://stellar.expert/explorer/public/tx/{hash}`
+
+The correct URL is selected automatically based on `STELLAR_NETWORK`.
+
+---
+
+## Memo Field
+
+SLA payments include a Stellar transaction memo containing the `outage_id`. This allows on-chain verification of which outage a payment settles, independent of the backend database.
+
+Memo format: `APEX:{outage_id}` (truncated to 28 bytes per Stellar memo limit).
+
+---
+
+## Trustline Requirements
+
+Before a wallet can receive USDC, it must have an active USDC trustline. The backend validates this before submitting a payment. If the trustline is missing, the payment is held in `pending` state and an operator notification is emitted via webhook (`payment.blocked_no_trustline`).
+
+---
+
+## XDR and Horizon Response Parsing
+
+Soroban contract results are returned as XDR-encoded values. The contract adapter in `app/services/contracts/` decodes the XDR result into a Python dict before passing it to the SLA service. Contributors extending the contract adapter must handle XDR decoding correctly — use the `stellar-sdk` library, not manual byte parsing.
+
+---
+
+## Fee Handling
+
+Stellar transaction fees are paid in XLM from the pool wallet. The current fee strategy uses the Horizon fee stats endpoint to select a fee in the 90th percentile of recent base fees, ensuring timely inclusion without overpaying. The pool wallet must maintain a small XLM balance in addition to the USDC balance for fees.
+
+---
+
+## Soroban RPC vs Horizon: When to Use Each
+
+| Operation | Endpoint |
+|-----------|---------|
+| Check account balance | Horizon |
+| Validate trustline | Horizon |
+| Submit Soroban invocation | Soroban RPC |
+| Submit classic payment | Horizon |
+| Fetch transaction status | Horizon |
+| Fetch ledger data | Horizon |
