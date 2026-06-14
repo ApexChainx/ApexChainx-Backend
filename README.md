@@ -311,3 +311,12 @@ pytest tests/
 |-----------|------|-----------|
 | Correlation ID | `app/middleware/correlation.py` | Injects `X-Correlation-ID` header on every request and response |
 | Payload size guard | `app/middleware/payload_size.py` | Enforces a cumulative payload size limit; rejects oversized requests |
+
+## Analytics and Exports
+
+SLA analytics are served through `/api/v1/sla` and support:
+
+- aggregated performance summaries
+- trend windows over configurable time ranges
+- point-in-time snapshots
+- CSV and JSON export via `app/utils/analytics_exporter.py`
