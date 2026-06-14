@@ -1009,3 +1009,7 @@ Register a Stellar wallet address for an entity.
 ```
 
 Private keys are never accepted or stored by this endpoint.
+
+### GET `/api/v1/wallets/{entity_id}`
+
+Retrieve the registered wallet address for an entity. Returns the public key only.
