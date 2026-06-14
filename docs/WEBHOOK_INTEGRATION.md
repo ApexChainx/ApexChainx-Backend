@@ -332,3 +332,14 @@ Query parameters:
 - `offset` — pagination offset
 
 Each delivery record includes the event type, attempt count, response code, and timestamps.
+
+## Webhook Idempotency
+
+Each delivery carries a `webhook_id` + `timestamp` pair that is stable across retry attempts. Receivers should persist these pairs and skip processing if already seen:
+
+```python
+if db.exists(webhook_id=event["webhook_id"], timestamp=event["timestamp"]):
+    return 200  # already processed, acknowledge without re-processing
+db.mark_delivered(webhook_id=event["webhook_id"], timestamp=event["timestamp"])
+process(event)
+```
