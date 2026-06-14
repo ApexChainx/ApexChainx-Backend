@@ -640,3 +640,9 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 ## Settings Module
 
 `app/core/config.py` uses Pydantic Settings to load and validate all environment variables at startup. Access settings via the `get_settings()` function (cached singleton). Never read `os.environ` directly in application code — always go through `get_settings()`.
+
+---
+
+## Lock Module
+
+`app/core/lock.py` provides a lightweight advisory lock mechanism used to prevent concurrent SLA recompute operations on the same outage. Uses a database-level advisory lock via PostgreSQL `pg_try_advisory_lock`. Do not use Python threading primitives for cross-process synchronisation.
