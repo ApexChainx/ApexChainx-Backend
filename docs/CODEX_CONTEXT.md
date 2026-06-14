@@ -519,3 +519,15 @@ celery -A app.tasks.celery_app worker --loglevel=info
 ```
 
 Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_TASK_ALWAYS_EAGER=false` to route tasks to the worker instead of executing in-process.
+
+---
+
+## Outage Repository Methods
+
+`app/repositories/outage_repository.py` exposes:
+- `create(db, data)` — persist new outage
+- `get(db, outage_id)` — fetch by ID
+- `update(db, outage_id, data)` — partial update
+- `resolve(db, outage_id, mttr, resolved_at)` — mark resolved (atomic)
+- `list(db, filters, limit, offset)` — paginated list with filter support
+- `search(db, query, filters)` — full-text and filter search
