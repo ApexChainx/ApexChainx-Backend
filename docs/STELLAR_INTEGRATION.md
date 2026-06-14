@@ -1013,3 +1013,9 @@ The correct URL is selected automatically based on `STELLAR_NETWORK`.
 SLA payments include a Stellar transaction memo containing the `outage_id`. This allows on-chain verification of which outage a payment settles, independent of the backend database.
 
 Memo format: `APEX:{outage_id}` (truncated to 28 bytes per Stellar memo limit).
+
+---
+
+## Trustline Requirements
+
+Before a wallet can receive USDC, it must have an active USDC trustline. The backend validates this before submitting a payment. If the trustline is missing, the payment is held in `pending` state and an operator notification is emitted via webhook (`payment.blocked_no_trustline`).
