@@ -634,3 +634,9 @@ def list_outages(db: Session = Depends(get_db)):
 ```
 
 Sessions are committed and closed automatically by the dependency. Do not call `db.commit()` in repositories — commit in services or use explicit transactions.
+
+---
+
+## Settings Module
+
+`app/core/config.py` uses Pydantic Settings to load and validate all environment variables at startup. Access settings via the `get_settings()` function (cached singleton). Never read `os.environ` directly in application code — always go through `get_settings()`.
