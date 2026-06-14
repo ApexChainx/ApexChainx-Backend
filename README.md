@@ -69,3 +69,8 @@ Module maturity:
 - **Strongest integration**: `outages`, `sla`, `audit`
 - **Active with lighter implementations**: `auth`, `payments`, `wallets`
 - **Infrastructure-dependent**: `jobs`, `webhooks`, `sla/disputes` (require Redis and Celery for full behavior)
+
+Dormant or contributor-only paths:
+
+- `app/services/outage_store.py` — legacy helper, not part of the routed runtime
+- `CONTRACT_EXECUTION_MODE` — controls whether the local SLA adapter or the Soroban contract bridge is active
