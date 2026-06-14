@@ -1360,3 +1360,22 @@ Manually execute the Stellar payment for an already-computed SLA result.
 ```
 
 Returns the payment record. Idempotent — returns existing payment if already executed.
+
+---
+
+## Outage Create Endpoint
+
+### POST `/api/v1/outages`
+
+Create a new outage record.
+
+```json
+{
+  "site_name": "DC-West",
+  "severity": "high",
+  "services_affected": ["billing", "api"],
+  "description": "Complete network failure at primary router"
+}
+```
+
+Returns the created outage with a generated `id` and `created_at` timestamp.
