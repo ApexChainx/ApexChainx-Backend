@@ -260,3 +260,9 @@ CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 CELERY_TASK_ALWAYS_EAGER=true
 ```
+
+```env
+# API configuration
+API_V1_PREFIX=/api/v1
+ALLOWED_ORIGINS=http://localhost:3000,https://app.apexchainx.com
+```
