@@ -982,3 +982,9 @@ Returns aggregated SLA performance metrics:
 - violation rate
 - average MTTR
 - total penalties and rewards issued
+
+### GET `/api/v1/sla/analytics/trends`
+
+Returns SLA performance over a rolling time window. Supports:
+- `window` — `7d`, `30d`, `90d` (default `30d`)
+- `granularity` — `day`, `week` (default `day`)
