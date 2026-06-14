@@ -33,7 +33,7 @@ It is responsible for:
 - **Webhook delivery** — signed, versioned event delivery with retry and idempotency support
 - **Analytics** — SLA performance aggregation, trends, snapshots, and CSV/JSON exports
 
-The `outages` and `sla` domains are the strongest and most integration-focused. Other domains (`auth`, `payments`, `wallets`, `jobs`, `webhooks`) are fully routed but vary in infrastructure depth.
+The `outages` and `sla` domains are the strongest and most integration-focused. The audit domain records all state-changing operations immutably. Other domains (`auth`, `payments`, `wallets`, `jobs`, `webhooks`) are fully routed but vary in infrastructure depth.
 
 ## Tech Stack
 
