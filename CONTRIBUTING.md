@@ -592,3 +592,12 @@ PRs that only modify `.md` files do not require test coverage but must:
 - Be factually accurate and consistent with the routed runtime
 - Not introduce references to legacy module paths or old names
 - Follow the same commit convention as code PRs
+
+---
+
+## Test Coverage Expectations
+
+- New service functions must have at least one unit test
+- New route handlers must have at least one integration test
+- Bug fixes must include a regression test that would have caught the bug
+- Tests must pass locally before opening a PR (`pytest tests/`)
