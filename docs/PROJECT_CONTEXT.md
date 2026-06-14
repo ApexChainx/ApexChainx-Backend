@@ -43,3 +43,12 @@ The default `STELLAR_NETWORK=testnet` setting ensures no real assets are moved d
 ## Audit Trail Design
 
 Every mutating operation emits an audit event through `app/services/audit_log.py`. Events are append-only. No audit record can be deleted through the API. The `correlation_id` field on each event links it to the originating HTTP request, enabling full request-to-database tracing.
+
+---
+
+## Scalability Considerations
+
+- The database is the single source of truth; no shared in-memory state exists between worker processes
+- Celery workers can be scaled horizontally; each task is idempotent
+- The correlation middleware adds negligible overhead (UUID generation only)
+- Payload size guards prevent oversized requests from reaching the database layer
