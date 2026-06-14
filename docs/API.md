@@ -1344,3 +1344,19 @@ Returns the computed outcome and amount without writing to the database.
 Retrieve the latest SLA result for a given outage. Returns `404` if the outage has not been resolved yet.
 
 Response includes `outcome`, `amount`, `policy_version`, `is_latest`, and `computed_at`.
+
+---
+
+## SLA Execute Payment
+
+### POST `/api/v1/sla/execute-payment`
+
+Manually execute the Stellar payment for an already-computed SLA result.
+
+```json
+{
+  "sla_result_id": "SLA001"
+}
+```
+
+Returns the payment record. Idempotent — returns existing payment if already executed.
