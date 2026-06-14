@@ -335,3 +335,12 @@ Requests pass through two middleware layers before reaching route handlers:
 2. **Payload size guard** (`app/middleware/payload_size.py`) — rejects bodies exceeding `MAX_REQUEST_BODY_SIZE_BYTES`
 
 Both are applied globally to all routes.
+
+---
+
+## Repository Layer Conventions
+
+- Each domain has a dedicated repository class under `app/repositories/`
+- Repositories accept a SQLAlchemy `Session` and never call each other directly
+- Business logic belongs in `app/services/`, not in repositories
+- Route handlers call services; services call repositories
