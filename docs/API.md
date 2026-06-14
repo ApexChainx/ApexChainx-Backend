@@ -1055,3 +1055,27 @@ Returns point-in-time SLA performance snapshots. Each snapshot captures the stat
 
 **Query Parameters:**
 - `at` — ISO 8601 timestamp for the snapshot (optional, defaults to now)
+
+---
+
+## Authentication Endpoints
+
+### POST `/api/v1/auth/login`
+
+Authenticate and receive a JWT access token.
+
+```json
+{
+  "username": "operator@example.com",
+  "password": "your-password"
+}
+```
+
+Returns:
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "bearer",
+  "expires_in": 3600
+}
+```
