@@ -423,3 +423,9 @@ Each webhook registration has a `status` field:
 | `disabled` | Disabled after repeated delivery failures |
 
 A webhook is automatically set to `disabled` after exhausting all retries across multiple consecutive events. Re-enable via `PATCH /api/v1/webhooks/{webhook_id}`.
+
+---
+
+## Schema Version Field
+
+Each webhook payload includes a `schema_version` field. Receivers should check this field and handle unknown versions gracefully (log and acknowledge) rather than rejecting the delivery. This ensures forward compatibility as new event data fields are added.
