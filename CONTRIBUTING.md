@@ -574,3 +574,12 @@ Before opening a feature request:
 2. Describe the problem the feature solves — not just the solution
 3. Consider the scope: does this belong in the backend, frontend, or contracts?
 4. Outline acceptance criteria — what does "done" look like?
+
+---
+
+## Code Review Expectations
+
+- PRs are reviewed within 48 hours on business days
+- Address all reviewer comments before requesting re-review
+- Use `Resolve conversation` only after the concern is addressed, not to dismiss it
+- Breaking changes require explicit sign-off from a maintainer
