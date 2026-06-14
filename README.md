@@ -76,3 +76,12 @@ Dormant or contributor-only paths:
 - `CONTRACT_EXECUTION_MODE` — controls whether the local SLA adapter or the Soroban contract bridge is active
 
 ## Outage and SLA Flow
+
+The core backend lifecycle for outage resolution and SLA settlement:
+
+1. Create or update an outage
+2. Resolve the outage with `mttr_minutes`
+3. Compute the SLA outcome (penalty or reward) via MTTR-based policy evaluation
+4. Persist the resulting SLA record and emit an audit event
+5. Optionally trigger a Stellar payment via the contract adapter
+6. Return the resolved outage and SLA result to the frontend
