@@ -26,6 +26,7 @@ ApexChainx is a 3-repo
 
 It is responsible for:
 
+
 - **Outage management** — create, update, resolve, and search outages with full lifecycle tracking
 - **SLA computation** — calculate MTTR-based SLA outcomes with penalty and reward logic
 - **Audit logging** — immutable audit trail with correlation IDs across all operations
