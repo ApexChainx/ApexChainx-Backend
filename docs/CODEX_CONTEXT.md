@@ -573,3 +573,15 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 - Response schemas are named `{Domain}Response`, `{Domain}ListResponse`
 - ORM models live in `app/models/orm/` and are never exposed directly to route handlers
 - All datetime fields use `datetime` type (not `str`) — FastAPI serialises to ISO 8601 automatically
+
+---
+
+## Enum Conventions
+
+Enums used across the API are defined in `app/models/enums.py`. Always reference the enum class, not raw strings, in service and repository code to benefit from type safety and refactoring support.
+
+Key enums:
+- `OutageStatus`: `open`, `resolved`
+- `SLAOutcome`: `penalty`, `reward`
+- `PaymentStatus`: `pending`, `confirmed`, `failed`
+- `SeverityLevel`: `low`, `medium`, `high`, `critical`
