@@ -1156,3 +1156,19 @@ Trigger recomputation of SLA outcomes for a batch of outages. Useful after chang
 ```
 
 Returns a summary of updated records and any computation errors.
+
+---
+
+## Common Error Codes
+
+| HTTP Status | Meaning |
+|------------|---------|
+| `400 Bad Request` | Malformed request body or invalid parameters |
+| `401 Unauthorized` | Missing or invalid JWT token |
+| `403 Forbidden` | Valid token but insufficient permissions |
+| `404 Not Found` | Resource does not exist |
+| `409 Conflict` | Duplicate resource or idempotency conflict |
+| `413 Payload Too Large` | Request body exceeds size limit |
+| `422 Unprocessable Entity` | Pydantic validation failure |
+| `429 Too Many Requests` | Rate limit exceeded |
+| `503 Service Unavailable` | Database or external dependency unreachable |
