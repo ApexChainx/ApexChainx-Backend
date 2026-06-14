@@ -373,6 +373,9 @@ Key revisions:
 
 ## Background Tasks
 
+SLA dispute resolution notifications are delivered asynchronously via Celery when `CELERY_TASK_ALWAYS_EAGER=false`.
+
+
 Background task modules live in `app/tasks/`:
 
 | Module | Purpose |
