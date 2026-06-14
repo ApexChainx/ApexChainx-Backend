@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository powers the backend API for ApexChainx, a network operations intelligence platform.
+This repository powers the backend API for ApexChainx, an SLA automation and outage settlement platform.
 
 It is responsible for:
 - managing outages and RCA
