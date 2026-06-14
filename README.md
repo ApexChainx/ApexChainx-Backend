@@ -278,3 +278,10 @@ If you discover a security vulnerability:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, commit style, and PR process.
+
+## Additional Documentation
+
+- [docs/API.md](docs/API.md) — full API reference with request/response examples
+- [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md) — Soroban contract integration and payment flow
+- [docs/WEBHOOK_INTEGRATION.md](docs/WEBHOOK_INTEGRATION.md) — webhook signing, delivery, and retry
+- [docs/CODEX_CONTEXT.md](docs/CODEX_CONTEXT.md) — contributor context and session inventory
