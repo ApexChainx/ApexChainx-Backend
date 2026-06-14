@@ -178,3 +178,13 @@ A migration verification helper is available at `tests/test_verify_migrations.py
 ```bash
 uvicorn app.main:app --reload
 ```
+
+The backend will be available at:
+
+| Endpoint | URL |
+|----------|-----|
+| Base | `http://localhost:8000` |
+| Swagger UI | `http://localhost:8000/docs` |
+| Liveness | `http://localhost:8000/health/liveness` |
+| Readiness | `http://localhost:8000/health/readiness` |
+| Legacy health | `http://localhost:8000/health` |
