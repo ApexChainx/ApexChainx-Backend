@@ -58,7 +58,7 @@ Current active routes:
 - `/health` — liveness and readiness probes
 - `/api/v1/audit` — immutable event audit log
 - `/api/v1/jobs`
-- `/api/v1/outages`
+- `/api/v1/outages` — full outage lifecycle management
 - `/api/v1/sla`
 - `/api/v1/sla/disputes` — file, list, and resolve SLA disputes
 - `/api/v1/auth`
