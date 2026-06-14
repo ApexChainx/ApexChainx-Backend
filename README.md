@@ -287,6 +287,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, commit style, and
 - [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md) — Soroban contract integration and payment flow
 - [docs/WEBHOOK_INTEGRATION.md](docs/WEBHOOK_INTEGRATION.md) — webhook signing, delivery, and retry
 - [docs/CODEX_CONTEXT.md](docs/CODEX_CONTEXT.md) — contributor context and session inventory
+- [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) — high-level project positioning and goals
 
 ## Tests
 
