@@ -1031,3 +1031,16 @@ Soroban contract results are returned as XDR-encoded values. The contract adapte
 ## Fee Handling
 
 Stellar transaction fees are paid in XLM from the pool wallet. The current fee strategy uses the Horizon fee stats endpoint to select a fee in the 90th percentile of recent base fees, ensuring timely inclusion without overpaying. The pool wallet must maintain a small XLM balance in addition to the USDC balance for fees.
+
+---
+
+## Soroban RPC vs Horizon: When to Use Each
+
+| Operation | Endpoint |
+|-----------|---------|
+| Check account balance | Horizon |
+| Validate trustline | Horizon |
+| Submit Soroban invocation | Soroban RPC |
+| Submit classic payment | Horizon |
+| Fetch transaction status | Horizon |
+| Fetch ledger data | Horizon |
