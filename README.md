@@ -285,6 +285,8 @@ If you discover a security vulnerability:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, commit style, and PR process.
 
+All contributions must target a feature branch. Direct pushes to  are not accepted.
+
 ## Additional Documentation
 
 - [docs/API.md](docs/API.md) — full API reference with request/response examples
