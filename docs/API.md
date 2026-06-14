@@ -1334,3 +1334,13 @@ Compute an SLA outcome without persisting it. Useful for previewing the outcome 
 ```
 
 Returns the computed outcome and amount without writing to the database.
+
+---
+
+## SLA Status Endpoint
+
+### GET `/api/v1/sla/status/{outage_id}`
+
+Retrieve the latest SLA result for a given outage. Returns `404` if the outage has not been resolved yet.
+
+Response includes `outcome`, `amount`, `policy_version`, `is_latest`, and `computed_at`.
