@@ -1188,3 +1188,9 @@ Returns a summary of updated records and any computation errors.
 ## API Versioning
 
 All routes are prefixed with `/api/v1`. The version prefix is configurable via `API_V1_PREFIX` but must start with `/`. Future breaking changes will be introduced under `/api/v2` without removing `/api/v1`.
+
+---
+
+## OpenAPI / Swagger
+
+The full interactive API specification is available at `/docs` (Swagger UI) and `/redoc` (ReDoc) when the server is running. The raw OpenAPI JSON is served at `/openapi.json`.
