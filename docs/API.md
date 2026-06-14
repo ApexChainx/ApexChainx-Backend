@@ -988,3 +988,7 @@ Returns aggregated SLA performance metrics:
 Returns SLA performance over a rolling time window. Supports:
 - `window` — `7d`, `30d`, `90d` (default `30d`)
 - `granularity` — `day`, `week` (default `day`)
+
+### GET `/api/v1/sla/performance/aggregation`
+
+Aggregates SLA outcomes grouped by severity, region, or service. Useful for identifying systemic underperformance patterns.
