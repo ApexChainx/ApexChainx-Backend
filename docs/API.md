@@ -920,3 +920,7 @@ List all filed disputes. Supports `status`, `limit`, and `offset` query paramete
 - `status` (optional): `open`, `resolved`, `rejected`
 - `limit` (optional, default=50)
 - `offset` (optional, default=0)
+
+### GET `/api/v1/sla/disputes/{dispute_id}`
+
+Retrieve a single dispute by ID. Returns full dispute record including resolution notes if resolved.
