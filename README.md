@@ -29,14 +29,17 @@ The outage and SLA domains are the strongest and most integration-focused. Other
 
 ## Current Stack
 
-- Python
-- FastAPI
-- SQLAlchemy
-- PostgreSQL
-- Alembic
-- Pydantic Settings
-- Celery
-- HTTPX
+| Component | Technology |
+|-----------|------------|
+| Language | Python 3.11+ |
+| Framework | FastAPI |
+| ORM | SQLAlchemy |
+| Database | PostgreSQL |
+| Migrations | Alembic |
+| Settings | Pydantic Settings |
+| Task Queue | Celery |
+| HTTP Client | HTTPX |
+| Blockchain | Stellar / Soroban |
 
 Dependencies are declared in [requirements.txt](requirements.txt).
 
