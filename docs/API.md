@@ -1212,3 +1212,19 @@ A resolved SLA record contains:
 | `policy_version` | string | Policy version used |
 | `is_latest` | boolean | True for most recent result per outage |
 | `computed_at` | datetime | When SLA was evaluated |
+
+---
+
+## Outage Record Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique outage identifier |
+| `site_name` | string | Affected site or location |
+| `severity` | enum | `low`, `medium`, `high`, `critical` |
+| `services_affected` | array | List of affected service names |
+| `status` | enum | `open` or `resolved` |
+| `mttr_minutes` | integer | Set on resolution |
+| `created_at` | datetime | Outage start timestamp |
+| `resolved_at` | datetime | Resolution timestamp |
+| `correlation_id` | UUID | Originating request correlation ID |
