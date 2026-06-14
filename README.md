@@ -190,3 +190,11 @@ The backend will be available at:
 | Legacy health | `http://localhost:8000/health` |
 
 ## Verification Notes
+
+As of the latest stabilization pass:
+
+- Python modules compile cleanly
+- `app.main` imports successfully
+- `/health` returns `200`
+
+To exercise outage and SLA routes meaningfully, a reachable PostgreSQL instance is required because those routes depend on the database layer.
