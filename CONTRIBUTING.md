@@ -140,9 +140,9 @@ npm run type-check
 pytest
 pytest -v
 pytest --cov=app --cov-report=html
-black app/
-flake8 app/
-mypy app/
+black app/          # auto-format
+flake8 app/         # lint
+mypy app/           # type-check
 ```
 
 **Smart Contracts:**
