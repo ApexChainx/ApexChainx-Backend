@@ -1029,3 +1029,18 @@ Returns `200 OK` when the application can serve traffic (database reachable, con
 ### GET `/health`
 
 Legacy compatibility check. Returns `{"status": "ok"}`.
+
+---
+
+## Export Endpoints
+
+### GET `/api/v1/sla/export`
+
+Export SLA records in CSV or JSON format.
+
+**Query Parameters:**
+- `format` — `csv` or `json` (required)
+- `start` / `end` — ISO 8601 date range (optional)
+- `status` — filter by SLA status (optional)
+
+**Response**: File download with appropriate `Content-Type` header (`text/csv` or `application/json`).
