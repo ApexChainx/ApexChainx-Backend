@@ -353,3 +353,18 @@ Both are applied globally to all routes.
 - Integration tests hit in-memory or test-database sessions
 - Config validation tests use `pytest` with monkeypatched environment variables
 - All tests live under `tests/` and use `pytest` as the runner
+
+---
+
+## Error Response Shape
+
+All error responses follow a consistent envelope:
+
+```json
+{
+  "detail": "Human-readable error message",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+Validation errors from Pydantic return `422 Unprocessable Entity` with a `detail` array describing each field failure.
