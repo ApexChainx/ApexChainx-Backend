@@ -27,3 +27,13 @@ When a calculated SLA outcome is contested, operators can file a dispute through
 ## Blockchain Environment
 
 The default `STELLAR_NETWORK=testnet` setting ensures no real assets are moved during development. Switch to `mainnet` only in a production environment with audited Soroban contracts and confirmed wallet addresses.
+
+## Development vs Production
+
+| Setting | Development | Production |
+|---------|------------|-----------|
+| `STELLAR_NETWORK` | `testnet` | `mainnet` |
+| `CONTRACT_EXECUTION_MODE` | `local` | `contract` |
+| `CELERY_TASK_ALWAYS_EAGER` | `true` | `false` |
+| Redis / Celery worker | optional | required |
+| PostgreSQL | local instance | managed instance |
