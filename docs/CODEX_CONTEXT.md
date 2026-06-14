@@ -424,3 +424,9 @@ SLA results are stamped with the policy version that was active at computation t
 ## Clock Source Normalization
 
 All timestamps are stored and compared in UTC. The SLA calculator normalises input timestamps to UTC before computing MTTR. Clock skew between the submitting client and the server is not compensated — use NTP-synchronized clients in production.
+
+---
+
+## Deterministic MTTR Boundaries
+
+MTTR boundary computation is deterministic: given the same `created_at` and `resolved_at`, the same MTTR and SLA outcome are always produced. This property enables safe recompute and contract parity testing.
