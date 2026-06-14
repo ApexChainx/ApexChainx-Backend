@@ -924,3 +924,17 @@ List all filed disputes. Supports `status`, `limit`, and `offset` query paramete
 ### GET `/api/v1/sla/disputes/{dispute_id}`
 
 Retrieve a single dispute by ID. Returns full dispute record including resolution notes if resolved.
+
+---
+
+## Audit Endpoints
+
+### GET `/api/v1/audit`
+
+Return the immutable audit event log. All state-changing operations across outages, SLA, payments, and disputes are recorded here.
+
+**Query Parameters:**
+- `correlation_id` (optional): filter by correlation ID
+- `event_type` (optional): filter by event type
+- `start` / `end` (optional): ISO 8601 date range
+- `limit` / `offset` (optional): pagination
