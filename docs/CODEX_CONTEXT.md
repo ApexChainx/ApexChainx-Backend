@@ -344,3 +344,12 @@ Both are applied globally to all routes.
 - Repositories accept a SQLAlchemy `Session` and never call each other directly
 - Business logic belongs in `app/services/`, not in repositories
 - Route handlers call services; services call repositories
+
+---
+
+## Testing Conventions
+
+- Unit tests for service logic use mocked repositories
+- Integration tests hit in-memory or test-database sessions
+- Config validation tests use `pytest` with monkeypatched environment variables
+- All tests live under `tests/` and use `pytest` as the runner
