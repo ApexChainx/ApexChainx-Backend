@@ -409,3 +409,17 @@ In production, register only `https://` webhook URLs. Plain HTTP endpoints will 
 ## Filtering Events by Type
 
 When registering a webhook, specify only the event types you need. Receiving unnecessary events increases delivery load and receiver processing overhead. Use the tightest event filter that covers your use case.
+
+---
+
+## Webhook Status Field
+
+Each webhook registration has a `status` field:
+
+| Status | Meaning |
+|--------|---------|
+| `active` | Deliveries are being attempted |
+| `paused` | Registered but deliveries suspended |
+| `disabled` | Disabled after repeated delivery failures |
+
+A webhook is automatically set to `disabled` after exhausting all retries across multiple consecutive events. Re-enable via `PATCH /api/v1/webhooks/{webhook_id}`.
