@@ -423,7 +423,7 @@ Execute payment based on SLA result.
 {
   "outage_id": "OUT001",
   "operator_wallet": "GOPER...",
-  "noc_team_wallet": "GOPS..."
+  "ops_team_wallet": "GOPS..."
 }
 ```
 
