@@ -82,3 +82,13 @@ SLA thresholds and penalty/reward amounts are configured per severity tier. The 
 | `critical` | 30 min | 1500 USDC | 300 USDC |
 
 Values are configurable via `app/services/sla/config.py`.
+
+---
+
+## Security Model
+
+- JWT tokens are signed with `JWT_SECRET_KEY` using HS256
+- All financial operations require a valid JWT
+- Private keys for Stellar wallets are never accepted via API — only public keys are stored
+- The payload size guard prevents DoS via oversized request bodies
+- Correlation IDs enable post-hoc security investigation of any request
