@@ -494,3 +494,16 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 ## Metrics Service
 
 `app/services/metrics.py` exposes internal counters for SLA evaluations, payment executions, webhook delivery attempts, and audit log entries. Metrics are in-process only; no external metrics endpoint is exposed in the current release.
+
+---
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Start API | `uvicorn app.main:app --reload` |
+| Run migrations | `alembic upgrade head` |
+| Check migration state | `alembic current` |
+| Run all tests | `pytest tests/` |
+| Run one test file | `pytest tests/test_outage_lifecycle.py -v` |
+| Start Celery worker | `celery -A app.tasks.celery_app worker --loglevel=info` |
