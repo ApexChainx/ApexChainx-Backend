@@ -1013,3 +1013,19 @@ Private keys are never accepted or stored by this endpoint.
 ### GET `/api/v1/wallets/{entity_id}`
 
 Retrieve the registered wallet address for an entity. Returns the public key only.
+
+---
+
+## Health Endpoints
+
+### GET `/health/liveness`
+
+Returns `200 OK` when the process is alive. Used by container orchestration to detect crashes.
+
+### GET `/health/readiness`
+
+Returns `200 OK` when the application can serve traffic (database reachable, config loaded). Returns `503 Service Unavailable` otherwise.
+
+### GET `/health`
+
+Legacy compatibility check. Returns `{"status": "ok"}`.
