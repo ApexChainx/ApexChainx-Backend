@@ -383,3 +383,14 @@ To add a new domain to the routed runtime:
 6. Register the router in `app/api/v1/router.py`
 7. Write an Alembic migration under `alembic/versions/`
 8. Add tests under `tests/`
+
+---
+
+## SLA Calculation Detail
+
+MTTR (Mean Time to Resolve) is computed as the difference in minutes between the outage `created_at` timestamp and its `resolved_at` timestamp. The computed MTTR is compared against severity-specific thresholds defined in `app/services/sla/config.py`:
+
+- If MTTR ≤ threshold → **reward** outcome
+- If MTTR > threshold → **penalty** outcome
+
+Both penalty amount and reward amount are configurable per severity tier.
