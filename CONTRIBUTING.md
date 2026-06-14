@@ -176,7 +176,7 @@ git commit -m "test: add unit tests for SLA calculator"
 - `fix`: Bug fix
 - `docs`: Documentation changes
 - `style`: Code style changes (formatting, semicolons, etc.)
-- `refactor`: Code refactoring
+- `refactor`: Code refactoring without behaviour change
 - `test`: Adding or updating tests
 - `chore`: Maintenance tasks
 - `perf`: Performance improvements
