@@ -563,3 +563,14 @@ When filing a bug report, include:
 3. **Actual behaviour** — what actually happened
 4. **Environment** — Python version, OS, database version
 5. **Logs** — relevant error output (redact any secrets)
+
+---
+
+## Proposing a Feature
+
+Before opening a feature request:
+
+1. Check existing issues to avoid duplicates
+2. Describe the problem the feature solves — not just the solution
+3. Consider the scope: does this belong in the backend, frontend, or contracts?
+4. Outline acceptance criteria — what does "done" look like?
