@@ -318,3 +318,9 @@ The auth domain includes token family tracking and per-user rate limiting. Rate 
 ## Idempotency
 
 SLA settlement and payment execution are idempotent by design. Duplicate execution attempts for the same `outage_id` are detected and return the existing record rather than creating a second payment. Payment deduplication is enforced at the database level via migration `0011_payment_deduplication`.
+
+---
+
+## Correlation IDs
+
+Every request receives an `X-Correlation-ID` header injected by `app/middleware/correlation.py`. The value propagates through audit log entries, SLA records, and payment records so that the full lifecycle of any request can be reconstructed from logs alone.
