@@ -1025,3 +1025,9 @@ Before a wallet can receive USDC, it must have an active USDC trustline. The bac
 ## XDR and Horizon Response Parsing
 
 Soroban contract results are returned as XDR-encoded values. The contract adapter in `app/services/contracts/` decodes the XDR result into a Python dict before passing it to the SLA service. Contributors extending the contract adapter must handle XDR decoding correctly — use the `stellar-sdk` library, not manual byte parsing.
+
+---
+
+## Fee Handling
+
+Stellar transaction fees are paid in XLM from the pool wallet. The current fee strategy uses the Horizon fee stats endpoint to select a fee in the 90th percentile of recent base fees, ensuring timely inclusion without overpaying. The pool wallet must maintain a small XLM balance in addition to the USDC balance for fees.
