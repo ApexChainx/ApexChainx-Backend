@@ -196,6 +196,8 @@ The backend will be available at:
 
 ## Verification Notes
 
+![Verified](https://img.shields.io/badge/status-stabilized-brightgreen)
+
 As of the latest stabilization pass:
 
 - Python modules compile cleanly
