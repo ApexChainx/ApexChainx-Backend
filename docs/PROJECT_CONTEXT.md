@@ -23,3 +23,7 @@ The frontend (`apexchainx-fe`) and contracts (`apexchainx-contracts`) depend on 
 ## Dispute Resolution
 
 When a calculated SLA outcome is contested, operators can file a dispute through `/api/v1/sla/disputes`. Disputes are tracked with their own audit trail and can be resolved or rejected by authorised parties. All dispute actions are audit-logged.
+
+## Blockchain Environment
+
+The default `STELLAR_NETWORK=testnet` setting ensures no real assets are moved during development. Switch to `mainnet` only in a production environment with audited Soroban contracts and confirmed wallet addresses.
