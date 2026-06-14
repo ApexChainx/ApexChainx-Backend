@@ -319,3 +319,16 @@ DELETE /api/v1/webhooks/{webhook_id}
 ```
 
 Deletes the endpoint and stops all future deliveries. In-flight deliveries already queued may still complete. Returns `204 No Content` on success.
+
+## Querying Delivery History
+
+```http
+GET /api/v1/webhooks/{webhook_id}/deliveries
+```
+
+Query parameters:
+- `status` — filter by `pending`, `delivered`, `failed`, `dead_letter`
+- `limit` — page size (default 50)
+- `offset` — pagination offset
+
+Each delivery record includes the event type, attempt count, response code, and timestamps.
