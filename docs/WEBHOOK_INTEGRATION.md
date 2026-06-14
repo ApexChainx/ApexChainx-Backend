@@ -288,3 +288,18 @@ Track these metrics:
 | `payment.failed` | Payment submission failed |
 | `dispute.filed` | SLA dispute submitted |
 | `dispute.resolved` | SLA dispute closed |
+
+## Registering a Webhook Endpoint
+
+```http
+POST /api/v1/webhooks
+Content-Type: application/json
+
+{
+  "url": "https://your-service.example.com/hooks/apexchainx",
+  "events": ["sla.violation", "payment.confirmed"],
+  "secret": "your-webhook-secret-min-32-chars"
+}
+```
+
+Response includes a `webhook_id` used for all future management operations.
