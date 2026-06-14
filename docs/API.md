@@ -1140,3 +1140,19 @@ Full-text and filter-based outage search.
 - `status` — `open`, `resolved`
 - `start` / `end` — date range for `created_at`
 - `limit` / `offset` — pagination
+
+---
+
+## SLA Bulk Recompute
+
+### POST `/api/v1/sla/bulk-recompute`
+
+Trigger recomputation of SLA outcomes for a batch of outages. Useful after changing SLA policy thresholds.
+
+```json
+{
+  "outage_ids": ["OUT001", "OUT002", "OUT003"]
+}
+```
+
+Returns a summary of updated records and any computation errors.
