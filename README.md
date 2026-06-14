@@ -50,3 +50,16 @@ Dependencies are declared in [requirements.txt](requirements.txt).
 ## Active Routes
 
 The app entrypoint is [app/main.py](app/main.py). Routes are wired through [app/api/v1/router.py](app/api/v1/router.py).
+
+Current active routes:
+
+- `/health`
+- `/api/v1/audit`
+- `/api/v1/jobs`
+- `/api/v1/outages`
+- `/api/v1/sla`
+- `/api/v1/sla/disputes`
+- `/api/v1/auth`
+- `/api/v1/payments`
+- `/api/v1/webhooks`
+- `/api/v1/wallets`
