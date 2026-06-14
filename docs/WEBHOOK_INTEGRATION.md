@@ -456,3 +456,24 @@ Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_
   }
 }
 ```
+
+---
+
+## Event Payload: `payment.confirmed`
+
+```json
+{
+  "schema_version": "1",
+  "event": "payment.confirmed",
+  "webhook_id": "wh-001",
+  "timestamp": "2026-06-14T12:01:00.000000",
+  "data": {
+    "payment_id": "pay-001",
+    "transaction_hash": "abc123...",
+    "amount": 500.00,
+    "currency": "USDC",
+    "outage_id": "OUT001",
+    "confirmed_at": "2026-06-14T12:00:55.000000"
+  }
+}
+```
