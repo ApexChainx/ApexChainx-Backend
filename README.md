@@ -157,6 +157,8 @@ cp .env.example .env
 
 **SECURITY WARNING**: Never commit `.env` to version control. The `.env.example` file contains placeholder values only.
 
+See  in the repo root for the full list of supported variables and their default values.
+
 ### Environment Validation
 
 Startup fails fast on misconfiguration. The following rules are enforced:
