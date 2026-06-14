@@ -270,7 +270,7 @@ Get detailed information about a specific outage.
     "amount": 750.00,
     "asset_code": "USDC",
     "from_address": "GPOOL...",
-    "to_address": "GNOC...",
+    "to_address": "GOPS...",
     "status": "confirmed",
     "created_at": "2026-01-16T09:46:00Z",
     "confirmed_at": "2026-01-16T09:46:05Z"
@@ -423,7 +423,7 @@ Execute payment based on SLA result.
 {
   "outage_id": "OUT001",
   "operator_wallet": "GOPER...",
-  "noc_team_wallet": "GNOC..."
+  "noc_team_wallet": "GOPS..."
 }
 ```
 
@@ -500,7 +500,7 @@ Process SLA-based payment for a resolved outage.
     "transaction_hash": "xyz789...",
     "amount": 1500.00,
     "from": "GPOOL...",
-    "to": "GNOC...",
+    "to": "GOPS...",
     "asset": "USDC",
     "status": "confirmed"
   }
@@ -533,7 +533,7 @@ Get payment transaction history.
       "amount": 1500.00,
       "asset_code": "USDC",
       "from_address": "GPOOL...",
-      "to_address": "GNOC...",
+      "to_address": "GOPS...",
       "status": "confirmed",
       "outage_id": "OUT001",
       "created_at": "2026-01-16T09:46:00Z",
