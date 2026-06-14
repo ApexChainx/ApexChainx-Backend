@@ -57,7 +57,7 @@ ApexChainx integrates Stellar to solve key problems in telecom network operation
        │
        ▼
 ┌──────────────┐
-│ NOC Engineer │
+│ Ops Engineer │
 │ Resolves     │
 └──────┬───────┘
        │
