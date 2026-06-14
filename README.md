@@ -266,3 +266,11 @@ CELERY_TASK_ALWAYS_EAGER=true
 API_V1_PREFIX=/api/v1
 ALLOWED_ORIGINS=http://localhost:3000,https://app.apexchainx.com
 ```
+
+### Reporting Security Issues
+
+If you discover a security vulnerability:
+
+1. Do not create a public issue
+2. Email security@apexchainx.com with details
+3. Allow time for the issue to be addressed before public disclosure
