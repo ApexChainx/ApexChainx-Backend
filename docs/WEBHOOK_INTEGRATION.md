@@ -343,3 +343,14 @@ if db.exists(webhook_id=event["webhook_id"], timestamp=event["timestamp"]):
 db.mark_delivered(webhook_id=event["webhook_id"], timestamp=event["timestamp"])
 process(event)
 ```
+
+## Secret Rotation
+
+Rotate a webhook secret without downtime using the `secret_version` field:
+
+1. Generate a new secret
+2. `PATCH /api/v1/webhooks/{webhook_id}` with the new secret — the backend stores both old and new for a transition window
+3. Update your receiver to accept signatures from either version
+4. After all in-flight deliveries using the old secret complete, remove the old secret from your receiver
+
+The `X-Webhook-Signature-Version` header tells receivers which version was used to sign each delivery.
