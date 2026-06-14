@@ -646,3 +646,9 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 ## Lock Module
 
 `app/core/lock.py` provides a lightweight advisory lock mechanism used to prevent concurrent SLA recompute operations on the same outage. Uses a database-level advisory lock via PostgreSQL `pg_try_advisory_lock`. Do not use Python threading primitives for cross-process synchronisation.
+
+---
+
+## Cache Module
+
+`app/utils/cache.py` provides a simple in-process LRU cache for SLA policy configuration reads. Cache entries expire after a configurable TTL. Invalidate the cache after any policy configuration update to ensure the next SLA computation uses the new values.
