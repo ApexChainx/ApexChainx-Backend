@@ -610,3 +610,15 @@ PRs that only modify `.md` files do not require test coverage but must:
 - Update `requirements.txt` and commit it as part of the PR that introduces the dependency
 - Do not add dev-only tools to `requirements.txt` — they belong in a separate `requirements-dev.txt`
 - Flag any dependency with a known CVE before merging
+
+---
+
+## Database Migration Guidelines
+
+When your PR requires a database change:
+
+1. Create a new migration file under `alembic/versions/` with the next sequential number
+2. Name the file descriptively: `NNNN_short_description.py`
+3. Include both `upgrade()` and `downgrade()` functions
+4. Test the migration with `alembic upgrade head` and `alembic downgrade -1`
+5. Include the migration in the same PR as the code that depends on it
