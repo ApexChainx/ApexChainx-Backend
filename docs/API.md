@@ -1194,3 +1194,21 @@ All routes are prefixed with `/api/v1`. The version prefix is configurable via `
 ## OpenAPI / Swagger
 
 The full interactive API specification is available at `/docs` (Swagger UI) and `/redoc` (ReDoc) when the server is running. The raw OpenAPI JSON is served at `/openapi.json`.
+
+---
+
+## SLA Result Schema
+
+A resolved SLA record contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Unique SLA record identifier |
+| `outage_id` | string | Linked outage |
+| `mttr_minutes` | integer | Computed resolution time |
+| `threshold_minutes` | integer | Policy threshold at computation time |
+| `outcome` | enum | `penalty` or `reward` |
+| `amount` | decimal | Payment amount in USDC |
+| `policy_version` | string | Policy version used |
+| `is_latest` | boolean | True for most recent result per outage |
+| `computed_at` | datetime | When SLA was evaluated |
