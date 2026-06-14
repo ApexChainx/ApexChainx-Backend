@@ -564,3 +564,12 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 | Service | Business logic, call repositories | Import other services' repositories |
 | Repository | SQLAlchemy queries only | Business logic, HTTP calls |
 | Utility | Pure functions, no DB/HTTP | Side effects |
+
+---
+
+## Pydantic Schema Conventions
+
+- Request schemas are named `{Domain}Create`, `{Domain}Update`
+- Response schemas are named `{Domain}Response`, `{Domain}ListResponse`
+- ORM models live in `app/models/orm/` and are never exposed directly to route handlers
+- All datetime fields use `datetime` type (not `str`) — FastAPI serialises to ISO 8601 automatically
