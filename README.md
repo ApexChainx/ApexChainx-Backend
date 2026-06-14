@@ -132,6 +132,8 @@ apexchainx-be/
 
 ### Prerequisites
 
+Ensure all prerequisites are installed before proceeding.
+
 - Python 3.11+ recommended
 - PostgreSQL
 - pip
