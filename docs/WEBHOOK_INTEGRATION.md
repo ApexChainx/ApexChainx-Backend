@@ -517,3 +517,15 @@ Webhook deliveries are processed by Celery workers. In eager mode (`CELERY_TASK_
   }
 }
 ```
+
+---
+
+## Webhook Logging
+
+Log every webhook delivery attempt on the receiver side, including:
+- `webhook_id` and `event` type
+- receipt timestamp
+- signature verification result
+- processing outcome
+
+This log is essential for debugging delivery issues and satisfying audit requirements.
