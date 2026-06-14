@@ -1444,3 +1444,20 @@ Response:
   "network": "testnet"
 }
 ```
+
+---
+
+## Webhook Update Endpoint
+
+### PATCH `/api/v1/webhooks/{webhook_id}`
+
+Update a registered webhook's URL, events, secret, or status.
+
+```json
+{
+  "url": "https://new-endpoint.example.com/hooks",
+  "status": "active"
+}
+```
+
+Only provided fields are updated. Re-enabling a disabled webhook resets the failure counter.
