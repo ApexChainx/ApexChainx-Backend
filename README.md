@@ -234,3 +234,5 @@ This backend is stabilized but not feature-complete. Known limitations:
 - Never include real credentials or keys
 - Include security warnings where sensitive operations are discussed
 - Show secure patterns (environment variables, secure key management)
+
+### Environment Variables Reference
