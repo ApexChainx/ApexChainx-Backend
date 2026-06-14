@@ -1379,3 +1379,19 @@ Create a new outage record.
 ```
 
 Returns the created outage with a generated `id` and `created_at` timestamp.
+
+---
+
+## Outage Update Endpoint
+
+### PUT `/api/v1/outages/{outage_id}`
+
+Update an open outage's metadata. Resolved outages cannot be updated.
+
+```json
+{
+  "severity": "critical",
+  "services_affected": ["billing", "api", "auth"],
+  "description": "Updated: affecting 3 services after further investigation"
+}
+```
