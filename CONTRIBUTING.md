@@ -1,10 +1,10 @@
-# Contributing to NOCIQ
+# Contributing to ApexChainx
 
-First off, thank you for considering contributing to NOCIQ! It's people like you that make NOCIQ such a great tool for network operations teams.
+First off, thank you for considering contributing to ApexChainx! It's people like you that make ApexChainx such a great tool for network operations teams.
 
 ## 🌊 Participating in Stellar Wave
 
-NOCIQ is part of the [Stellar Wave Program](https://www.drips.network/wave/stellar)! If you're here from the Wave:
+ApexChainx is part of the [Stellar Wave Program](https://www.drips.network/wave/stellar)! If you're here from the Wave:
 
 1. **Browse Issues**: Look for issues tagged with `Stellar Wave`
 2. **Apply to Work**: Comment on the issue you want to work on
@@ -15,7 +15,7 @@ NOCIQ is part of the [Stellar Wave Program](https://www.drips.network/wave/stell
 
 ## 🤝 Ways to Contribute
 
-There are many ways to contribute to NOCIQ:
+There are many ways to contribute to ApexChainx:
 
 - **Report bugs** and issues
 - **Suggest new features** or enhancements
@@ -29,18 +29,18 @@ There are many ways to contribute to NOCIQ:
 
 ### Prerequisites
 
-**For Frontend (noc-iq-fe):**
+**For Frontend (apexchainx-fe):**
 - Node.js 18.x or higher
 - npm or yarn
 - Git
 - Freighter wallet (for Stellar features)
 
-**For Backend (noc-iq-be):**
+**For Backend (apexchainx-be):**
 - Python 3.9 or higher
 - pip and virtualenv
 - Git
 
-**For Smart Contracts (noc-iq-contracts):**
+**For Smart Contracts (apexchainx-contracts):**
 - Rust and Cargo
 - Soroban CLI
 - Stellar CLI
@@ -50,22 +50,22 @@ There are many ways to contribute to NOCIQ:
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/noc-iq-fe.git
+   git clone https://github.com/YOUR_USERNAME/apexchainx-fe.git
    # or
-   git clone https://github.com/YOUR_USERNAME/noc-iq-be.git
+   git clone https://github.com/YOUR_USERNAME/apexchainx-be.git
    # or
-   git clone https://github.com/YOUR_USERNAME/noc-iq-contracts.git
+   git clone https://github.com/YOUR_USERNAME/apexchainx-contracts.git
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/OpSoll/noc-iq-fe.git
+   git remote add upstream https://github.com/OpSoll/apexchainx-fe.git
    ```
 
 ### Setup Development Environment
 
 **Frontend:**
 ```bash
-cd noc-iq-fe
+cd apexchainx-fe
 npm install
 cp .env.example .env.local
 # Edit .env.local with your config
@@ -74,7 +74,7 @@ npm run dev
 
 **Backend:**
 ```bash
-cd noc-iq-be
+cd apexchainx-be
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -85,7 +85,7 @@ uvicorn main:app --reload
 
 **Smart Contracts:**
 ```bash
-cd noc-iq-contracts
+cd apexchainx-contracts
 # Install Soroban CLI if you haven't
 cargo install --locked soroban-cli
 # Build contracts
@@ -523,11 +523,11 @@ Use the GitHub issue template and include:
 
 ## 📜 License
 
-By contributing to NOCIQ, you agree that your contributions will be licensed under the MIT License.
+By contributing to ApexChainx, you agree that your contributions will be licensed under the MIT License.
 
 ## 🙏 Thank You!
 
-Your contributions make NOCIQ better for everyone. We appreciate your time and effort!
+Your contributions make ApexChainx better for everyone. We appreciate your time and effort!
 
 ---
 

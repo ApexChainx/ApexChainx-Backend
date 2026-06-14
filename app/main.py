@@ -32,7 +32,7 @@ async def check_celery() -> bool:
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="NOCIQ Backend API"
+    description="ApexChainx Backend API"
 )
 
 # Add correlation middleware first (before CORS to ensure it runs on all requests)

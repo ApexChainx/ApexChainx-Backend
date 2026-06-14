@@ -20,10 +20,10 @@ from app.core.config import Settings, validate_critical_settings
 
 def _make_settings(**overrides):
     defaults = dict(
-        PROJECT_NAME="NOCIQ API",
+        PROJECT_NAME="ApexChainx API",
         VERSION="1.0.0",
         DEBUG=False,
-        DATABASE_URL="postgresql://postgres:password@localhost:5432/nociq",
+        DATABASE_URL="postgresql://postgres:password@localhost:5432/apexchainx",
         API_V1_PREFIX="/api/v1",
         ALLOWED_ORIGINS=["http://localhost:3000"],
         CELERY_BROKER_URL="redis://localhost:6379/0",

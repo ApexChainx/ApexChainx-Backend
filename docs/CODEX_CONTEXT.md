@@ -1,8 +1,8 @@
-# NOC IQ Backend (noc-iq-be) – Codex Context
+# ApexChainx Backend (apexchainx-be) – Codex Context
 
 ## Overview
 
-This repository powers the backend API for NOC IQ, a network operations intelligence platform.
+This repository powers the backend API for ApexChainx, a network operations intelligence platform.
 
 It is responsible for:
 - managing outages and RCA
@@ -251,8 +251,8 @@ When generating issues:
 
 This repo depends on:
 
-- noc-iq-fe → consumes API
-- noc-iq-contracts → executes SLA logic
+- apexchainx-fe → consumes API
+- apexchainx-contracts → executes SLA logic
 
 Important:
 - any change in SLA logic may affect contracts

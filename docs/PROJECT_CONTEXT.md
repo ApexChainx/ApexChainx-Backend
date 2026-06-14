@@ -1,10 +1,10 @@
-# NOC IQ System
+# ApexChainx System
 
 ## Repositories
 
-- noc-iq-fe → frontend
-- noc-iq-be → backend
-- noc-iq-contracts → smart contracts
+- apexchainx-fe → frontend
+- apexchainx-be → backend
+- apexchainx-contracts → smart contracts
 
 ## System Flow
 

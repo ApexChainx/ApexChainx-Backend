@@ -1,6 +1,6 @@
 # Stellar Integration Guide
 
-This guide explains how NOCIQ integrates with the Stellar blockchain network to enable automated SLA-based payments, instant settlements, and immutable audit trails.
+This guide explains how ApexChainx integrates with the Stellar blockchain network to enable automated SLA-based payments, instant settlements, and immutable audit trails.
 
 ## Table of Contents
 
@@ -25,9 +25,9 @@ This guide explains how NOCIQ integrates with the Stellar blockchain network to 
 
 [Stellar](https://stellar.org/) is a fast, low-cost blockchain network designed for payments and asset transfers. Transactions confirm in 3-5 seconds with fees of ~$0.00001.
 
-### Why Stellar for NOCIQ?
+### Why Stellar for ApexChainx?
 
-NOCIQ integrates Stellar to solve key problems in telecom network operations:
+ApexChainx integrates Stellar to solve key problems in telecom network operations:
 
 1. **Slow Payments**: Traditional bank transfers take days. Stellar settles in seconds.
 2. **Manual SLA Tracking**: Smart contracts automatically calculate penalties/rewards.
@@ -39,7 +39,7 @@ NOCIQ integrates Stellar to solve key problems in telecom network operations:
 
 - **Automated SLA Payments**: Smart contracts trigger penalty or reward payments based on MTTR
 - **Instant Settlements**: Payments confirm in 3-5 seconds
-- **Multi-Currency**: Support for USDC (payments), NOCIQ tokens (rewards), XLM (fees)
+- **Multi-Currency**: Support for USDC (payments), ApexChainx tokens (rewards), XLM (fees)
 - **Immutable Audit Trails**: RCA reports hashed and stored on-chain
 - **Transparent**: All transactions viewable on public ledger
 
@@ -63,8 +63,8 @@ NOCIQ integrates Stellar to solve key problems in telecom network operations:
        │
        ▼
 ┌──────────────────┐
-│ NOCIQ Calculates │──► MTTR: 25 minutes
-│ MTTR             │    Threshold: 15 minutes
+│ ApexChainx       │──► MTTR: 25 minutes
+│ Calculates MTTR  │    Threshold: 15 minutes
 └──────┬───────────┘    Status: VIOLATED
        │
        ▼
@@ -88,8 +88,8 @@ NOCIQ integrates Stellar to solve key problems in telecom network operations:
 
 ### Components
 
-1. **NOCIQ Frontend**: User interface with wallet connection
-2. **NOCIQ Backend**: FastAPI server with Stellar SDK
+1. **ApexChainx Frontend**: User interface with wallet connection
+2. **ApexChainx Backend**: FastAPI server with Stellar SDK
 3. **Soroban Smart Contracts**: On-chain SLA calculation logic
 4. **Stellar Network**: Blockchain for payments and storage
 5. **Firestore**: Off-chain database for application data
@@ -137,7 +137,7 @@ VITE_STELLAR_SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
 # Smart Contract Addresses
 VITE_SLA_CONTRACT_ID=CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 VITE_USDC_TOKEN_ADDRESS=CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-VITE_NOCIQ_TOKEN_ADDRESS=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+VITE_APEXCHAINX_TOKEN_ADDRESS=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 **Backend (.env):**
@@ -154,7 +154,7 @@ STELLAR_POOL_PUBLIC_KEY=GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 # Smart Contract IDs - obtained after contract deployment
 SLA_CONTRACT_ID=CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 USDC_TOKEN_ADDRESS=CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-NOCIQ_TOKEN_ADDRESS=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+APEXCHAINX_TOKEN_ADDRESS=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 # Payment Settings
 AUTO_PAYMENT_ENABLED=true
@@ -745,7 +745,7 @@ Transfer sufficient USDC to your pool account to cover expected payments.
 {
   "XLM": 1000.00,
   "USDC": 5000.00,
-  "NOCIQ": 500.00
+  "APEXCHAINX": 500.00
 }
 ```
 

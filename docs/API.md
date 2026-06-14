@@ -1,7 +1,7 @@
-# NOCIQ API Documentation
+# ApexChainx API Documentation
 
 Version: 1.0.0  
-Base URL: `http://localhost:8000` (development) | `https://api.nociq.com` (production) - WIP
+Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (production) - WIP
 
 ## Table of Contents
 
@@ -811,7 +811,7 @@ GET /api/v1/outages?limit=20&offset=40
 
 ## Webhooks
 
-NOCIQ can send webhooks for important events:
+APEXCHAINX can send webhooks for important events:
 
 ### Webhook Events
 
@@ -854,9 +854,9 @@ http://localhost:8000/docs
 
 Download our Postman collection:[WIP]
 ```
-https://github.com/OpSoll/noc-iq-be/blob/main/postman/NOCIQ-API.json
+https://github.com/OpSoll/apexchainx-be/blob/main/postman/ApexChainx-API.json
 ```
 
 ---
 
-For more information, visit our [GitHub repository](https://github.com/OpSoll/noc-iq-be)
+For more information, visit our [GitHub repository](https://github.com/OpSoll/apexchainx-be)

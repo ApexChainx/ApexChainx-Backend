@@ -9,10 +9,10 @@ VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "NOCIQ API"
+    PROJECT_NAME: str = "ApexChainx API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
-    DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/nociq"
+    DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
     API_V1_PREFIX: str = "/api/v1"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"

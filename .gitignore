@@ -1,6 +1,6 @@
 .env
 __pycache__/
-nociq.json
+apexchainx.json
 /env/
 .venv/
 .pytest_cache/

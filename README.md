@@ -1,12 +1,12 @@
-# NOC IQ Backend
+# ApexChainx Backend
 
-Backend API and integration layer for the NOC IQ system.
+Backend API and integration layer for the ApexChainx system.
 
 This repository sits in the middle of the 3-repo architecture:
 
-- `noc-iq-fe` -> frontend
-- `noc-iq-be` -> backend and integration layer
-- `noc-iq-contracts` -> Soroban smart contracts
+- `apexchainx-fe` -> frontend
+- `apexchainx-be` -> backend and integration layer
+- `apexchainx-contracts` -> Soroban smart contracts
 
 System flow:
 
@@ -19,7 +19,7 @@ Important rule:
 
 ## Overview
 
-`noc-iq-be` is a FastAPI application responsible for:
+`apexchainx-be` is a FastAPI application responsible for:
 
 - managing outages
 - computing and storing SLA results
@@ -39,13 +39,13 @@ As of the current stabilized baseline, the backend is strongest in the outage an
 - Celery
 - HTTPX
 
-Dependencies are declared in [requirements.txt](/Users/m-ibinola/Documents/personal/semilore/noc-iq-be/requirements.txt).
+Dependencies are declared in [requirements.txt](requirements.txt).
 
 ## Active Runtime Surface
 
-The app entrypoint is [app/main.py](/Users/m-ibinola/Documents/personal/semilore/noc-iq-be/app/main.py).
+The app entrypoint is [app/main.py](app/main.py).
 
-Current active routes are wired through [app/api/v1/router.py](/Users/m-ibinola/Documents/personal/semilore/noc-iq-be/app/api/v1/router.py):
+Current active routes are wired through [app/api/v1/router.py](app/api/v1/router.py):
 
 - `/health`
 - `/api/v1/audit`
@@ -94,7 +94,7 @@ The backend now includes both a local SLA calculator and a contract adapter surf
 ## Project Structure
 
 ```text
-noc-iq-be/
+apexchainx-be/
 ├── alembic/                 # database migration config and versions
 ├── app/
 │   ├── api/v1/endpoints/    # FastAPI route handlers
@@ -219,7 +219,7 @@ The application uses the following sensitive environment variables:
 
 ```env
 # Database
-DATABASE_URL=postgresql://user:password@localhost:5432/nociq
+DATABASE_URL=postgresql://user:password@localhost:5432/apexchainx
 
 # Authentication
 JWT_SECRET_KEY=your-jwt-secret-here
@@ -238,5 +238,5 @@ CELERY_BROKER_URL=redis://user:password@localhost:6379/0
 
 If you discover a security vulnerability:
 1. Do not create a public issue
-2. Email security@noc-iq.com with details
+2. Email security@apexchainx.com with details
 3. Allow time for the issue to be addressed before public disclosure
