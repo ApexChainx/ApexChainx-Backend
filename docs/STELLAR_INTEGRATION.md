@@ -924,3 +924,15 @@ Monitor the pool balance via the `/api/v1/wallets` endpoints or directly through
 | `account_not_found` | Recipient wallet not activated | Ensure recipient has minimum XLM reserve |
 | `tx_failed` | Soroban contract error | Check contract logs and network status |
 | `timeout` | Horizon RPC unresponsive | Retry; check `STELLAR_HORIZON_URL` config |
+
+---
+
+## USDC Asset Configuration
+
+Payments are denominated in USDC. The asset is identified by:
+
+- **Asset code**: `USDC`
+- **Issuer (testnet)**: `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`
+- **Issuer (mainnet)**: `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`
+
+Ensure the pool wallet holds a sufficient USDC trustline before executing payments.
