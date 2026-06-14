@@ -324,6 +324,8 @@ SLA analytics are served through `/api/v1/sla` and support:
 - point-in-time snapshots
 - CSV and JSON export via `app/utils/analytics_exporter.py`
 
+Exports are available at  and .
+
 ## Database Migrations
 
 Migrations are managed with Alembic. The chain lives in `alembic/versions/` and covers:
