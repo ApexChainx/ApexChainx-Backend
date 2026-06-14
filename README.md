@@ -16,14 +16,16 @@ This repository is the integration layer in the ApexChainx 3-repo architecture:
 
 ## Overview
 
-`apexchainx-be` is a FastAPI application responsible for:
+`apexchainx-be` is a FastAPI application that serves as the central processing layer for the ApexChainx platform. It is responsible for:
 
-- managing outages
-- computing and storing SLA results
-- exposing aggregation and audit endpoints
-- acting as the future bridge to Soroban contracts
+- **Outage management** — create, update, resolve, and search outages with full lifecycle tracking
+- **SLA computation** — calculate MTTR-based SLA outcomes with penalty and reward logic
+- **Audit logging** — immutable audit trail with correlation IDs across all operations
+- **Stellar payments** — bridge to Soroban smart contracts for SLA-triggered settlements
+- **Webhook delivery** — signed, versioned event delivery with retry and idempotency support
+- **Analytics** — SLA performance aggregation, trends, snapshots, and CSV/JSON exports
 
-As of the current stabilized baseline, the backend is strongest in the outage and SLA domains. Other domains are now routed, but not all of them are equally production-ready.
+The outage and SLA domains are the strongest and most integration-focused. Other domains (`auth`, `payments`, `wallets`, `jobs`, `webhooks`) are fully routed but vary in infrastructure depth.
 
 ## Current Stack
 
