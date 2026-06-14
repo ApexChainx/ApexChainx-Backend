@@ -601,3 +601,12 @@ PRs that only modify `.md` files do not require test coverage but must:
 - New route handlers must have at least one integration test
 - Bug fixes must include a regression test that would have caught the bug
 - Tests must pass locally before opening a PR (`pytest tests/`)
+
+---
+
+## Dependency Management
+
+- Add new Python dependencies with an exact version: `package==1.2.3`
+- Update `requirements.txt` and commit it as part of the PR that introduces the dependency
+- Do not add dev-only tools to `requirements.txt` — they belong in a separate `requirements-dev.txt`
+- Flag any dependency with a known CVE before merging
