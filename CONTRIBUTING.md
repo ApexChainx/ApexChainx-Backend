@@ -583,3 +583,12 @@ Before opening a feature request:
 - Address all reviewer comments before requesting re-review
 - Use `Resolve conversation` only after the concern is addressed, not to dismiss it
 - Breaking changes require explicit sign-off from a maintainer
+
+---
+
+## Documentation-only PRs
+
+PRs that only modify `.md` files do not require test coverage but must:
+- Be factually accurate and consistent with the routed runtime
+- Not introduce references to legacy module paths or old names
+- Follow the same commit convention as code PRs
