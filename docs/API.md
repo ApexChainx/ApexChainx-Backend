@@ -1172,3 +1172,13 @@ Returns a summary of updated records and any computation errors.
 | `422 Unprocessable Entity` | Pydantic validation failure |
 | `429 Too Many Requests` | Rate limit exceeded |
 | `503 Service Unavailable` | Database or external dependency unreachable |
+
+---
+
+## Request Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Type: application/json` | Yes (POST/PUT) | Required for all request bodies |
+| `Authorization: Bearer {token}` | Yes (protected routes) | JWT access token |
+| `X-Correlation-ID` | No | Optional; generated if absent |
