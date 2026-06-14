@@ -100,3 +100,22 @@ Key implementation files:
 The backend includes both a local SLA execution path and a Soroban contract adapter. The local adapter is the default. Contract-backed execution is enabled via `CONTRACT_EXECUTION_MODE` in the environment.
 
 ## Project Structure
+
+```text
+apexchainx-be/
+├── alembic/                 # database migration config and versions
+├── app/
+│   ├── api/v1/endpoints/    # FastAPI route handlers
+│   ├── core/                # settings and application config
+│   ├── db/                  # SQLAlchemy base and session setup
+│   ├── middleware/          # correlation ID and payload size middleware
+│   ├── models/              # Pydantic and ORM models
+│   ├── repositories/        # DB access layer
+│   ├── services/            # domain logic and utilities
+│   ├── tasks/               # Celery task modules
+│   └── utils/               # helpers such as exporters and analytics
+├── docs/                    # project and integration documentation
+├── tests/                   # test suite
+├── requirements.txt
+└── README.md
+```
