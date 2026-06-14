@@ -482,3 +482,9 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 ## Job Cleanup
 
 `app/services/job_cleanup.py` prunes completed and failed job records older than a configurable retention window. This prevents unbounded growth of the jobs table. The cleanup is triggered as a periodic Celery beat task when a worker is running.
+
+---
+
+## Webhook Signing
+
+`app/services/webhook_signing.py` provides HMAC-SHA256 signing for outgoing webhook payloads. The signing key is the webhook `secret` stored per-registration. Signature version metadata is written to the `webhook_signature_metadata` column added in migration `0013_webhook_secret_metadata`.
