@@ -180,6 +180,7 @@ git commit -m "test: add unit tests for SLA calculator"
 - `test`: Adding or updating tests
 - `chore`: Maintenance tasks
 - `perf`: Performance improvements
+- `ci`: CI/CD configuration changes
 
 ### 5. Push and Create Pull Request
 
