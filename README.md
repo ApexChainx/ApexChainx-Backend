@@ -209,6 +209,7 @@ This backend is stabilized but not feature-complete. Known limitations:
 - `jobs` and `webhooks` are routed, but rely on optional worker infrastructure (Redis, Celery) to be fully operational outside eager or local modes
 - the contract path exists, but the default runtime favors the local adapter mode
 - documentation and contributor expectations should follow the routed API surface, not every helper or legacy module under `app/services`
+- SLA dispute resolution requires Redis and Celery for async notification delivery
 
 ## Security Guidelines
 
