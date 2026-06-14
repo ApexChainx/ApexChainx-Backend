@@ -121,3 +121,10 @@ apexchainx-be/
 ```
 
 ## Local Setup
+
+### Prerequisites
+
+- Python 3.11+
+- PostgreSQL
+- pip
+- A virtual environment tool (venv or equivalent)
