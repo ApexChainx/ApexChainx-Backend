@@ -913,3 +913,14 @@ Each completed SLA payment produces a record with:
 The backend uses a single pool wallet (`STELLAR_POOL_SECRET_KEY`) as the funding source for all SLA payments. Ensure this wallet is funded with sufficient USDC before enabling `CONTRACT_EXECUTION_MODE=contract` in production.
 
 Monitor the pool balance via the `/api/v1/wallets` endpoints or directly through [Stellar Expert](https://stellar.expert).
+
+---
+
+## Error Handling
+
+| Error | Cause | Resolution |
+|-------|-------|-----------|
+| `insufficient_funds` | Pool wallet balance too low | Top up pool wallet with USDC |
+| `account_not_found` | Recipient wallet not activated | Ensure recipient has minimum XLM reserve |
+| `tx_failed` | Soroban contract error | Check contract logs and network status |
+| `timeout` | Horizon RPC unresponsive | Retry; check `STELLAR_HORIZON_URL` config |
