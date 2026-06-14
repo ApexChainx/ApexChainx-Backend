@@ -905,3 +905,11 @@ Each completed SLA payment produces a record with:
 | `outage_id` | string | Linked outage reference |
 | `created_at` | datetime | Submission timestamp |
 | `confirmed_at` | datetime | On-chain confirmation timestamp |
+
+---
+
+## Pool Wallet
+
+The backend uses a single pool wallet (`STELLAR_POOL_SECRET_KEY`) as the funding source for all SLA payments. Ensure this wallet is funded with sufficient USDC before enabling `CONTRACT_EXECUTION_MODE=contract` in production.
+
+Monitor the pool balance via the `/api/v1/wallets` endpoints or directly through [Stellar Expert](https://stellar.expert).
