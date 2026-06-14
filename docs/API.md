@@ -911,3 +911,12 @@ File a dispute against a computed SLA outcome.
   "created_at": "2026-01-16T10:00:00Z"
 }
 ```
+
+### GET `/api/v1/sla/disputes`
+
+List all filed disputes. Supports `status`, `limit`, and `offset` query parameters.
+
+**Query Parameters:**
+- `status` (optional): `open`, `resolved`, `rejected`
+- `limit` (optional, default=50)
+- `offset` (optional, default=0)
