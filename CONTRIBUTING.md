@@ -192,7 +192,7 @@ git push origin feature/wallet-integration
 ```
 
 Then open a pull request on GitHub with:
-- **Clear title** following conventional commit format
+- **Clear title** following conventional commit format (keep under 70 characters)
 - **Description** of what you changed and why
 - **Screenshots** (for UI changes)
 - **Testing notes** (how you tested the changes)
