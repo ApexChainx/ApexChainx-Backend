@@ -936,3 +936,14 @@ Payments are denominated in USDC. The asset is identified by:
 - **Issuer (mainnet)**: `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`
 
 Ensure the pool wallet holds a sufficient USDC trustline before executing payments.
+
+---
+
+## Horizon vs Soroban RPC
+
+| URL Variable | Purpose |
+|---|---|
+| `STELLAR_HORIZON_URL` | Used for account queries, balance checks, and transaction submission |
+| `STELLAR_SOROBAN_RPC_URL` | Used exclusively for Soroban contract invocation |
+
+Both are required when `CONTRACT_EXECUTION_MODE=contract`.
