@@ -412,3 +412,9 @@ The migration `0012_sla_latest_backfill.py` populates the `is_latest` flag on ex
 ## Bulk Recompute
 
 When SLA policy thresholds change, existing resolved outages can be recomputed in bulk via `POST /api/v1/sla/bulk-recompute`. The operation is idempotent — re-running it with the same outage IDs produces the same result. Each recompute emits an audit event.
+
+---
+
+## Policy Version Pinning
+
+SLA results are stamped with the policy version that was active at computation time. This allows historical results to be compared against current policy without ambiguity. Policy version is stored on the `sla_results` table.
