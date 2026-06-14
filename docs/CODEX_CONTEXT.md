@@ -677,3 +677,9 @@ Do not use `print()` in application code. Use the logger from `app/utils/logging
 ## Wallet Address Utility
 
 `app/utils/wallet_address.py` validates and normalises Stellar public key format. Call `validate_stellar_address(address)` before persisting any wallet address. Returns `False` for addresses that are not valid G-type Stellar public keys.
+
+---
+
+## Correlation Utility
+
+`app/utils/correlation.py` provides helpers for reading and setting the correlation ID in the current request context. Use `get_correlation_id()` inside services when you need to attach the ID to audit events or log entries outside of the request-response cycle.
