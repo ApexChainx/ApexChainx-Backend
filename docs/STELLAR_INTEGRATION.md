@@ -887,3 +887,21 @@ For local development against the Stellar testnet:
 2. Fund the account using the [Friendbot faucet](https://friendbot.stellar.org)
 3. Set `STELLAR_NETWORK=testnet` and `STELLAR_POOL_SECRET_KEY=<your-secret>` in `.env`
 4. Set `CONTRACT_EXECUTION_MODE=contract` to exercise the full Soroban path
+
+---
+
+## Payment Record Schema
+
+Each completed SLA payment produces a record with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Unique payment identifier |
+| `transaction_hash` | string | Stellar transaction hash |
+| `amount` | decimal | Payment amount in USDC |
+| `from_address` | string | Pool wallet address |
+| `to_address` | string | Recipient wallet address |
+| `status` | enum | `pending`, `confirmed`, `failed` |
+| `outage_id` | string | Linked outage reference |
+| `created_at` | datetime | Submission timestamp |
+| `confirmed_at` | datetime | On-chain confirmation timestamp |
