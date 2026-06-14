@@ -131,7 +131,7 @@ apexchainx-be/
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11+ recommended
 - PostgreSQL
 - pip
 - A virtual environment tool (venv or equivalent)
