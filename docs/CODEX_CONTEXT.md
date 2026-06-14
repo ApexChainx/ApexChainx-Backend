@@ -652,3 +652,16 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 ## Cache Module
 
 `app/utils/cache.py` provides a simple in-process LRU cache for SLA policy configuration reads. Cache entries expire after a configurable TTL. Invalidate the cache after any policy configuration update to ensure the next SLA computation uses the new values.
+
+---
+
+## Logging
+
+`app/utils/logging.py` configures structured JSON logging. All log entries include:
+- `timestamp` (UTC)
+- `level`
+- `message`
+- `correlation_id` (if available in request context)
+- `service`: always `apexchainx-be`
+
+Do not use `print()` in application code. Use the logger from `app/utils/logging.py`.
