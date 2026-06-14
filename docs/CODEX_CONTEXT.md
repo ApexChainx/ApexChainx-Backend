@@ -280,3 +280,17 @@ Generate a structured backlog of issues that:
 - ensures correctness of SLA + payments
 - prepares system for production scale
 - maintains clean separation of concerns
+
+---
+
+### SLA Disputes Domain
+
+Responsible for:
+- filing and tracking disputes against SLA outcomes
+- linking disputes to originating SLA records
+- providing audit trail for contested settlements
+
+Key endpoints:
+- POST /api/v1/sla/disputes
+- GET /api/v1/sla/disputes
+- GET /api/v1/sla/disputes/{dispute_id}
