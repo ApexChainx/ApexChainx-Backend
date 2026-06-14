@@ -58,7 +58,7 @@ There are many ways to contribute to ApexChainx:
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/OpSoll/apexchainx-fe.git
+   git remote add upstream https://github.com/ApexChainx/ApexChainx-Frontend.git
    ```
 
 ### Setup Development Environment
