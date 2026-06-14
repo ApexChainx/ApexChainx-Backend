@@ -406,3 +406,9 @@ Webhook delivery is handled by `app/tasks/webhook_tasks.py` as a Celery task. Wh
 ## Analytics Snapshot Backfill
 
 The migration `0012_sla_latest_backfill.py` populates the `is_latest` flag on existing SLA records. This flag allows the analytics layer to efficiently query only the most recent SLA result per outage without a subquery on every request.
+
+---
+
+## Bulk Recompute
+
+When SLA policy thresholds change, existing resolved outages can be recomputed in bulk via `POST /api/v1/sla/bulk-recompute`. The operation is idempotent — re-running it with the same outage IDs produces the same result. Each recompute emits an audit event.
