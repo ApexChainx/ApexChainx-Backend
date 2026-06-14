@@ -988,3 +988,9 @@ When `CONTRACT_EXECUTION_MODE=contract`:
 - The secret key is never logged, never returned via any API endpoint, and never written to disk
 - Only the corresponding public key (`STELLAR_POOL_PUBLIC_KEY`) is stored in configuration for reference
 - If the secret key is compromised, rotate it immediately and update the `.env` file on all instances
+
+---
+
+## Retry on Payment Failure
+
+If a Stellar payment fails (insufficient funds, account not found, network timeout), the backend schedules a retry via Celery. Retry attempts are tracked in the payment record's `attempt_count` field. After `MAX_PAYMENT_RETRIES` (default 3) attempts, the payment is marked `failed` and an audit event is emitted.
