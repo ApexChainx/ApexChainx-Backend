@@ -98,3 +98,5 @@ Key implementation files:
 | `app/services/sla/config.py` | SLA policy configuration |
 
 The backend includes both a local SLA execution path and a Soroban contract adapter. The local adapter is the default. Contract-backed execution is enabled via `CONTRACT_EXECUTION_MODE` in the environment.
+
+## Project Structure
