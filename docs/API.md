@@ -1395,3 +1395,11 @@ Update an open outage's metadata. Resolved outages cannot be updated.
   "description": "Updated: affecting 3 services after further investigation"
 }
 ```
+
+---
+
+## Outage Get Endpoint
+
+### GET `/api/v1/outages/{outage_id}`
+
+Retrieve a single outage by ID. Returns full record including timeline events and latest SLA result if resolved.
