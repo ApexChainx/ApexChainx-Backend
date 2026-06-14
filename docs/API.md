@@ -1282,3 +1282,19 @@ Content-Type: application/json
 ```
 
 If the same key is received within the deduplication window, the original response is returned without re-executing the operation.
+
+---
+
+## Bulk Operations
+
+### POST `/api/v1/sla/disputes/bulk-resolve`
+
+Resolve multiple disputes in a single request.
+
+```json
+{
+  "dispute_ids": ["DIS001", "DIS002"],
+  "resolution": "accepted",
+  "notes": "MTTR recalculated after log review confirmed engineer notification delay"
+}
+```
