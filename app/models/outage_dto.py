@@ -89,18 +89,6 @@ class OutageCreate(BaseModel):
             v = v.astimezone(timezone.utc)
         return v
 
-    @field_validator("resolved_at")
-    @classmethod
-    def validate_resolved_at_timezone(cls, v: datetime | None) -> datetime | None:
-        if v is None:
-            return None
-        if v.tzinfo is None:
-            raise ValidationError("resolved_at must be timezone-aware")
-        # Normalize to UTC
-        if v.tzinfo != timezone.utc:
-            v = v.astimezone(timezone.utc)
-        return v
-
 
 class OutageUpdate(BaseModel):
     site_name: Optional[str] = None

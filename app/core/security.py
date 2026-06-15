@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import AuthUser
 from app.models.enums import Role
-from app.services.auth_store import AuthStore
 from app.db.session import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -56,6 +55,7 @@ def _extract_bearer_token(authorization: str | None) -> str:
 def get_current_user(
     authorization: str | None = Header(default=None), db: Session = Depends(get_db)
 ) -> AuthUser:
+    from app.services.auth_store import AuthStore
     token = _extract_bearer_token(authorization)
     user = AuthStore.get_user_for_token(token, db=db)
     if not user:

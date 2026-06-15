@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Text, Enum as SAEnum, Float, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Text, Enum as SAEnum, Float, JSON
 from sqlalchemy.dialects.postgresql import UUID
 import enum
 

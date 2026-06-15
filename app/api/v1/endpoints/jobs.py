@@ -16,7 +16,7 @@ from app.services.audit_log import audit_log
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_sla_computation, enqueue_bulk_sla_computation
-from app.tasks.webhook_tasks import dispatch_webhook_event
+from app.tasks.webhook_tasks import dispatch_webhook_delivery
 from app.utils.correlation import get_correlation_id
 from app.utils.logging import get_structured_logger
 from app.core.security import require_engineer, require_admin
@@ -453,7 +453,7 @@ def retry_job(
             )
         elif job.job_type == JobType.WEBHOOK_DISPATCH:
             # For webhook jobs, re-dispatch with the original payload
-            from app.tasks.webhook_tasks import dispatch_webhook_event
+            from app.tasks.webhook_tasks import dispatch_webhook_delivery
             task_result = dispatch_webhook_event.delay(payload)
             job.celery_task_id = task_result.id
             db.commit()
