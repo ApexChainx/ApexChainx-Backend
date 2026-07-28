@@ -15,7 +15,7 @@ from app.models.auth import (
 )
 from app.services.auth_store import AuthStore
 from app.db.session import get_db
-from app.core.security import get_current_user, require_admin
+from app.core.security import get_current_user, require_admin, hash_token
 from app.core.rate_limiter import rate_limiter
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.utils.correlation import get_correlation_id
@@ -47,6 +47,7 @@ Configuration (in app.core.config):
 
 
 from app.core.config import settings
+from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 
 def _get_client_ip(request: Request) -> str:
@@ -97,7 +98,27 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=AuthSessionResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    from app.services.audit_log import audit_log
+
     client_ip = _get_client_ip(request)
+    
+    # Credential stuffing detection
+    credential_stuffing_detector.record_attempt(client_ip, payload.password)
+    if credential_stuffing_detector.detect_stuffing(client_ip):
+        lockout_minutes = settings.AUTH_LOCKOUT_DURATION_MINUTES * 4
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "ip": client_ip,
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(client_ip),
+                "action": f"account_locked_{lockout_minutes}_minutes",
+            },
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts from this IP. Account locked for {lockout_minutes} minutes.",
+        )
     
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
@@ -236,3 +257,24 @@ def admin_logout_all_sessions(
 @router.get("/ping")
 def auth_ping():
     return {"message": "auth ok"}
+
+
+class RevokeResponse(BaseModel):
+    message: str
+
+
+@router.post("/revoke", response_model=RevokeResponse)
+def revoke_token(
+    authorization: str | None = Header(default=None),
+    current_user: AuthUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Revoke the current access token. Subsequent requests with this token
+    will receive 401 'Token revoked' response."""
+    from app.services.token_revocation import revoke
+    from app.services.auth_store import TOKEN_TTL_SECONDS
+    token = _extract_bearer_token(authorization)
+    revoke(hash_token(token), TOKEN_TTL_SECONDS)
+    from app.services.audit_log import audit_log
+    audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+    return RevokeResponse(message="Token revoked successfully")

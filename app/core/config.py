@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = False
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
+    DATABASE_AUDIT_URL: Optional[str] = None
     API_V1_PREFIX: str = "/api/v1"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
@@ -39,6 +40,9 @@ class Settings(BaseSettings):
     AUTH_LOCKOUT_DURATION_MINUTES: int = 15  # Lockout duration in minutes
     AUTH_RATE_LIMIT_REQUESTS: int = 10  # Max requests per window
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300  # Rate limit window in seconds
+    AUTH_LOCKOUT_ENTROPY_THRESHOLD: int = 20  # Unique password prefixes before credential-stuffing alert
+    AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES: int = 5  # Rolling window for stuffing detection
+    AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
 
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
@@ -58,6 +62,9 @@ class Settings(BaseSettings):
     WEBHOOK_RETRY_BASE_DELAYS: str = "30,120,600"
     # Hard cap on any single computed delay (seconds) to prevent retry storms.
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
+
+    # Idempotency key TTL (#16)
+    IDEMPOTENCY_KEY_TTL_HOURS: int = 24
 
     class Config:
         env_file = ".env"
