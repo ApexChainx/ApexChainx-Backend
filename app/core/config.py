@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # Hard cap on any single computed delay (seconds) to prevent retry storms.
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
 
+    # Webhook secret rotation grace period (#9)
+    # Number of hours the previous secret remains valid after rotation.
+    WEBHOOK_SECRET_GRACE_HOURS: int = 24
+
+    # OAuth configuration (#10)
+    OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
+    OAUTH_STATE_TTL_SECONDS: int = 600
+
     class Config:
         env_file = ".env"
 
