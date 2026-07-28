@@ -14,6 +14,7 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.core.security import require_admin
 from app.core.config import settings
+from app.utils.network_validation import validate_webhook_url
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -56,6 +57,7 @@ class WebhookCreate(BaseModel):
         url_str = str(v)
         if len(url_str) > settings.MAX_WEBHOOK_URL_LENGTH:
             raise ValueError(f"url too long. Maximum length is {settings.MAX_WEBHOOK_URL_LENGTH} characters.")
+        validate_webhook_url(url_str)
         return v
 
     @field_validator("events")
@@ -90,6 +92,7 @@ class WebhookUpdate(BaseModel):
             url_str = str(v)
             if len(url_str) > settings.MAX_WEBHOOK_URL_LENGTH:
                 raise ValueError(f"url too long. Maximum length is {settings.MAX_WEBHOOK_URL_LENGTH} characters.")
+            validate_webhook_url(url_str)
         return v
 
     @field_validator("events")
@@ -222,13 +225,16 @@ def _serialize_delivery(delivery: WebhookDelivery) -> WebhookDeliveryResponse:
 
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    url = str(payload.url)
+    resolved_ips = validate_webhook_url(url)
     webhook = Webhook(
         name=payload.name,
-        url=str(payload.url),
+        url=url,
         secret=payload.secret,
         events=json.dumps([e.value for e in payload.events]),
         max_retries=payload.max_retries,
         is_active=payload.is_active,
+        resolved_ips=json.dumps(resolved_ips),
     )
     db.add(webhook)
     db.commit()
@@ -267,7 +273,10 @@ def update_webhook(webhook_id: UUID, payload: WebhookUpdate, current_user=Depend
     if payload.name is not None:
         webhook.name = payload.name
     if payload.url is not None:
-        webhook.url = str(payload.url)
+        url = str(payload.url)
+        resolved_ips = validate_webhook_url(url)
+        webhook.url = url
+        webhook.resolved_ips = json.dumps(resolved_ips)
     if payload.secret is not None:
         webhook.secret = payload.secret
     if payload.events is not None:

@@ -31,6 +31,7 @@ class Webhook(Base):
     secret = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     events = Column(Text, nullable=False)  # JSON-encoded list of WebhookEvent values
+    resolved_ips = Column(Text, nullable=True)  # JSON-encoded list of resolved IPs for SSRF validation
     max_retries = Column(Integer, default=3, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 redis
+fakeredis
 
 sqlalchemy>=2.0
 psycopg2-binary

@@ -88,7 +88,14 @@ class RefreshRequest(BaseModel):
 
 
 @router.post("/register", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = _get_client_ip(request)
+    if not rate_limiter.is_allowed(f"register_ip_{client_ip}"):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many registration attempts from this IP. Please try again later.",
+        )
+
     try:
         return AuthStore.register(payload, db=db)
     except ValueError as exc:
