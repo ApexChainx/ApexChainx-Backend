@@ -17,6 +17,8 @@ Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (
 - [Reports](#reports)
 - [Error Handling](#error-handling)
 
+- [CORS](#cors)
+
 ---
 
 ## Payload Size and Input Guardrails
@@ -142,6 +144,18 @@ Register new user account.
   "created_at": "2026-01-16T10:00:00Z"
 }
 ```
+
+---
+
+## CORS
+
+The API uses a conservative CORS configuration. By default the server allows the following methods and headers from configured origins:
+
+- Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With
+- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining
+
+Origins are configured via environment variables and wildcard origins ("*") are rejected on startup for security reasons.
 
 ### POST `/api/v1/auth/refresh`
 
