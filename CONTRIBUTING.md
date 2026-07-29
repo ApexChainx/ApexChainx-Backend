@@ -154,6 +154,7 @@ pytest --cov=app --cov-report=html
 ruff check app/     # lint (replaces flake8)
 ruff format app/    # format (replaces black)
 mypy app/           # type-check
+python scripts/lint_migrations.py  # migration raw-SQL lint
 ```
 
 **Smart Contracts:**

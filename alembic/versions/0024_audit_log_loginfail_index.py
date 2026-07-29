@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Partial index on audit_log for event_type='login_failure'.
 
 Revision ID: 0024_audit_log_loginfail_index
