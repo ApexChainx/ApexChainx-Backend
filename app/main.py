@@ -17,6 +17,7 @@ from app.core.exceptions import (
 )
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
+from app.core.tracing import init_tracing, instrument_app
 from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
 from app.db.session import engine
 from app.services.health_report import build_readiness_report
@@ -31,6 +32,7 @@ from app.middleware.api_version import ApiVersionMiddleware
 configure_logging()
 validate_critical_settings(settings)
 install_signal_handlers()
+init_tracing()
 
 
 async def check_database() -> bool:
@@ -189,3 +191,6 @@ def health_check():
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")
+
+# Apply OpenTelemetry auto-instrumentation (after all routes registered)
+instrument_app(app)
