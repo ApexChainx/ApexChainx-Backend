@@ -1,4 +1,7 @@
-.PHONY: bootstrap install dev install-dev lint typecheck test
+.PHONY: bootstrap install dev install-dev lint typecheck test help format test-cov migrate clean
+
+help: ## Show all targets
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 bootstrap:
 	pip install pip-tools
@@ -18,5 +21,19 @@ lint:
 typecheck:
 	mypy app/
 
-test:
+test: ## Run tests
 	pytest
+
+test-cov: ## Run tests with coverage
+	coverage run -m pytest && coverage report -m
+
+format: ## Format code with ruff
+	ruff format .
+
+migrate: ## Run alembic migrations
+	alembic upgrade head
+
+clean: ## Remove build artifacts
+	rm -rf __pycache__ .pytest_cache .mypy_cache *.egg-info
+
+CI: lint format typecheck test ## Full CI pipeline
