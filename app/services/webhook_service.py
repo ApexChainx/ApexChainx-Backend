@@ -220,6 +220,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             base_delay = retry_delays[retry_index]
             raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delay = _apply_jitter(raw_delay)
+            # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
+            delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(

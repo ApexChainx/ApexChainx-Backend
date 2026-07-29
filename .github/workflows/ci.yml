@@ -7,9 +7,11 @@ on:
     branches: [main]
 
 jobs:
-  lint:
+  lint-typecheck-test:
+    name: Python ${{ matrix.python-version }} – lint / typecheck / test
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
 
@@ -20,21 +22,47 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Ruff check
+      # ── Lint ────────────────────────────────────────────────────────────────
+      - name: Ruff lint
         run: ruff check app tests
 
-      - name: Ruff format
+      - name: Ruff format check
         run: ruff format --check app tests
 
-      - name: MyPy check
+      # ── Type checking ────────────────────────────────────────────────────────
+      - name: Mypy
         run: mypy app/
 
-      - name: Test with branch coverage
+      # ── Security scan ────────────────────────────────────────────────────────
+      - name: Bandit security scan
+        run: bandit -r app/ -c pyproject.toml
+
+      # ── Tests + coverage ─────────────────────────────────────────────────────
+      - name: Pytest with branch coverage
         run: |
-          pytest --cov-branch --cov-fail-under=80 --cov=app/services/ --cov=app/utils/ --cov=app/db/
+          pytest \
+            --cov=app \
+            --cov-branch \
+            --cov-fail-under=80 \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.11'
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
+
+      # ── OpenAPI contract test ────────────────────────────────────────────────
+      - name: OpenAPI contract test
+        run: pytest tests/test_openapi_contract.py -v

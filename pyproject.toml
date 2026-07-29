@@ -39,6 +39,7 @@ dev = [
     "bandit==1.8.0",
     "pip-tools==7.4.1",
     "fakeredis>=2.20.0",
+    "schemathesis==3.38.9",
 ]
 
 [tool.setuptools.packages.find]
