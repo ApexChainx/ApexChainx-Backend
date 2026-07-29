@@ -3,16 +3,20 @@
 Adds a streaming JSON import path for POST /outages/import.
 """
 
+from __future__ import annotations
+
 import json
-from typing import Any, Dict, List
+from typing import Any
+
+from sqlalchemy.orm import Session
 
 
 def stream_import_outages(
-    db,
+    db: Session,
     raw_body: bytes,
     max_rows: int = 1000,
     chunk_size: int = 100,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Stream-parse a JSON body containing outage rows in chunks.
 
     Falls back to standard json.loads for small payloads.

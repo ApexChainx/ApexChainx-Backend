@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import threading
 import time
 from enum import Enum
@@ -18,7 +20,7 @@ class CircuitBreaker:
         fail_threshold: int = 10,
         window_seconds: int = 300,
         reset_seconds: int = 600,
-    ):
+    ) -> None:
         self._fail_threshold = fail_threshold
         self._window_seconds = window_seconds
         self._reset_seconds = reset_seconds
