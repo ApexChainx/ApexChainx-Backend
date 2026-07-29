@@ -1,6 +1,6 @@
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -396,7 +396,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     new_secret = secrets.token_hex(32)
     webhook.secret = new_secret
     webhook.secret_version = old_secret_version + 1
-    webhook.last_secret_rotation_at = datetime.utcnow()
+    webhook.last_secret_rotation_at = datetime.now(timezone.utc)
 
     db.commit()
 

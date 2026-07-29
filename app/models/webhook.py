@@ -1,6 +1,6 @@
 from sqlalchemy.dialects.postgresql import JSONB
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -35,8 +35,8 @@ class Webhook(Base):
     events = Column(Text, nullable=False)  # JSON-encoded list of WebhookEvent values
     resolved_ips = Column(Text, nullable=True)  # JSON-encoded list of resolved IPs for SSRF validation
     max_retries = Column(Integer, default=3, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # BE-034: Secret lifecycle metadata
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
@@ -64,7 +64,7 @@ class WebhookDelivery(Base):
     delivered_at = Column(DateTime, nullable=True)
     dead_lettered_at = Column(DateTime, nullable=True)  # BE-086: When delivery was marked as dead-letter
     signature_version = Column(Integer, default=1, nullable=False)  # BE-087: Explicit signature algorithm version
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     webhook = relationship("Webhook", back_populates="deliveries")

@@ -1,7 +1,7 @@
 import time
 import threading
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any
 from dataclasses import dataclass, field
 
@@ -39,7 +39,7 @@ class MetricsRegistry:
         """Record a histogram value."""
         with self._lock:
             key = self._make_key(name, tags)
-            self._histograms[key].append(MetricPoint(datetime.utcnow(), value, tags or {}))
+            self._histograms[key].append(MetricPoint(datetime.now(timezone.utc), value, tags or {}))
 
     def record_timer(self, name: str, duration_ms: float, tags: Dict[str, str] = None):
         """Record a timing measurement."""
@@ -61,7 +61,7 @@ class MetricsRegistry:
         """Get a summary of all metrics for exposure."""
         with self._lock:
             summary = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "counters": dict(self._counters),
                 "gauges": dict(self._gauges),
                 "histograms": {},
