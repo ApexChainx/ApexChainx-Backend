@@ -38,8 +38,10 @@ return 1
 
 
 class SimpleRateLimiter:
+    _shared: Dict[str, List[float]] = defaultdict(list)
+
     def __init__(self) -> None:
-        self.requests: Dict[str, List[float]] = defaultdict(list)
+        self.requests = SimpleRateLimiter._shared
 
     def is_allowed(self, key: str) -> bool:
         """Check if the key is allowed based on rate limits."""
