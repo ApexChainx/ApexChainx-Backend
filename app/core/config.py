@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
     API_V1_PREFIX: str = "/api/v1"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
+    # CORS configuration
+    CORS_ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_ALLOWED_HEADERS: List[str] = [
+        "Authorization",
+        "X-Correlation-ID",
+        "Idempotency-Key",
+        "Content-Type",
+        "X-Requested-With",
+    ]
+    CORS_EXPOSE_HEADERS: List[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     CELERY_TASK_ALWAYS_EAGER: bool = True
@@ -52,12 +62,13 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
 
-    # Audit-log sensitive fields to redact
-    AUDIT_SENSITIVE_FIELDS: list[str] = [
-        "password", "token", "access_token", "refresh_token",
-        "secret", "secret_key", "api_key", "mnemonic", "seed", "pin",
-        "signed_tx", "stellar_secret",
-    ]
+    # Environment name used for conditional behaviours (e.g. HSTS disabled in local)
+    ENVIRONMENT: str = "local"
+
+    # Security headers and CSP
+    SECURITY_HEADERS_ENABLED: bool = True
+    # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
+    SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
 
     # Webhook retry backoff policy (#236)
     # Comma-separated base delay seconds for each retry attempt.
@@ -106,6 +117,10 @@ def validate_critical_settings(config: Settings) -> None:
     if not config.ALLOWED_ORIGINS:
         errors.append("ALLOWED_ORIGINS must include at least one origin.")
     else:
+        # fail-fast on wildcard origins
+        if any(origin.strip() == "*" for origin in config.ALLOWED_ORIGINS):
+            errors.append("ALLOWED_ORIGINS must not contain wildcard '*' origins for security reasons.")
+
         invalid_origins = [
             origin
             for origin in config.ALLOWED_ORIGINS

@@ -9,6 +9,7 @@ from app.core.config import settings, validate_critical_settings
 from app.db.session import engine
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 validate_critical_settings(settings)
 
@@ -45,9 +46,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.CORS_ALLOWED_METHODS,
+    allow_headers=settings.CORS_ALLOWED_HEADERS,
+    expose_headers=settings.CORS_EXPOSE_HEADERS,
 )
+
+# Security headers should be applied after CORS so preflight responses are handled
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # Health checks
