@@ -410,12 +410,17 @@ def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=D
             audit_log.log("outage_resolved", {"id": outage.id, "mttr": payload.mttr_minutes})
             OutageEventRepository(db).record(outage_id, "resolved", {"mttr_minutes": payload.mttr_minutes})
 
+            # Pass timestamps for compute_hash idempotency (#35)
+            started_at = outage.detected_at.isoformat() if outage.detected_at else ""
+            resolved_at = outage.resolved_at.isoformat() if outage.resolved_at else ""
             raw_contract_result = SLAContractAdapter.calculate_sla(
                 outage_id=outage.id,
                 severity=outage.severity,
                 mttr_minutes=payload.mttr_minutes,
                 policy_version="1.0",
                 threshold_source="config",
+                started_at=started_at,
+                resolved_at=resolved_at,
             )
             sla = translate_contract_result(raw_contract_result)
 
@@ -441,6 +446,9 @@ def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=D
 def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     """Recompute SLA for a resolved outage (BE-013, BE-009).
     
+    Idempotent: uses compute_hash to detect duplicate recomputes (#35).
+    Re-running with unchanged inputs returns the prior row.
+
     Status validation:
     - Only 'resolved' outages can have SLA recomputed
     - Returns 400 if outage not resolved
@@ -463,12 +471,19 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
     try:
         with advisory_lock_nowait(db, f"recompute:{outage_id}"):
             orm = repo.get_orm_locked(outage_id)
+
+            # Build compute_hash inputs from outage timestamps for idempotency (#35)
+            started_at = orm.detected_at.isoformat() if orm.detected_at else ""
+            resolved_at = orm.resolved_at.isoformat() if orm.resolved_at else ""
+
             raw_contract_result = SLAContractAdapter.calculate_sla(
                 outage_id=outage.id,
                 severity=outage.severity,
                 mttr_minutes=orm.mttr_minutes,
                 policy_version="1.0",
                 threshold_source="config",
+                started_at=started_at,
+                resolved_at=resolved_at,
             )
             sla = translate_contract_result(raw_contract_result)
 
