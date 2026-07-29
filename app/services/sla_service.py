@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
+from app.services.metrics import increment_counter
 
 
 class SLAOrchestrator:
@@ -110,6 +111,7 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
     - Structured results aligned with routed API concepts
     """
     orchestrator = SLAOrchestrator(db)
+    increment_counter("sla_recomputation_total", tags={"device_id": device_id, "period": period})
     
     # Default SLA thresholds if not provided
     if sla_thresholds is None:
@@ -146,6 +148,8 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
         is_violated = orchestrator.check_sla_violations(availability, mttr, sla_thresholds)
         
         # Determine violation reasons
+        if is_violated:
+            increment_counter("sla_violation_total", tags={"device_id": device_id, "period": period})
         violation_reasons = []
         if availability < sla_thresholds["availability"]:
             violation_reasons.append(f"Availability {availability}% below threshold {sla_thresholds['availability']}%")
