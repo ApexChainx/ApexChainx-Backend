@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ApexTransientError
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
+from app.models.sla import SLACalculationResult, SLACalculationError
 from app.services.audit_log import audit_log
 from app.services.metrics import increment_counter
 
@@ -100,7 +101,7 @@ class SLAOrchestrator:
 
 def compute_device_sla(
     db: Session, device_id: str, period: str, sla_thresholds: Optional[Dict[str, float]] = None
-) -> dict:
+) -> SLACalculationResult:
     """
     Compute SLA metrics for a device with real domain orchestration.
 
@@ -109,6 +110,10 @@ def compute_device_sla(
     - Real MTTR and availability calculations
     - SLA violation detection with configurable thresholds
     - Structured results aligned with routed API concepts
+
+    Returns a SLACalculationResult Pydantic model rather than a loose dict
+    so consumers get compile-time guarantees and OpenAPI can reflect the
+    exact shape.  (#94)
     """
     orchestrator = SLAOrchestrator(db)
     increment_counter("sla_recomputation_total", tags={"device_id": device_id, "period": period})
@@ -128,19 +133,19 @@ def compute_device_sla(
         outages = orchestrator.get_outages_for_device(device_id, start_date, end_date)
 
         if not outages:
-            result: dict[str, Any] = {
-                "device_id": device_id,
-                "period": period,
-                "period_start": start_date.isoformat(),
-                "period_end": end_date.isoformat(),
-                "total_outages": 0,
-                "violated_outages": 0,
-                "avg_mttr_minutes": 0.0,
-                "availability_percentage": 100.0,
-                "is_violated": False,
-                "sla_thresholds": sla_thresholds,
-                "violation_reasons": [],
-            }
+            result = SLACalculationResult(
+                device_id=device_id,
+                period=period,
+                period_start=start_date.isoformat(),
+                period_end=end_date.isoformat(),
+                total_outages=0,
+                violated_outages=0,
+                avg_mttr_minutes=0.0,
+                availability_percentage=100.0,
+                is_violated=False,
+                sla_thresholds=sla_thresholds,
+                violation_reasons=[],
+            )
             record_sla_settlement_audit_events(device_id, period, result, status="initiated")
             record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             return result
@@ -174,19 +179,19 @@ def compute_device_sla(
 
         violated_outages = sum(1 for r in latest_results.values() if r and r.status == "violated")
 
-        result = {
-            "device_id": device_id,
-            "period": period,
-            "period_start": start_date.isoformat(),
-            "period_end": end_date.isoformat(),
-            "total_outages": len(outages),
-            "violated_outages": violated_outages,
-            "avg_mttr_minutes": mttr,
-            "availability_percentage": availability,
-            "is_violated": is_violated,
-            "sla_thresholds": sla_thresholds,
-            "violation_reasons": violation_reasons,
-            "outage_details": [
+        result = SLACalculationResult(
+            device_id=device_id,
+            period=period,
+            period_start=start_date.isoformat(),
+            period_end=end_date.isoformat(),
+            total_outages=len(outages),
+            violated_outages=violated_outages,
+            avg_mttr_minutes=mttr,
+            availability_percentage=availability,
+            is_violated=is_violated,
+            sla_thresholds=sla_thresholds,
+            violation_reasons=violation_reasons,
+            outage_details=[
                 {
                     "id": outage.id,
                     "site_id": outage.site_id,
@@ -197,7 +202,7 @@ def compute_device_sla(
                 }
                 for outage in outages
             ],
-        }
+        )
         record_sla_settlement_audit_events(device_id, period, result, status="initiated")
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result
@@ -213,7 +218,7 @@ def compute_device_sla(
 def record_sla_settlement_audit_events(
     device_id: str,
     period: str,
-    sla_result: dict[str, Any],
+    sla_result: Union[SLACalculationResult, dict[str, Any]],
     *,
     status: str = "initiated",
     error: str | None = None,
