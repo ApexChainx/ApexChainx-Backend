@@ -11,6 +11,8 @@ celery
 httpx
 python-multipart
 passlib[bcrypt]
+tenacity
+schemathesis
 # This file is auto-generated from pyproject.toml
 # Run: pip-compile pyproject.toml
 -e .
