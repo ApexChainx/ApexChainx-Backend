@@ -97,8 +97,8 @@ def make_payment_transaction(
         "status": "confirmed",
         "outage_id": f"outage-{_next_id()}",
         "sla_result_id": 1,
-        "created_at": datetime.utcnow(),
-        "confirmed_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "confirmed_at": datetime.now(timezone.utc),
         "retry_count": 0,
         "last_retried_at": None,
     }

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
@@ -431,7 +431,7 @@ def retry_job(
 
     # Increment retry count and update status
     job.retry_count += 1
-    job.last_retried_at = datetime.utcnow()
+    job.last_retried_at = datetime.now(timezone.utc)
     job.error = None  # Clear previous error
     job.status = JobStatus.PENDING
     job.progress = 0.0

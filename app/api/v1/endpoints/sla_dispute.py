@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -204,7 +204,7 @@ def resolve_dispute(
     dispute.status = payload.status
     dispute.resolved_by = payload.resolved_by
     dispute.resolution_notes = payload.resolution_notes
-    dispute.resolved_at = datetime.utcnow()
+    dispute.resolved_at = datetime.now(timezone.utc)
 
     # If resolving and apply_proposed is true, mark the proposed SLA as latest
     if payload.status == DisputeStatus.RESOLVED and payload.apply_proposed:

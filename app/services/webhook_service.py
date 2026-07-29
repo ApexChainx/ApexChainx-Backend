@@ -70,7 +70,7 @@ def _build_headers(
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.utcnow().isoformat(),
+        "X-Webhook-Timestamp": datetime.now(timezone.utc).isoformat(),
         "traceparent": f"00-{trace_id}-{span_id}-01",
     }
     if webhook.secret:
@@ -183,7 +183,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
         delivery.error_message = "Circuit breaker open, delivery deferred"
         delivery.next_retry_at = None
-        delivery.updated_at = datetime.utcnow()
+        delivery.updated_at = datetime.now(timezone.utc)
         db.commit()
         logger.warning(
             "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
@@ -193,14 +193,14 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
     delivery.attempt_count += 1
     delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.utcnow()
+    delivery.updated_at = datetime.now(timezone.utc)
     db.commit()
 
     success = _attempt_delivery(delivery, webhook)
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS
-        delivery.delivered_at = datetime.utcnow()
+        delivery.delivered_at = datetime.now(timezone.utc)
         delivery.next_retry_at = None
         logger.info(
             "Webhook delivery %s succeeded on attempt %d for webhook %s.",
@@ -229,7 +229,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             )
         else:
             delivery.status = WebhookDeliveryStatus.DEAD_LETTER
-            delivery.dead_lettered_at = datetime.utcnow()
+            delivery.dead_lettered_at = datetime.now(timezone.utc)
             delivery.next_retry_at = None
             logger.error(
                 "Webhook delivery %s permanently failed after %d attempts. Marked as dead-letter.",
@@ -237,7 +237,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
                 delivery.attempt_count,
             )
 
-    delivery.updated_at = datetime.utcnow()
+    delivery.updated_at = datetime.now(timezone.utc)
     db.commit()
 
 
@@ -267,7 +267,7 @@ def trigger_sla_violation_webhooks(
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
-    event_timestamp = datetime.utcnow().isoformat()
+    event_timestamp = datetime.now(timezone.utc).isoformat()
 
     payload = {
         "schema_version": WEBHOOK_SCHEMA_VERSION,
@@ -299,7 +299,7 @@ def trigger_sla_violation_webhooks(
 
 
 def retry_pending_deliveries(db: Session) -> int:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
@@ -353,7 +353,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
     delivery.response_status_code = None
     delivery.response_body = None
     delivery.delivered_at = None
-    delivery.updated_at = datetime.utcnow()
+    delivery.updated_at = datetime.now(timezone.utc)
 
     db.commit()
 
