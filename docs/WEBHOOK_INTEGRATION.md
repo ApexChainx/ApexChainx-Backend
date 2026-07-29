@@ -412,6 +412,39 @@ When registering a webhook, specify only the event types you need. Receiving unn
 
 ---
 
+## Circuit Breaker
+
+The webhook delivery system includes a per-host circuit breaker to protect downstream services and the database from repeated failed deliveries during systemic outages.
+
+### How It Works
+
+The circuit breaker tracks consecutive failures per target host over a configurable window:
+
+- **CLOSED** (normal): All deliveries proceed.
+- **OPEN**: After `WEBHOOK_BREAKER_FAIL_THRESHOLD` consecutive failures within `WEBHOOK_BREAKER_WINDOW_SECONDS`, the breaker opens. New deliveries receive `BREAKER_OPEN` status and are deferred — they do **not** consume retry budget.
+- **HALF_OPEN**: After `WEBHOOK_BREAKER_RESET_SECONDS`, the breaker transitions to half-open and allows one probe delivery. If it succeeds, the breaker closes. If it fails, the breaker re-opens.
+
+### Configuration
+
+| Setting | Default | Description |
+|---|---|---|
+| `WEBHOOK_BREAKER_FAIL_THRESHOLD` | 10 | Consecutive failures before opening |
+| `WEBHOOK_BREAKER_WINDOW_SECONDS` | 300 | Time window for failure counting |
+| `WEBHOOK_BREAKER_RESET_SECONDS` | 600 | Time before transitioning to half-open |
+
+### Metrics
+
+A `webhook_breaker_state{host="..."}` Prometheus gauge exposes the current breaker state per host:
+- `0` = closed
+- `1` = half-open
+- `2` = open
+
+### Circuit Breaker Status
+
+Deliveries attempted while the breaker is open are marked `BREAKER_OPEN` and skipped. They do not count toward the retry budget. Once the breaker closes, deferred deliveries can be replayed via the existing replay endpoints.
+
+---
+
 ## Webhook Status Field
 
 Each webhook registration has a `status` field:

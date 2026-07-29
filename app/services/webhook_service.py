@@ -12,8 +12,8 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
-    verify_signature,
 )
+from app.services.webhook_breaker import breaker
 from app.core.config import settings
 from app.utils.network_validation import validate_webhook_url
 
@@ -130,6 +130,13 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
     validate_webhook_url(webhook.url)
 
+    # Check circuit breaker before attempting
+    if not breaker.allow_request(webhook.url):
+        delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
+        delivery.error_message = "Circuit breaker open, delivery deferred"
+        logger.warning("Webhook delivery %s deferred: circuit breaker open for %s.", delivery.id, webhook.url)
+        return False
+
     try:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook.url, content=payload_str, headers=headers)
@@ -137,16 +144,20 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         delivery.response_body = response.text[:4000]
 
         if response.is_success:
+            breaker.on_success(webhook.url)
             return True
         else:
+            breaker.on_failure(webhook.url)
             delivery.error_message = f"Non-success status: {response.status_code}"
             return False
 
     except httpx.TimeoutException as exc:
+        breaker.on_failure(webhook.url)
         delivery.error_message = f"Request timed out: {exc}"
         logger.warning("Webhook delivery %s timed out.", delivery.id)
         return False
     except httpx.RequestError as exc:
+        breaker.on_failure(webhook.url)
         delivery.error_message = f"Request error: {exc}"
         logger.warning("Webhook delivery %s failed with request error: %s", delivery.id, exc)
         return False
@@ -159,6 +170,20 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         return
 
     webhook = delivery.webhook
+
+    # If breaker is open, mark as breaker_open without consuming retry budget
+    if not breaker.allow_request(webhook.url):
+        delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
+        delivery.error_message = "Circuit breaker open, delivery deferred"
+        delivery.next_retry_at = None
+        delivery.updated_at = datetime.utcnow()
+        db.commit()
+        logger.warning(
+            "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
+            delivery.id, webhook.id,
+        )
+        return
+
     delivery.attempt_count += 1
     delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
     delivery.updated_at = datetime.utcnow()
@@ -174,6 +199,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             "Webhook delivery %s succeeded on attempt %d for webhook %s.",
             delivery.id, delivery.attempt_count, webhook.id,
         )
+    elif delivery.status == WebhookDeliveryStatus.BREAKER_OPEN:
+        pass
     else:
         retry_index = delivery.attempt_count - 1
         max_retries = webhook.max_retries or 3
@@ -190,7 +217,6 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
                 delivery.id, delivery.attempt_count, delay,
             )
         else:
-            # Mark as dead-letter instead of just failed
             delivery.status = WebhookDeliveryStatus.DEAD_LETTER
             delivery.dead_lettered_at = datetime.utcnow()
             delivery.next_retry_at = None
