@@ -63,7 +63,7 @@ class MetricsRegistry:
         """Get a summary of all metrics for exposure."""
         with self._lock:
             summary: dict[str, Any] = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "counters": dict(self._counters),
                 "gauges": dict(self._gauges),
                 "histograms": {},
