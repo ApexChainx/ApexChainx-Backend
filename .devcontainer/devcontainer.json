@@ -4,7 +4,7 @@
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "pip install -e . && alembic upgrade head",
+  "postCreateCommand": "pip install -e . && bash -c 'for i in {1..30}; do pg_isready -h postgres -U postgres -d apexchainx && break || sleep 2; done' && alembic upgrade head",
   "forwardPorts": [8000, 5432, 6379],
   "customizations": {
     "vscode": {
