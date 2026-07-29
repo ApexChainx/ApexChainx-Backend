@@ -48,7 +48,7 @@ jobs:
 
       # ── Also upload as artifact for download ────────────────────────────────
       - name: Upload Trivy SARIF as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: trivy-sarif
