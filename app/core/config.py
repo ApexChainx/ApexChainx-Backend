@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
+    SECRET_KEY: str = "apexchainx-dev-secret"
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
     DATABASE_AUDIT_URL: Optional[str] = None
     API_V1_PREFIX: str = "/api/v1"
