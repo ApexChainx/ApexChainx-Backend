@@ -1,0 +1,28 @@
+name: "🔒 Security Vulnerability Report"
+description: "Report a potential security flaw or vulnerability."
+title: "[SECURITY]: "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report severe security vulnerabilities publicly. See SECURITY.md for details.
+  - type: textarea
+    id: vulnerability-details
+    attributes:
+      label: Vulnerability Details
+      description: Describe the security issue, impact, and potential risk.
+    validations:
+      required: true
+  - type: textarea
+    id: affected-versions
+    attributes:
+      label: Affected Components / Endpoints
+      description: Specify affected endpoints, services, or dependencies.
+    validations:
+      required: true
+  - type: textarea
+    id: proof-of-concept
+    attributes:
+      label: Proof of Concept
+      description: Steps or payload to demonstrate the issue safely.
