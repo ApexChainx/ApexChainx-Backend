@@ -15,6 +15,7 @@ hypothesis
 tenacity
 schemathesis
 pytest-alembic
+mutmut
 # This file is auto-generated from pyproject.toml
 # Run: pip-compile pyproject.toml
 -e .
