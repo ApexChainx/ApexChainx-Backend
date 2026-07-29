@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC, timedelta
+from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import uuid4
 
 from app.core.config import settings
@@ -18,9 +19,9 @@ from app.models.wallet import (
 
 
 class WalletRegistry:
-    _wallets_by_user: dict[str, Wallet] = {}
-    _wallets_by_address: dict[str, Wallet] = {}
-    _link_locks: dict[str, bool] = {}  # Simple lock mechanism for link operations
+    _wallets_by_user: ClassVar[dict[str, Wallet]] = {}
+    _wallets_by_address: ClassVar[dict[str, Wallet]] = {}
+    _link_locks: ClassVar[dict[str, bool]] = {}  # Simple lock mechanism for link operations
 
     @staticmethod
     def _now() -> datetime:
@@ -87,27 +88,25 @@ class WalletRegistry:
     @classmethod
     def link_wallet(cls, payload: WalletLinkRequest) -> Wallet:
         """Link a wallet to a user with comprehensive conflict detection (BE-032).
-        
+
         Conflict detection rules:
         1. User already linked to a different address → Reject (409 Conflict)
         2. Address already linked to a different user → Reject (409 Conflict)
         3. Same user + same address → Idempotent update (allowed)
         4. No conflicts → Create new link
-        
+
         Thread-safe: uses simple lock to prevent race conditions during link operations.
         """
         now = cls._now()
         link_key = f"{payload.user_id}:{payload.public_key}"
-        
+
         # Simple lock to prevent concurrent link operations
         if cls._link_locks.get(link_key):
-            raise ValueError(
-                f"Link operation for user '{payload.user_id}' is already in progress."
-            )
-        
+            raise ValueError(f"Link operation for user '{payload.user_id}' is already in progress.")
+
         try:
             cls._link_locks[link_key] = True
-            
+
             # Check 1: User already linked to different address
             existing_by_user = cls._wallets_by_user.get(payload.user_id)
             if existing_by_user and existing_by_user.public_key != payload.public_key:

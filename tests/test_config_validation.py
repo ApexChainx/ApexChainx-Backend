@@ -33,17 +33,13 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_invalid_origins_fail_fast(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ALLOWED_ORIGINS=["localhost:3000"])
-            )
+            validate_critical_settings(self.make_settings(ALLOWED_ORIGINS=["localhost:3000"]))
 
         self.assertIn("ALLOWED_ORIGINS must contain valid http or https origins", str(ctx.exception))
 
     def test_invalid_contract_execution_mode_fails_fast(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(CONTRACT_EXECUTION_MODE="unsupported")
-            )
+            validate_critical_settings(self.make_settings(CONTRACT_EXECUTION_MODE="unsupported"))
 
         self.assertIn("CONTRACT_EXECUTION_MODE must be one of", str(ctx.exception))
 

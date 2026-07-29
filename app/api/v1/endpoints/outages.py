@@ -7,17 +7,21 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, Up
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints.sla import _invalidate_analytics_cache
+from app.core.config import settings
+from app.core.lock import ConcurrencyLockError, advisory_lock_nowait
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models import BulkOutageCreate, Outage, OutageCreate, OutageUpdate
 from app.models.enums import OutageStatus, Severity
 from app.models.outage import PaginatedOutages, ResolveOutageRequest
 from app.models.outage_dto import (
-    OutageSortDirection,
-    OutageSortField,
     ImportConsistency,
     ImportFieldError,
-    ImportRowResult,
     ImportResponse,
+    ImportRowResult,
+    OutageSortDirection,
+    OutageSortField,
 )
 from app.models.webhook import WebhookEvent
 from app.repositories.outage_event_repository import OutageEventRepository
@@ -28,10 +32,6 @@ from app.services.audit_log import audit_log
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.webhook_service import trigger_sla_violation_webhooks
 from app.utils.exporter import export_outages
-from app.api.v1.endpoints.sla import _invalidate_analytics_cache
-from app.core.security import require_engineer, require_admin
-from app.core.config import settings
-from app.core.lock import advisory_lock_nowait, ConcurrencyLockError
 
 router = APIRouter()
 
@@ -153,7 +153,9 @@ def create_outage(payload: OutageCreate, current_user=Depends(require_engineer),
 
 
 @router.post("/bulk", response_model=dict)
-def bulk_create_outages(payload: BulkOutageCreate, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def bulk_create_outages(
+    payload: BulkOutageCreate, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     repo = OutageRepository(db)
     items: list[Outage] = []
     persisted_count = 0
@@ -171,7 +173,11 @@ def bulk_create_outages(payload: BulkOutageCreate, current_user=Depends(require_
 # Duplicate detection is explicit and consistent for imports:
 # - same site_name, detected_at, description, and optional site_id are treated as the same outage
 # - duplicate rows are reported as duplicate and do not create additional persisted rows
-@router.post("/import", response_model=ImportResponse, summary="Bulk import outages from CSV or JSON file with optional dry-run validation and explicit consistency mode")
+@router.post(
+    "/import",
+    response_model=ImportResponse,
+    summary="Bulk import outages from CSV or JSON file with optional dry-run validation and explicit consistency mode",
+)
 async def import_outages(
     file: UploadFile = File(...),
     dry_run: bool = Query(
@@ -221,8 +227,7 @@ async def import_outages(
 
     if len(rows) > settings.MAX_BULK_OUTAGES_COUNT:
         raise HTTPException(
-            status_code=400,
-            detail=f"Too many rows in file. Maximum allowed is {settings.MAX_BULK_OUTAGES_COUNT}."
+            status_code=400, detail=f"Too many rows in file. Maximum allowed is {settings.MAX_BULK_OUTAGES_COUNT}."
         )
 
     repo = OutageRepository(db)
@@ -238,20 +243,24 @@ async def import_outages(
                 payload = OutageCreate(**row)  # Full field validation via Pydantic
                 duplicate = repo.check_duplicate(payload)  # Duplicate detection same as live import
                 if duplicate:
-                    row_outcomes.append(ImportRowResult(
-                        row=i, 
-                        id=payload.id, 
-                        status="ok",
-                        duplicate=True,
-                        existing_id=duplicate.id,
-                    ))
+                    row_outcomes.append(
+                        ImportRowResult(
+                            row=i,
+                            id=payload.id,
+                            status="ok",
+                            duplicate=True,
+                            existing_id=duplicate.id,
+                        )
+                    )
                 else:
-                    row_outcomes.append(ImportRowResult(
-                        row=i, 
-                        id=payload.id, 
-                        status="ok",
-                        duplicate=False,
-                    ))
+                    row_outcomes.append(
+                        ImportRowResult(
+                            row=i,
+                            id=payload.id,
+                            status="ok",
+                            duplicate=False,
+                        )
+                    )
             except Exception as exc:
                 row_outcomes.append(_row_error(i, row, exc))
     elif consistency == ImportConsistency.atomic:
@@ -285,15 +294,17 @@ async def import_outages(
             try:
                 payload = OutageCreate(**row)
                 created, persisted = repo.create_or_get_existing(payload)
-                row_outcomes.append(ImportRowResult(
-                    row=i,
-                    id=payload.id,
-                    status="ok",
-                    outage_id=created.id,
-                    persisted=persisted,
-                    duplicate=not persisted,
-                    existing_id=created.id if not persisted else None,
-                ))
+                row_outcomes.append(
+                    ImportRowResult(
+                        row=i,
+                        id=payload.id,
+                        status="ok",
+                        outage_id=created.id,
+                        persisted=persisted,
+                        duplicate=not persisted,
+                        existing_id=created.id if not persisted else None,
+                    )
+                )
                 if persisted:
                     persisted_count += 1
             except Exception as exc:
@@ -301,23 +312,29 @@ async def import_outages(
                 row_outcomes.append(_row_error(i, row, exc))
 
     return _import_response("dry_run" if dry_run else "import", consistency, len(rows), persisted_count, row_outcomes)
+
+
 def _row_error(index: int, raw_row: dict, exc: Exception) -> ImportRowResult:
     """Return a stable machine-readable ImportRowResult for a failed row."""
     errors: list[ImportFieldError] = []
     if hasattr(exc, "errors"):
         for e in exc.errors():  # type: ignore[union-attr]
-            errors.append(ImportFieldError(
-                field=".".join(str(loc) for loc in e["loc"]) if e.get("loc") else None,
-                type=e.get("type"),
-                message=e.get("msg", str(e)),
-            ))
+            errors.append(
+                ImportFieldError(
+                    field=".".join(str(loc) for loc in e["loc"]) if e.get("loc") else None,
+                    type=e.get("type"),
+                    message=e.get("msg", str(e)),
+                )
+            )
     else:
         errors.append(ImportFieldError(field=None, type=type(exc).__name__, message=str(exc)))
 
     return ImportRowResult(row=index, id=raw_row.get("id"), status="error", errors=errors)
 
 
-def _import_response(mode: str, consistency: ImportConsistency, total: int, persisted: int, outcomes: list[ImportRowResult]) -> ImportResponse:
+def _import_response(
+    mode: str, consistency: ImportConsistency, total: int, persisted: int, outcomes: list[ImportRowResult]
+) -> ImportResponse:
     error_rows = [r for r in outcomes if r.status == "error"]
     return ImportResponse(
         mode=mode,
@@ -332,7 +349,9 @@ def _import_response(mode: str, consistency: ImportConsistency, total: int, pers
 
 
 @router.put("/{outage_id}", response_model=Outage)
-def update_outage(outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def update_outage(
+    outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     repo = OutageRepository(db)
     existing = repo.get(outage_id)
     if not existing:
@@ -347,9 +366,11 @@ def update_outage(outage_id: str, payload: OutageUpdate, current_user=Depends(re
 
 
 @router.patch("/{outage_id}", response_model=Outage)
-def patch_outage(outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def patch_outage(
+    outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     """Partially update an outage with status transition validation (BE-013).
-    
+
     Enforced transitions:
     - open -> open (idempotent)
     - open -> resolved (permitted)
@@ -381,22 +402,24 @@ def delete_outage(outage_id: str, current_user=Depends(require_admin), db: Sessi
 
 
 @router.post("/{outage_id}/resolve")
-def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def resolve_outage(
+    outage_id: str, payload: ResolveOutageRequest, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     """Resolve an outage, compute SLA, and create payment (BE-013).
-    
+
     Status transition validation:
     - open -> resolved (permitted)
     - resolved -> resolved (idempotent if mttr_minutes matches)
     - Other transitions: 400 Bad Request
-    
+
     Concurrency protection (BE-022):
     - Uses PostgreSQL advisory locks to prevent duplicate/concurrent resolutions
     - Returns 409 Conflict if another resolution is already in progress
-    
+
     Also calculates SLA metrics and triggers webhook notifications.
     """
     repo = OutageRepository(db)
-    
+
     # Acquire advisory lock to prevent concurrent resolutions
     try:
         with advisory_lock_nowait(db, f"resolve:{outage_id}"):
@@ -440,15 +463,15 @@ def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=D
 @router.post("/{outage_id}/recompute-sla")
 def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     """Recompute SLA for a resolved outage (BE-013, BE-009).
-    
+
     Status validation:
     - Only 'resolved' outages can have SLA recomputed
     - Returns 400 if outage not resolved
-    
+
     Concurrency protection (BE-022):
     - Uses PostgreSQL advisory locks to prevent duplicate/concurrent recomputations
     - Returns 409 Conflict if another recomputation is already in progress
-    
+
     Authorization: requires engineer role
     """
     repo = OutageRepository(db)

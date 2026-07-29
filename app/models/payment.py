@@ -1,6 +1,5 @@
 from datetime import datetime
 from enum import Enum
-from typing import Dict, FrozenSet, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +11,7 @@ class PaymentStatus(str, Enum):
 
 
 # Allowed transitions: from_status -> set of valid to_statuses
-VALID_TRANSITIONS: Dict[PaymentStatus, FrozenSet[PaymentStatus]] = {
+VALID_TRANSITIONS: dict[PaymentStatus, frozenset[PaymentStatus]] = {
     PaymentStatus.pending: frozenset({PaymentStatus.confirmed, PaymentStatus.failed}),
     PaymentStatus.confirmed: frozenset(),
     PaymentStatus.failed: frozenset({PaymentStatus.pending}),
@@ -30,10 +29,7 @@ class PaymentTransitionError(ValueError):
         self.current = current
         self.next_status = next_status
         self.allowed = allowed
-        super().__init__(
-            f"Transition from '{current}' to '{next_status}' is not allowed. "
-            f"Allowed: {allowed or 'none'}"
-        )
+        super().__init__(f"Transition from '{current}' to '{next_status}' is not allowed. Allowed: {allowed or 'none'}")
 
 
 def validate_transition(current: str, next_status: str) -> None:
@@ -51,7 +47,8 @@ def validate_transition(current: str, next_status: str) -> None:
             current=current,
             next_status=next_status,
             allowed={s.value for s in VALID_TRANSITIONS.get(PaymentStatus(current), frozenset())}
-            if current in PaymentStatus._value2member_map_ else set(),
+            if current in PaymentStatus._value2member_map_
+            else set(),
         )
     if next_enum not in VALID_TRANSITIONS[current_enum]:
         allowed = {s.value for s in VALID_TRANSITIONS[current_enum]}
@@ -89,15 +86,15 @@ class PaymentTransaction(BaseModel):
     to_address: str
     status: str
     outage_id: str
-    sla_result_id: Optional[int] = None
+    sla_result_id: int | None = None
     created_at: datetime
-    confirmed_at: Optional[datetime] = None
+    confirmed_at: datetime | None = None
     retry_count: int = 0
-    last_retried_at: Optional[datetime] = None
+    last_retried_at: datetime | None = None
 
 
 class PaginatedPayments(BaseModel):
-    items: List[PaymentTransaction]
+    items: list[PaymentTransaction]
     total: int
     page: int = Field(..., ge=1)
     page_size: int = Field(..., ge=1, le=100)

@@ -13,7 +13,7 @@ _KEY_MAX_LEN = 56
 class NormalizedAddress:
     """Immutable value object representing a validated, canonical wallet address."""
 
-    value: str 
+    value: str
 
     def __str__(self) -> str:
         return self.value
@@ -52,8 +52,7 @@ def normalize(raw: str) -> NormalizedAddress:
     if len(upper) != _KEY_MAX_LEN:
         raise WalletAddressError(
             raw,
-            f"Stellar public keys must be exactly {_KEY_MAX_LEN} characters "
-            f"(got {len(upper)})",
+            f"Stellar public keys must be exactly {_KEY_MAX_LEN} characters (got {len(upper)})",
         )
 
     if not upper.startswith("G"):
@@ -65,8 +64,7 @@ def normalize(raw: str) -> NormalizedAddress:
     if not _STELLAR_PUBLIC_KEY_RE.match(upper):
         raise WalletAddressError(
             raw,
-            "Stellar public keys may only contain uppercase letters A-Z and digits 2-7 "
-            "(base-32 alphabet, no 0/1/8/9)",
+            "Stellar public keys may only contain uppercase letters A-Z and digits 2-7 (base-32 alphabet, no 0/1/8/9)",
         )
 
     return NormalizedAddress(value=upper)

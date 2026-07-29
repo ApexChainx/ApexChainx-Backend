@@ -1,5 +1,6 @@
 import re
-from typing import Any, Optional
+from typing import Any
+
 from app.core.config import settings
 
 STELLAR_SECRET_RE = re.compile(r"^S[A-Za-z0-9]{55}$")
@@ -7,7 +8,7 @@ ED25519_KEY_RE = re.compile(r"^[A-Za-z0-9+/=]{88}$")
 LONG_KEY_RE = re.compile(r"^[A-Za-z0-9+/=_\-]{32,}$")
 
 
-def scrub_details(details: Optional[dict[str, Any]]) -> dict[str, Any]:
+def scrub_details(details: dict[str, Any] | None) -> dict[str, Any]:
     if not details:
         return {}
     safe = details.copy()

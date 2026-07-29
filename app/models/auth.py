@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,9 +21,9 @@ class AuthUser(BaseModel):
 
     id: str
     email: str
-    full_name: Optional[str] = None
+    full_name: str | None = None
     role: Role = Role.engineer
-    stellar_wallet: Optional[str] = None
+    stellar_wallet: str | None = None
     created_at: datetime
 
 
@@ -72,6 +71,7 @@ class AuthLogoutResponse(BaseModel):
 
 class SessionInfo(BaseModel):
     """Session information for session inventory (excludes full token material)."""
+
     access_token_preview: str | None = None
     refresh_token_preview: str | None = None
     email: str
@@ -82,6 +82,7 @@ class SessionInfo(BaseModel):
 
 class SessionInventoryResponse(BaseModel):
     """Response for session inventory endpoint."""
+
     sessions: list[SessionInfo]
     total_count: int
     active_count: int
@@ -89,11 +90,13 @@ class SessionInventoryResponse(BaseModel):
 
 class LogoutAllSessionsResponse(BaseModel):
     """Response for logout-all-sessions endpoint."""
+
     message: str
     sessions_invalidated: int
 
 
 class ProfileUpdateRequest(BaseModel):
     """Allowed mutable profile fields. Role and email changes are not permitted here."""
-    full_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    stellar_wallet: Optional[str] = Field(default=None, max_length=255)
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    stellar_wallet: str | None = Field(default=None, max_length=255)

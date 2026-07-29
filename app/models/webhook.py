@@ -1,10 +1,11 @@
-from sqlalchemy.dialects.postgresql import JSONB
+import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey, Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
-import enum
 
 from app.db.base_class import Base
 
@@ -36,7 +37,7 @@ class Webhook(Base):
     max_retries = Column(Integer, default=3, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
+
     # BE-034: Secret lifecycle metadata
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
     secret_version = Column(Integer, default=1, nullable=False)  # Incremented on each rotation

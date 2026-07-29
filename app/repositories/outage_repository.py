@@ -1,12 +1,12 @@
-from datetime import datetime, timezone
-from typing import List, Optional
+import builtins
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, asc, desc, or_
 from sqlalchemy.orm import Session
 
 from app.models.enums import OutageStatus, Severity
 from app.models.orm.outage import OutageORM
-from app.models.outage import Outage, Location, SLAStatus
+from app.models.outage import Location, Outage, SLAStatus
 from app.models.outage_dto import OutageCreate, OutageSortDirection, OutageSortField, OutageUpdate
 
 
@@ -51,11 +51,11 @@ class OutageRepository:
 
     def list(
         self,
-        severity: Optional[Severity] = None,
-        status: Optional[OutageStatus] = None,
-        search: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        severity: Severity | None = None,
+        status: OutageStatus | None = None,
+        search: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
         sort_by: OutageSortField = OutageSortField.detected_at,
@@ -97,18 +97,18 @@ class OutageRepository:
             "sort_direction": sort_direction.value,
         }
 
-    def list_all(self) -> List[Outage]:
+    def list_all(self) -> builtins.list[Outage]:
         rows = self.db.query(OutageORM).all()
         return [_orm_to_pydantic(r) for r in rows]
 
     def list_filtered(
         self,
-        severity: Optional[Severity] = None,
-        status: Optional[OutageStatus] = None,
-        search: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-    ) -> List[Outage]:
+        severity: Severity | None = None,
+        status: OutageStatus | None = None,
+        search: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> builtins.list[Outage]:
         query = self.db.query(OutageORM)
         if severity:
             query = query.filter(OutageORM.severity == severity.value)
@@ -128,23 +128,18 @@ class OutageRepository:
             query = query.filter(OutageORM.detected_at <= end_date)
         return [_orm_to_pydantic(r) for r in query.all()]
 
-    def get(self, outage_id: str) -> Optional[Outage]:
+    def get(self, outage_id: str) -> Outage | None:
         row = self.db.query(OutageORM).filter(OutageORM.id == outage_id).first()
         if not row:
             return None
         return _orm_to_pydantic(row)
 
-    def get_orm(self, outage_id: str) -> Optional[OutageORM]:
+    def get_orm(self, outage_id: str) -> OutageORM | None:
         return self.db.query(OutageORM).filter(OutageORM.id == outage_id).first()
 
-    def get_orm_locked(self, outage_id: str) -> Optional[OutageORM]:
+    def get_orm_locked(self, outage_id: str) -> OutageORM | None:
         """Acquire a row-level lock (SELECT FOR UPDATE) before mutating."""
-        return (
-            self.db.query(OutageORM)
-            .filter(OutageORM.id == outage_id)
-            .with_for_update()
-            .first()
-        )
+        return self.db.query(OutageORM).filter(OutageORM.id == outage_id).with_for_update().first()
 
     @staticmethod
     def validate_status_transition(current_status: str, next_status: str) -> None:
@@ -152,7 +147,7 @@ class OutageRepository:
         if next_status not in allowed:
             raise ValueError(f"Invalid status transition: {current_status} -> {next_status}")
 
-    def _find_duplicate_orm(self, payload: OutageCreate) -> Optional[OutageORM]:
+    def _find_duplicate_orm(self, payload: OutageCreate) -> OutageORM | None:
         query = self.db.query(OutageORM).filter(
             and_(
                 OutageORM.site_name == payload.site_name,
@@ -181,7 +176,7 @@ class OutageRepository:
             and (orm.location or None) == (payload.location.model_dump() if payload.location else None)
         )
 
-    def check_duplicate(self, payload: OutageCreate) -> Optional[Outage]:
+    def check_duplicate(self, payload: OutageCreate) -> Outage | None:
         existing_by_id = self.get_orm(payload.id)
         if existing_by_id:
             if self._is_same_outage(existing_by_id, payload):
@@ -227,10 +222,10 @@ class OutageRepository:
         outage, _ = self.create_or_get_existing(payload)
         return outage
 
-    def bulk_create(self, outages: List[OutageCreate]) -> List[Outage]:
+    def bulk_create(self, outages: builtins.list[OutageCreate]) -> builtins.list[Outage]:
         return [self.create(payload) for payload in outages]
 
-    def update(self, outage_id: str, payload: OutageUpdate) -> Optional[Outage]:
+    def update(self, outage_id: str, payload: OutageUpdate) -> Outage | None:
         orm = self.get_orm(outage_id)
         if not orm:
             return None
@@ -249,7 +244,7 @@ class OutageRepository:
             else:
                 setattr(orm, key, value)
 
-        orm.updated_at = datetime.now(timezone.utc)
+        orm.updated_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
@@ -260,7 +255,7 @@ class OutageRepository:
             self.db.delete(orm)
             self.db.commit()
 
-    def resolve(self, outage_id: str, mttr_minutes: int) -> Optional[Outage]:
+    def resolve(self, outage_id: str, mttr_minutes: int) -> Outage | None:
         orm = self.get_orm_locked(outage_id)
         if not orm:
             return None
@@ -272,20 +267,16 @@ class OutageRepository:
         self.validate_status_transition(orm.status, OutageStatus.resolved.value)
         orm.status = OutageStatus.resolved.value
         orm.mttr_minutes = mttr_minutes
-        orm.resolved_at = datetime.now(timezone.utc)
-        orm.updated_at = datetime.now(timezone.utc)
+        orm.resolved_at = datetime.now(UTC)
+        orm.updated_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def list_violations(self) -> List[dict]:
+    def list_violations(self) -> builtins.list[dict]:
         from app.services.sla import SLACalculator
 
-        rows = (
-            self.db.query(OutageORM)
-            .filter(OutageORM.status == OutageStatus.resolved.value)
-            .all()
-        )
+        rows = self.db.query(OutageORM).filter(OutageORM.status == OutageStatus.resolved.value).all()
 
         violations = []
         for orm in rows:

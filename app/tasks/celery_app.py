@@ -1,4 +1,5 @@
 from celery import Celery
+
 from app.core.config import settings
 
 celery_app = Celery(
@@ -23,7 +24,6 @@ celery_app.conf.update(
     task_store_eager_result=True,
     worker_prefetch_multiplier=1,
     result_expires=86400,  # 24 hours
-
     beat_schedule={
         "retry-pending-webhook-deliveries": {
             "task": "app.tasks.webhook_tasks.retry_pending_webhook_deliveries",

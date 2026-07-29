@@ -24,7 +24,14 @@ class SLAContractAdapter:
         }
 
     @classmethod
-    def calculate_sla(cls, outage_id: str, severity: str, mttr_minutes: int, policy_version: str = "1.0", threshold_source: str = "config") -> dict[str, Any]:
+    def calculate_sla(
+        cls,
+        outage_id: str,
+        severity: str,
+        mttr_minutes: int,
+        policy_version: str = "1.0",
+        threshold_source: str = "config",
+    ) -> dict[str, Any]:
         local_result = SLACalculator.calculate(
             outage_id=outage_id,
             severity=severity,

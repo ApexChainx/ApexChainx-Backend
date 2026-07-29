@@ -1,10 +1,13 @@
 from app.models import SLAResult
+
 from .config import SLA_CONFIG, get_config_for_severity
 
 
 class SLACalculator:
     @staticmethod
-    def calculate(outage_id: str, severity: str, mttr_minutes: int, policy_version: str = "1.0", threshold_source: str = "config") -> SLAResult:
+    def calculate(
+        outage_id: str, severity: str, mttr_minutes: int, policy_version: str = "1.0", threshold_source: str = "config"
+    ) -> SLAResult:
         severity = severity.lower()
 
         if severity not in SLA_CONFIG:
@@ -16,7 +19,7 @@ class SLACalculator:
         except ValueError:
             # Fallback to default config if version-specific config not found
             config = SLA_CONFIG[severity]
-        
+
         threshold = config.threshold_minutes
 
         # Case 1: SLA violated → penalty

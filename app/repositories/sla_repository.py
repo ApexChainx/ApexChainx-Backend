@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
-from typing import List, Literal, Mapping, Optional
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import case, func, select, update
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.orm.sla_snapshot import SLAAnalyticsSnapshotORM
-from app.models.sla import SLAResult, SLADashboardKPI, SLAPerformanceAggregation, SLATrendPoint, SLAAnalyticsSnapshot
+from app.models.sla import SLAAnalyticsSnapshot, SLADashboardKPI, SLAPerformanceAggregation, SLAResult, SLATrendPoint
 
 BucketInterval = Literal["day", "week", "month"]
 VALID_BUCKETS: tuple[str, ...] = ("day", "week", "month")
@@ -90,7 +91,7 @@ class SLARepository:
 
         return self.create(payload)
 
-    def get_by_outage(self, outage_id: str) -> Optional[SLAResult]:
+    def get_by_outage(self, outage_id: str) -> SLAResult | None:
         """Return the authoritative latest SLA result for an outage (#154)."""
         orm = (
             self.db.query(SLAResultORM)
@@ -109,7 +110,7 @@ class SLARepository:
             return None
         return _orm_to_pydantic(orm)
 
-    def list_by_outage(self, outage_id: str) -> List[SLAResult]:
+    def list_by_outage(self, outage_id: str) -> list[SLAResult]:
         rows = (
             self.db.query(SLAResultORM)
             .filter(SLAResultORM.outage_id == outage_id)
@@ -120,26 +121,23 @@ class SLARepository:
 
     def aggregate_performance(
         self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        severity: Optional[str] = None,
-        site_id: Optional[str] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        severity: str | None = None,
+        site_id: str | None = None,
     ) -> SLAPerformanceAggregation:
-        latest_results_query = (
-            select(
-                SLAResultORM.outage_id.label("outage_id"),
-                SLAResultORM.status.label("status"),
-                SLAResultORM.mttr_minutes.label("mttr_minutes"),
-                SLAResultORM.amount.label("amount"),
-                func.row_number()
-                .over(
-                    partition_by=SLAResultORM.outage_id,
-                    order_by=(SLAResultORM.created_at.desc(), SLAResultORM.id.desc()),
-                )
-                .label("rn"),
+        latest_results_query = select(
+            SLAResultORM.outage_id.label("outage_id"),
+            SLAResultORM.status.label("status"),
+            SLAResultORM.mttr_minutes.label("mttr_minutes"),
+            SLAResultORM.amount.label("amount"),
+            func.row_number()
+            .over(
+                partition_by=SLAResultORM.outage_id,
+                order_by=(SLAResultORM.created_at.desc(), SLAResultORM.id.desc()),
             )
-            .join(OutageORM, OutageORM.id == SLAResultORM.outage_id)
-        )
+            .label("rn"),
+        ).join(OutageORM, OutageORM.id == SLAResultORM.outage_id)
 
         if start_date:
             latest_results_query = latest_results_query.where(SLAResultORM.created_at >= start_date)
@@ -152,18 +150,15 @@ class SLARepository:
 
         latest_results = latest_results_query.subquery()
 
-        aggregate_query = (
-            select(
-                func.count(latest_results.c.outage_id).label("total_outages"),
-                func.coalesce(
-                    func.sum(case((latest_results.c.status == "violated", 1), else_=0)),
-                    0,
-                ).label("total_violations"),
-                func.coalesce(func.avg(latest_results.c.mttr_minutes), 0.0).label("avg_mttr"),
-                func.coalesce(func.sum(latest_results.c.amount), 0.0).label("payout_sum"),
-            )
-            .where(latest_results.c.rn == 1)
-        )
+        aggregate_query = select(
+            func.count(latest_results.c.outage_id).label("total_outages"),
+            func.coalesce(
+                func.sum(case((latest_results.c.status == "violated", 1), else_=0)),
+                0,
+            ).label("total_violations"),
+            func.coalesce(func.avg(latest_results.c.mttr_minutes), 0.0).label("avg_mttr"),
+            func.coalesce(func.sum(latest_results.c.amount), 0.0).label("payout_sum"),
+        ).where(latest_results.c.rn == 1)
 
         row = self.db.execute(aggregate_query).one()
         total_outages = int(row.total_outages or 0)
@@ -179,25 +174,23 @@ class SLARepository:
 
     def aggregate_dashboard_kpis(
         self,
-        severity: Optional[str] = None,
-        site_id: Optional[str] = None,
+        severity: str | None = None,
+        site_id: str | None = None,
     ) -> SLADashboardKPI:
-        query = (
-            select(
-                func.count(SLAResultORM.id).label("total_outages"),
-                func.coalesce(
-                    func.sum(case((SLAResultORM.status == "violated", 1), else_=0)),
-                    0,
-                ).label("total_violations"),
-                func.coalesce(
-                    func.sum(case((SLAResultORM.payment_type == "reward", SLAResultORM.amount), else_=0.0)),
-                    0.0,
-                ).label("total_rewards"),
-                func.coalesce(
-                    func.sum(case((SLAResultORM.payment_type == "penalty", func.abs(SLAResultORM.amount)), else_=0.0)),
-                    0.0,
-                ).label("total_penalties"),
-            )
+        query = select(
+            func.count(SLAResultORM.id).label("total_outages"),
+            func.coalesce(
+                func.sum(case((SLAResultORM.status == "violated", 1), else_=0)),
+                0,
+            ).label("total_violations"),
+            func.coalesce(
+                func.sum(case((SLAResultORM.payment_type == "reward", SLAResultORM.amount), else_=0.0)),
+                0.0,
+            ).label("total_rewards"),
+            func.coalesce(
+                func.sum(case((SLAResultORM.payment_type == "penalty", func.abs(SLAResultORM.amount)), else_=0.0)),
+                0.0,
+            ).label("total_penalties"),
         )
 
         if severity or site_id:
@@ -223,14 +216,14 @@ class SLARepository:
         limit_days: int = 7,
         bucket: BucketInterval = "day",
         tz: str = "UTC",
-        severity: Optional[str] = None,
-        site_id: Optional[str] = None,
-    ) -> List[SLATrendPoint]:
+        severity: str | None = None,
+        site_id: str | None = None,
+    ) -> list[SLATrendPoint]:
         if bucket not in VALID_BUCKETS:
             raise ValueError(f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
 
         try:
-            tzinfo = ZoneInfo(tz)
+            ZoneInfo(tz)
         except ZoneInfoNotFoundError:
             raise ValueError(f"Unknown timezone: '{tz}'")
 
@@ -297,7 +290,7 @@ class SLARepository:
             total_penalties=kpis.total_penalties,
             net_payout=kpis.net_payout,
             avg_mttr=perf.avg_mttr,
-            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            created_at=datetime.now(UTC).replace(tzinfo=None),
             checksum="",  # Temporary value, will be computed
         )
         orm.checksum = orm.compute_checksum()
@@ -317,7 +310,7 @@ class SLARepository:
             created_at=str(orm.created_at),
         )
 
-    def get_latest_snapshot(self, snapshot_key: str = "global") -> Optional[SLAAnalyticsSnapshot]:
+    def get_latest_snapshot(self, snapshot_key: str = "global") -> SLAAnalyticsSnapshot | None:
         """Return the most recent snapshot for the given key."""
         orm = (
             self.db.query(SLAAnalyticsSnapshotORM)
@@ -342,18 +335,18 @@ class SLARepository:
 
     def rebuild_snapshot(self, snapshot_key: str = "global") -> SLAAnalyticsSnapshot:
         """Rebuild a snapshot from current live data. Idempotent operation.
-        
+
         This method:
         1. Aggregates current SLA data from scratch
         2. Creates a new snapshot row (doesn't delete old ones)
         3. Returns the new snapshot
-        
+
         Safe for reconciliation after migrations or data drift.
         """
         # Aggregate fresh data
         kpis = self.aggregate_dashboard_kpis()
         perf = self.aggregate_performance()
-        
+
         # Create new snapshot with current data
         orm = SLAAnalyticsSnapshotORM(
             snapshot_key=snapshot_key,
@@ -363,14 +356,14 @@ class SLARepository:
             total_penalties=kpis.total_penalties,
             net_payout=kpis.net_payout,
             avg_mttr=perf.avg_mttr,
-            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            created_at=datetime.now(UTC).replace(tzinfo=None),
             checksum="",
         )
         orm.checksum = orm.compute_checksum()
         self.db.add(orm)
         self.db.commit()
         self.db.refresh(orm)
-        
+
         return SLAAnalyticsSnapshot(
             id=orm.id,
             snapshot_key=orm.snapshot_key,
@@ -386,7 +379,7 @@ class SLARepository:
 
     def verify_snapshot_integrity(self, snapshot_key: str = "global") -> dict:
         """Verify integrity of the latest snapshot.
-        
+
         Returns a dict with:
         - "valid": bool indicating if the snapshot is intact
         - "snapshot_id": int if snapshot exists
@@ -409,21 +402,21 @@ class SLARepository:
 
     def reconcile_snapshots(self, snapshot_key: str = "global") -> dict:
         """Reconcile snapshots by comparing latest snapshot with live data.
-        
+
         Returns reconciliation report showing:
         - Whether the latest snapshot matches current live aggregates
         - Differences if any exist
         - Recommendation to rebuild if drifted
-        
+
         This is a read-only operation that helps identify data drift.
         """
         # Get latest snapshot
         latest_snapshot = self.get_latest_snapshot(snapshot_key)
-        
+
         # Calculate current live aggregates
         current_kpis = self.aggregate_dashboard_kpis()
         current_perf = self.aggregate_performance()
-        
+
         if not latest_snapshot:
             return {
                 "snapshot_key": snapshot_key,
@@ -437,19 +430,19 @@ class SLARepository:
                     "total_penalties": current_kpis.total_penalties,
                     "net_payout": current_kpis.net_payout,
                     "avg_mttr": current_perf.avg_mttr,
-                }
+                },
             }
-        
+
         # Compare snapshot with live data
         drift_detected = (
-            latest_snapshot.total_outages != current_kpis.total_outages or
-            latest_snapshot.total_violations != current_kpis.total_violations or
-            latest_snapshot.total_rewards != current_kpis.total_rewards or
-            latest_snapshot.total_penalties != current_kpis.total_penalties or
-            abs(latest_snapshot.net_payout - current_kpis.net_payout) > 0.01 or
-            abs(latest_snapshot.avg_mttr - current_perf.avg_mttr) > 0.01
+            latest_snapshot.total_outages != current_kpis.total_outages
+            or latest_snapshot.total_violations != current_kpis.total_violations
+            or latest_snapshot.total_rewards != current_kpis.total_rewards
+            or latest_snapshot.total_penalties != current_kpis.total_penalties
+            or abs(latest_snapshot.net_payout - current_kpis.net_payout) > 0.01
+            or abs(latest_snapshot.avg_mttr - current_perf.avg_mttr) > 0.01
         )
-        
+
         differences = {}
         if drift_detected:
             if latest_snapshot.total_outages != current_kpis.total_outages:
@@ -488,7 +481,7 @@ class SLARepository:
                     "live": current_perf.avg_mttr,
                     "diff": round(current_perf.avg_mttr - latest_snapshot.avg_mttr, 2),
                 }
-        
+
         return {
             "snapshot_key": snapshot_key,
             "has_snapshot": True,
@@ -512,5 +505,5 @@ class SLARepository:
                 "total_penalties": latest_snapshot.total_penalties,
                 "net_payout": latest_snapshot.net_payout,
                 "avg_mttr": latest_snapshot.avg_mttr,
-            }
+            },
         }

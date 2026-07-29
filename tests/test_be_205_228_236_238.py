@@ -5,40 +5,40 @@ Tests for issues:
   #236 – Make webhook retry backoff policy configurable
   #238 – Structured progress events and partial-result retrieval
 """
-import sys
-import types
+
 import unittest
+from datetime import UTC
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from app.core.config import Settings, validate_critical_settings
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_settings(**overrides):
-    defaults = dict(
-        PROJECT_NAME="ApexChainx API",
-        VERSION="1.0.0",
-        DEBUG=False,
-        DATABASE_URL="postgresql://postgres:password@localhost:5432/apexchainx",
-        API_V1_PREFIX="/api/v1",
-        ALLOWED_ORIGINS=["http://localhost:3000"],
-        CELERY_BROKER_URL="redis://localhost:6379/0",
-        CELERY_RESULT_BACKEND="redis://localhost:6379/0",
-        CELERY_TASK_ALWAYS_EAGER=True,
-        SLA_CONTRACT_ADDRESS="local-sla-calculator",
-        STELLAR_NETWORK="testnet",
-        CONTRACT_EXECUTION_MODE="local_adapter",
-        PAYMENT_ASSET_CODE="USDC",
-        PAYMENT_FROM_ADDRESS="POOL",
-        PAYMENT_TO_ADDRESS="SETTLEMENT",
-        TRUSTED_PROXY_COUNT=0,
-        WEBHOOK_RETRY_BASE_DELAYS="30,120,600",
-        WEBHOOK_RETRY_MAX_DELAY_SECONDS=3600,
-    )
+    defaults = {
+        "PROJECT_NAME": "ApexChainx API",
+        "VERSION": "1.0.0",
+        "DEBUG": False,
+        "DATABASE_URL": "postgresql://postgres:password@localhost:5432/apexchainx",
+        "API_V1_PREFIX": "/api/v1",
+        "ALLOWED_ORIGINS": ["http://localhost:3000"],
+        "CELERY_BROKER_URL": "redis://localhost:6379/0",
+        "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
+        "CELERY_TASK_ALWAYS_EAGER": True,
+        "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
+        "STELLAR_NETWORK": "testnet",
+        "CONTRACT_EXECUTION_MODE": "local_adapter",
+        "PAYMENT_ASSET_CODE": "USDC",
+        "PAYMENT_FROM_ADDRESS": "POOL",
+        "PAYMENT_TO_ADDRESS": "SETTLEMENT",
+        "TRUSTED_PROXY_COUNT": 0,
+        "WEBHOOK_RETRY_BASE_DELAYS": "30,120,600",
+        "WEBHOOK_RETRY_MAX_DELAY_SECONDS": 3600,
+    }
     defaults.update(overrides)
     return Settings.model_construct(**defaults)
 
@@ -47,6 +47,7 @@ def _make_settings(**overrides):
 # Inline implementation of _get_client_ip for isolated testing (#205)
 # This mirrors the implementation in app/api/v1/endpoints/auth.py exactly.
 # ---------------------------------------------------------------------------
+
 
 def _get_client_ip_impl(request, trusted_proxy_count: int) -> str:
     """Inline copy of the hardened _get_client_ip logic for isolated testing."""
@@ -63,6 +64,7 @@ def _get_client_ip_impl(request, trusted_proxy_count: int) -> str:
 # ---------------------------------------------------------------------------
 # #205 – Trusted-proxy / forwarded-header hardening
 # ---------------------------------------------------------------------------
+
 
 class TestGetClientIp(unittest.TestCase):
     def _req(self, xff_header, direct_host="1.2.3.4"):
@@ -133,6 +135,7 @@ class TestGetClientIp(unittest.TestCase):
 # #228 – Payment config validation
 # ---------------------------------------------------------------------------
 
+
 class TestPaymentConfigValidation(unittest.TestCase):
     def test_valid_payment_config_passes(self):
         validate_critical_settings(_make_settings())
@@ -161,6 +164,7 @@ class TestPaymentConfigValidation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # #236 – Configurable webhook retry backoff
 # ---------------------------------------------------------------------------
+
 
 class TestWebhookRetryConfig(unittest.TestCase):
     def test_valid_retry_config_passes(self):
@@ -201,8 +205,8 @@ class TestWebhookRetryConfig(unittest.TestCase):
 
     def test_dispatch_delivery_respects_max_delay_cap(self):
         """Computed delay must never exceed WEBHOOK_RETRY_MAX_DELAY_SECONDS."""
-        from app.services.webhook_service import dispatch_delivery
         from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+        from app.services.webhook_service import dispatch_delivery
 
         db = MagicMock()
 
@@ -225,13 +229,17 @@ class TestWebhookRetryConfig(unittest.TestCase):
         def fake_attempt(d, w):
             return False  # always fail to trigger retry scheduling
 
-        with patch("app.services.webhook_service._attempt_delivery", side_effect=fake_attempt), \
-             patch("app.services.webhook_service.settings") as mock_settings, \
-             patch("app.services.webhook_service.datetime") as mock_dt:
-            from datetime import datetime as real_dt, timedelta
+        with (
+            patch("app.services.webhook_service._attempt_delivery", side_effect=fake_attempt),
+            patch("app.services.webhook_service.settings") as mock_settings,
+            patch("app.services.webhook_service.datetime") as mock_dt,
+        ):
+            from datetime import datetime as real_dt
+            from datetime import timedelta
+
             mock_settings.WEBHOOK_RETRY_BASE_DELAYS = "9999,9999,9999"
             mock_settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS = 120
-            mock_dt.utcnow.return_value = real_dt(2026, 1, 1)
+            mock_dt.utcnow.return_value = real_dt(2026, 1, 1, tzinfo=UTC)
 
             def capture_timedelta(**kwargs):
                 captured_delay["seconds"] = kwargs.get("seconds", 0)
@@ -247,6 +255,7 @@ class TestWebhookRetryConfig(unittest.TestCase):
 # #238 – Structured progress endpoint (schema-level tests, no circular import)
 # ---------------------------------------------------------------------------
 
+
 class TestJobProgressSchema(unittest.TestCase):
     """
     Tests for the JobProgressResponse schema and the progress endpoint logic.
@@ -256,24 +265,26 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def _make_progress_response(self, **kwargs):
         """Build a JobProgressResponse using only Pydantic — no circular imports."""
-        from pydantic import BaseModel
-        from typing import Optional
         from uuid import UUID
+
+        from pydantic import BaseModel
+
         from app.models.job import JobStatus
 
         class JobProgressResponse(BaseModel):
             id: UUID
             status: JobStatus
             progress: float
-            progress_details: Optional[dict] = None
-            partial_results: Optional[dict] = None
-            per_item_errors: Optional[dict] = None
+            progress_details: dict | None = None
+            partial_results: dict | None = None
+            per_item_errors: dict | None = None
 
         return JobProgressResponse(**kwargs)
 
     def test_progress_response_contains_required_fields(self):
         job_id = uuid4()
         from app.models.job import JobStatus
+
         resp = self._make_progress_response(
             id=job_id,
             status=JobStatus.STARTED,
@@ -288,6 +299,7 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def test_progress_response_null_details_allowed(self):
         from app.models.job import JobStatus
+
         resp = self._make_progress_response(
             id=uuid4(),
             status=JobStatus.PENDING,
@@ -298,6 +310,7 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def test_progress_response_partial_results_snapshot(self):
         from app.models.job import JobStatus
+
         partial = {"dev_a": {"ok": True}, "dev_b": {"ok": False, "error": "timeout"}}
         resp = self._make_progress_response(
             id=uuid4(),
@@ -310,6 +323,7 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def test_progress_response_per_item_errors(self):
         from app.models.job import JobStatus
+
         resp = self._make_progress_response(
             id=uuid4(),
             status=JobStatus.STARTED,
@@ -321,6 +335,7 @@ class TestJobProgressSchema(unittest.TestCase):
     def test_job_model_has_progress_columns(self):
         """Verify the Job ORM model exposes the structured progress columns."""
         from app.models.job import Job
+
         self.assertTrue(hasattr(Job, "progress_details"))
         self.assertTrue(hasattr(Job, "partial_results"))
         self.assertTrue(hasattr(Job, "per_item_errors"))

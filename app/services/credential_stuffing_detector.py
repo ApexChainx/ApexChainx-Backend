@@ -1,7 +1,8 @@
-from redis import Redis
 from time import time
+
+from redis import Redis
+
 from app.core.config import settings
-from app.services.audit_log import audit_log
 
 
 class CredentialStuffingDetector:
@@ -30,7 +31,7 @@ class CredentialStuffingDetector:
         key = self._prefix_key(ip)
         self.redis.zremrangebyscore(key, "-inf", now - window)
         unique = self.redis.zrangebyscore(key, now - window, "+inf")
-        return len(set(u.decode() if isinstance(u, bytes) else u for u in unique))
+        return len({u.decode() if isinstance(u, bytes) else u for u in unique})
 
 
 credential_stuffing_detector = CredentialStuffingDetector()

@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import HTTPException, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -28,11 +28,11 @@ class PayloadSizeMiddleware(BaseHTTPMiddleware):
                         content_length=content_length_int,
                         max_allowed=settings.MAX_REQUEST_BODY_SIZE_BYTES,
                         path=request.url.path,
-                        method=request.method
+                        method=request.method,
                     )
                     raise HTTPException(
                         status_code=413,
-                        detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes."
+                        detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
                     )
             except ValueError:
                 # Invalid Content-Length header, let it pass through
@@ -55,11 +55,11 @@ class PayloadSizeMiddleware(BaseHTTPMiddleware):
                     body_size=total_body_size,
                     max_allowed=settings.MAX_REQUEST_BODY_SIZE_BYTES,
                     path=request.url.path,
-                    method=request.method
+                    method=request.method,
                 )
                 raise HTTPException(
                     status_code=413,
-                    detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes."
+                    detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
                 )
             return message
 

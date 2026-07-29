@@ -1,14 +1,15 @@
-from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+import builtins
+from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.orm.audit_log import AuditLogORM
 from app.models.orm.payment import PaymentTransactionORM
 from app.models.payment import PaymentTransaction, validate_transition
 from app.models.sla import SLAResult
-from app.core.config import settings
 
 
 def _orm_to_pydantic(orm: PaymentTransactionORM) -> PaymentTransaction:
@@ -54,21 +55,14 @@ class PaymentRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def get(self, transaction_id: str) -> Optional[PaymentTransaction]:
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+    def get(self, transaction_id: str) -> PaymentTransaction | None:
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         return _orm_to_pydantic(orm)
 
-    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> Optional[PaymentTransaction]:
-        query = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.sla_result_id == sla_result_id)
-        )
+    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> PaymentTransaction | None:
+        query = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.sla_result_id == sla_result_id)
         if for_update:
             query = query.with_for_update()
         orm = query.first()
@@ -80,12 +74,12 @@ class PaymentRepository:
         self,
         page: int = 1,
         page_size: int = 20,
-        status: Optional[str] = None,
-        outage_id: Optional[str] = None,
-        type: Optional[str] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-    ) -> Tuple[List[PaymentTransaction], int]:
+        status: str | None = None,
+        outage_id: str | None = None,
+        type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> tuple[list[PaymentTransaction], int]:
         query = self.db.query(PaymentTransactionORM)
 
         if status:
@@ -108,20 +102,12 @@ class PaymentRepository:
         )
         return [_orm_to_pydantic(r) for r in rows], total
 
-    def list_by_outage(self, outage_id: str) -> List[PaymentTransaction]:
-        rows = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.outage_id == outage_id)
-            .all()
-        )
+    def list_by_outage(self, outage_id: str) -> builtins.list[PaymentTransaction]:
+        rows = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).all()
         return [_orm_to_pydantic(r) for r in rows]
 
-    def update_status(self, transaction_id: str, status: str) -> Optional[PaymentTransaction]:
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+    def update_status(self, transaction_id: str, status: str) -> PaymentTransaction | None:
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         orm.status = status
@@ -149,52 +135,44 @@ class PaymentRepository:
             status="pending",
             outage_id=outage_id,
             sla_result_id=sla_result.id,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             confirmed_at=None,
         )
         return self.create(transaction)
 
     MAX_RETRIES = 3
 
-    def reconcile(self, transaction_id: str, new_status: str) -> Optional[PaymentTransaction]:
+    def reconcile(self, transaction_id: str, new_status: str) -> PaymentTransaction | None:
         """Refresh payment status and mark as auditable reconciliation."""
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         validate_transition(orm.status, new_status)
         orm.status = new_status
         if new_status == "confirmed":
-            orm.confirmed_at = datetime.now(timezone.utc)
+            orm.confirmed_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def retry(self, transaction_id: str) -> Optional[PaymentTransaction]:
+    def retry(self, transaction_id: str) -> PaymentTransaction | None:
         """Increment retry counter (bounded by MAX_RETRIES) and reset to pending."""
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         if orm.retry_count >= self.MAX_RETRIES:
             return None  # caller should raise 409
         validate_transition(orm.status, "pending")
         orm.retry_count += 1
-        orm.last_retried_at = datetime.now(timezone.utc)
+        orm.last_retried_at = datetime.now(UTC)
         orm.status = "pending"
         self.db.commit()
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    HISTORY_EVENT_TYPES = {"payment_reconciled", "payment_retried"}
+    HISTORY_EVENT_TYPES: ClassVar[set[str]] = {"payment_reconciled", "payment_retried"}
 
-    def get_payment_history(self, transaction_id: str) -> List[dict]:
+    def get_payment_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return audit log entries for reconcile/retry actions on a payment."""
         rows = (
             self.db.query(AuditLogORM)
@@ -215,9 +193,9 @@ class PaymentRepository:
             if r.details and r.details.get("id") == transaction_id
         ]
 
-    def get_reconciliation_history(self, transaction_id: str) -> List[dict]:
+    def get_reconciliation_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return detailed reconciliation history with actor context and status transitions.
-        
+
         BE-027: Provides a structured view of who changed what and why, suitable for
         audit screens and frontend drawers.
         """
@@ -229,24 +207,28 @@ class PaymentRepository:
             .order_by(AuditLogORM.created_at.asc())
             .all()
         )
-        
+
         history = []
         for r in rows:
             if r.details and r.details.get("id") == transaction_id:
                 # Extract previous and new status from details
                 previous_status = r.details.get("previous_status")
                 new_status = r.details.get("status") or r.details.get("new_status")
-                
-                history.append({
-                    "event_type": r.event_type,
-                    "actor": r.email,
-                    "previous_status": previous_status,
-                    "new_status": new_status,
-                    "timestamp": r.created_at.isoformat() if r.created_at else None,
-                    "details": {
-                        k: v for k, v in r.details.items() 
-                        if k not in {"previous_status", "status", "new_status", "id"}
-                    } or None,
-                })
-        
+
+                history.append(
+                    {
+                        "event_type": r.event_type,
+                        "actor": r.email,
+                        "previous_status": previous_status,
+                        "new_status": new_status,
+                        "timestamp": r.created_at.isoformat() if r.created_at else None,
+                        "details": {
+                            k: v
+                            for k, v in r.details.items()
+                            if k not in {"previous_status", "status", "new_status", "id"}
+                        }
+                        or None,
+                    }
+                )
+
         return history

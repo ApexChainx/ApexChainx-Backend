@@ -1,26 +1,31 @@
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from passlib.context import CryptContext
+
 from fastapi import Depends, Header, HTTPException
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
-from app.db.session import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
 
 def hash_token(token: str) -> str:
     """Return a SHA-256 hex digest of a token for secure storage."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
 
 def validate_password_policy(password: str) -> bool:
     """
@@ -54,11 +59,10 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-def get_current_user(
-    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
-) -> AuthUser:
+def get_current_user(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthUser:
     from app.services.auth_store import AuthStore
     from app.services.token_revocation import is_revoked
+
     token = _extract_bearer_token(authorization)
     if is_revoked(hash_token(token)):
         raise HTTPException(status_code=401, detail="Token revoked")
@@ -72,10 +76,10 @@ def require_role(required_role: Role):
     def dependency(current_user: AuthUser = Depends(get_current_user)) -> AuthUser:
         if current_user.role != required_role:
             raise HTTPException(
-                status_code=403,
-                detail=f"Insufficient permissions. Required role: {required_role.value}"
+                status_code=403, detail=f"Insufficient permissions. Required role: {required_role.value}"
             )
         return current_user
+
     return dependency
 
 
@@ -97,13 +101,14 @@ def get_current_user_or_service(
     """
     if x_api_key:
         from app.services.api_key_store import get_key_by_hash
+
         hashed = hash_token(x_api_key)
         key = get_key_by_hash(db, hashed)
         if not key:
             raise HTTPException(status_code=401, detail="Invalid API key")
         if key.revoked_at is not None:
             raise HTTPException(status_code=401, detail="API key has been revoked")
-        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(timezone.utc).replace(tzinfo=None):
+        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(UTC).replace(tzinfo=None):
             raise HTTPException(status_code=401, detail="API key has expired")
         return {
             "actor_type": "service",
@@ -132,4 +137,5 @@ def require_scope(required_scope: str):
                 detail=f"Insufficient scope. Required scope: {required_scope}",
             )
         return actor
+
     return dependency

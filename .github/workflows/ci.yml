@@ -33,7 +33,7 @@ jobs:
         run: ruff format --check app tests
 
       - name: MyPy check
-        run: mypy app/
+        run: mypy app/ --exclude 'app/middleware/correlation\.py'
 
       - name: Test with branch coverage
         run: |

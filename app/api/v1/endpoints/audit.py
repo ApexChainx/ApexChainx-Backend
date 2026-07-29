@@ -1,10 +1,12 @@
+import hashlib
+import json
+
 from fastapi import APIRouter, Depends
+
+from app.core.security import require_admin
 from app.db.session import get_db
 from app.models.orm.audit_log import AuditLogORM
 from app.services.audit_log import audit_log
-from app.core.security import require_admin
-import hashlib
-import json
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -32,9 +34,7 @@ def verify_audit_chain(current_user=Depends(require_admin)):
                 "correlation_id": entry.correlation_id,
                 "created_at": entry.created_at.isoformat() if entry.created_at else None,
             }
-            expected_hash = hashlib.sha256(
-                json.dumps(data, sort_keys=True, default=str).encode()
-            ).hexdigest()
+            expected_hash = hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
             if entry.prev_hash != prev_hash or entry.entry_hash != expected_hash:
                 return {

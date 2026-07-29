@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -13,12 +13,12 @@ class OutageCreatedDetail(BaseModel):
 
 class OutageUpdatedDetail(BaseModel):
     event_type: Literal["updated"] = "updated"
-    changes: Dict[str, Any] = Field(default_factory=dict)
+    changes: dict[str, Any] = Field(default_factory=dict)
 
 
 class OutagePatchedDetail(BaseModel):
     event_type: Literal["patched"] = "patched"
-    changes: Dict[str, Any] = Field(default_factory=dict)
+    changes: dict[str, Any] = Field(default_factory=dict)
 
 
 class OutageResolvedDetail(BaseModel):
@@ -36,16 +36,16 @@ class SLARecomputedDetail(BaseModel):
     status: str  # "met" | "violated"
 
 
-OutageEventDetail = Union[
-    OutageCreatedDetail,
-    OutageUpdatedDetail,
-    OutagePatchedDetail,
-    OutageResolvedDetail,
-    SLAComputedDetail,
-    SLARecomputedDetail,
-]
+OutageEventDetail = (
+    OutageCreatedDetail
+    | OutageUpdatedDetail
+    | OutagePatchedDetail
+    | OutageResolvedDetail
+    | SLAComputedDetail
+    | SLARecomputedDetail
+)
 
-_DETAIL_MAP: Dict[str, type] = {
+_DETAIL_MAP: dict[str, type] = {
     "created": OutageCreatedDetail,
     "updated": OutageUpdatedDetail,
     "patched": OutagePatchedDetail,
@@ -55,7 +55,7 @@ _DETAIL_MAP: Dict[str, type] = {
 }
 
 
-def validate_event_detail(event_type: str, detail: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def validate_event_detail(event_type: str, detail: dict[str, Any] | None) -> dict[str, Any]:
     """Validate and return the detail dict for a given event_type.
 
     Raises ValueError for unknown event types or invalid payloads.
@@ -73,5 +73,5 @@ class OutageEventResponse(BaseModel):
     outage_id: str
     event_type: str
     schema_version: str
-    detail: Optional[Dict[str, Any]] = None
+    detail: dict[str, Any] | None = None
     occurred_at: datetime

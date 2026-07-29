@@ -1,30 +1,30 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
+from app.models import SLAResult
 from app.models.sla import (
+    SLAAnalyticsSnapshot,
     SLAConfigUpdateRequest,
     SLADashboardKPI,
     SLAPerformanceAggregation,
     SLAPreviewRequest,
     SLASeverityConfig,
     SLATrendPoint,
-    SLAAnalyticsSnapshot,
 )
 from app.repositories.sla_repository import VALID_BUCKETS, SLARepository
 from app.services.sla import SLACalculator
 from app.services.sla.config import get_all_config, get_config_for_severity, update_config_for_severity
-from app.models import SLAResult
-from app.utils.cache import TTLCache
 from app.utils.analytics_exporter import (
-    export_dashboard_kpi,
-    export_trends,
-    export_performance_aggregation,
     export_analytics_summary,
+    export_dashboard_kpi,
+    export_performance_aggregation,
+    export_trends,
 )
-from app.core.security import require_admin, require_engineer
+from app.utils.cache import TTLCache
 
 router = APIRouter()
 
@@ -40,7 +40,14 @@ def _invalidate_analytics_cache() -> None:
 
 
 @router.get("/calculate", response_model=SLAResult)
-def calculate_sla(outage_id: str, severity: str, mttr_minutes: int, policy_version: str = "1.0", threshold_source: str = "config", current_user=Depends(require_engineer)):
+def calculate_sla(
+    outage_id: str,
+    severity: str,
+    mttr_minutes: int,
+    policy_version: str = "1.0",
+    threshold_source: str = "config",
+    current_user=Depends(require_engineer),
+):
     """Calculate SLA result for given outage metrics (BE-009)."""
     try:
         return SLACalculator.calculate(
@@ -120,7 +127,9 @@ def get_sla_trends(
     db: Session = Depends(get_db),
 ):
     if bucket not in VALID_BUCKETS:
-        raise HTTPException(status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}"
+        )
 
     resolved_site = site_id or site
     cache_key = f"trends_{days}_{bucket}_{tz}_{severity}_{resolved_site}"
@@ -151,15 +160,17 @@ def aggregate_sla_performance(
     """Get SLA performance aggregation with optional date range filtering (BE-009)."""
     resolved_site = site_id or site
     if start_date and start_date.tzinfo is not None:
-        start_date = start_date.astimezone(timezone.utc).replace(tzinfo=None)
+        start_date = start_date.astimezone(UTC).replace(tzinfo=None)
     if end_date and end_date.tzinfo is not None:
-        end_date = end_date.astimezone(timezone.utc).replace(tzinfo=None)
+        end_date = end_date.astimezone(UTC).replace(tzinfo=None)
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
 
     repo = SLARepository(db)
-    return repo.aggregate_performance(start_date=start_date, end_date=end_date, severity=severity, site_id=resolved_site)
+    return repo.aggregate_performance(
+        start_date=start_date, end_date=end_date, severity=severity, site_id=resolved_site
+    )
 
 
 @router.post("/analytics/snapshot", response_model=SLAAnalyticsSnapshot, status_code=201)
@@ -196,13 +207,13 @@ def rebuild_analytics_snapshot(
     db: Session = Depends(get_db),
 ):
     """Rebuild analytics snapshot from live data (BE-025).
-    
+
     This endpoint:
     - Aggregates current SLA data from scratch
     - Creates a new snapshot row (preserves history)
     - Is idempotent - safe to call multiple times
     - Requires admin privileges
-    
+
     Use this for reconciliation after migrations or data drift.
     """
     repo = SLARepository(db)
@@ -218,13 +229,13 @@ def reconcile_analytics_snapshot(
     db: Session = Depends(get_db),
 ):
     """Reconcile snapshot with live data to detect drift (BE-025).
-    
+
     This read-only endpoint:
     - Compares latest snapshot with current live aggregates
     - Reports any differences found
     - Provides rebuild recommendation if drift detected
     - Requires admin privileges
-    
+
     Use this to verify snapshot integrity before/after operations.
     """
     repo = SLARepository(db)
@@ -245,12 +256,12 @@ def export_dashboard_kpis(
     resolved_site = site_id or site
     repo = SLARepository(db)
     kpi = repo.aggregate_dashboard_kpis(severity=severity, site_id=resolved_site)
-    
+
     try:
         exported = export_dashboard_kpi(kpi, format)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
+
     if format.lower() == "csv":
         return Response(
             content=exported,
@@ -274,20 +285,22 @@ def export_sla_trends(
 ):
     """Export SLA trends data in JSON or CSV format."""
     if bucket not in VALID_BUCKETS:
-        raise HTTPException(status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
-    
+        raise HTTPException(
+            status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}"
+        )
+
     resolved_site = site_id or site
     repo = SLARepository(db)
     try:
         trends = repo.aggregate_trends(limit_days=days, bucket=bucket, tz=tz, severity=severity, site_id=resolved_site)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
+
     try:
         exported = export_trends(trends, format)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
+
     if format.lower() == "csv":
         return Response(
             content=exported,
@@ -311,23 +324,23 @@ def export_performance_aggregation_endpoint(
     """Export performance aggregation data in JSON or CSV format."""
     resolved_site = site_id or site
     if start_date and start_date.tzinfo is not None:
-        start_date = start_date.astimezone(timezone.utc).replace(tzinfo=None)
+        start_date = start_date.astimezone(UTC).replace(tzinfo=None)
     if end_date and end_date.tzinfo is not None:
-        end_date = end_date.astimezone(timezone.utc).replace(tzinfo=None)
-    
+        end_date = end_date.astimezone(UTC).replace(tzinfo=None)
+
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
-    
+
     repo = SLARepository(db)
     aggregation = repo.aggregate_performance(
         start_date=start_date, end_date=end_date, severity=severity, site_id=resolved_site
     )
-    
+
     try:
         exported = export_performance_aggregation(aggregation, format)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
+
     if format.lower() == "csv":
         return Response(
             content=exported,
@@ -350,6 +363,7 @@ def verify_snapshot_integrity(
         raise HTTPException(status_code=409, detail=result.get("error", "Invalid snapshot"))
     return result
 
+
 @router.get("/analytics/export")
 def export_analytics_summary_endpoint(
     format: str = Query(default="json", description="Export format: json or csv"),
@@ -365,27 +379,29 @@ def export_analytics_summary_endpoint(
 ):
     """Export comprehensive analytics summary (KPI + trends + optional aggregation)."""
     if bucket not in VALID_BUCKETS:
-        raise HTTPException(status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
-    
+        raise HTTPException(
+            status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}"
+        )
+
     resolved_site = site_id or site
     repo = SLARepository(db)
-    
+
     kpi = repo.aggregate_dashboard_kpis(severity=severity, site_id=resolved_site)
-    
+
     try:
         trends = repo.aggregate_trends(limit_days=days, bucket=bucket, tz=tz, severity=severity, site_id=resolved_site)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
+
     aggregation = None
     if include_aggregation:
         aggregation = repo.aggregate_performance(severity=severity, site_id=resolved_site)
-    
+
     try:
         exported = export_analytics_summary(kpi, trends, aggregation, format)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    
+
     if format.lower() == "csv":
         return Response(
             content=exported,

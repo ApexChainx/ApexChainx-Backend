@@ -1,8 +1,8 @@
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
-from app.main import app
 from app.core import config
+from app.main import app
 
 
 def test_options_preflight_only_configured_methods_and_headers():

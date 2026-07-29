@@ -1,8 +1,6 @@
-from typing import List, Optional
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
-
 
 VALID_STELLAR_NETWORKS = {"testnet", "mainnet", "futurenet", "standalone"}
 VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
@@ -13,19 +11,19 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = False
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
-    DATABASE_AUDIT_URL: Optional[str] = None
+    DATABASE_AUDIT_URL: str | None = None
     API_V1_PREFIX: str = "/api/v1"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
     # CORS configuration
-    CORS_ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    CORS_ALLOWED_HEADERS: List[str] = [
+    CORS_ALLOWED_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_ALLOWED_HEADERS: list[str] = [
         "Authorization",
         "X-Correlation-ID",
         "Idempotency-Key",
         "Content-Type",
         "X-Requested-With",
     ]
-    CORS_EXPOSE_HEADERS: List[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
+    CORS_EXPOSE_HEADERS: list[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     CELERY_TASK_ALWAYS_EAGER: bool = True
@@ -68,7 +66,7 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
-    WEBHOOK_URL_ALLOWLIST: List[str] = []
+    WEBHOOK_URL_ALLOWLIST: list[str] = []
     WEBHOOK_URL_VALIDATOR_BYPASS: bool = False
     # Environment name used for conditional behaviours (e.g. HSTS disabled in local)
     ENVIRONMENT: str = "local"
@@ -132,38 +130,24 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("ALLOWED_ORIGINS must not contain wildcard '*' origins for security reasons.")
 
         invalid_origins = [
-            origin
-            for origin in config.ALLOWED_ORIGINS
-            if not origin.startswith(("http://", "https://"))
+            origin for origin in config.ALLOWED_ORIGINS if not origin.startswith(("http://", "https://"))
         ]
         if invalid_origins:
-            errors.append(
-                "ALLOWED_ORIGINS must contain valid http or https origins."
-            )
+            errors.append("ALLOWED_ORIGINS must contain valid http or https origins.")
 
     if config.STELLAR_NETWORK not in VALID_STELLAR_NETWORKS:
-        errors.append(
-            "STELLAR_NETWORK must be one of: "
-            + ", ".join(sorted(VALID_STELLAR_NETWORKS))
-            + "."
-        )
+        errors.append("STELLAR_NETWORK must be one of: " + ", ".join(sorted(VALID_STELLAR_NETWORKS)) + ".")
 
     if config.CONTRACT_EXECUTION_MODE not in VALID_CONTRACT_EXECUTION_MODES:
         errors.append(
-            "CONTRACT_EXECUTION_MODE must be one of: "
-            + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES))
-            + "."
+            "CONTRACT_EXECUTION_MODE must be one of: " + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES)) + "."
         )
 
     if not config.CELERY_TASK_ALWAYS_EAGER:
         if not config.CELERY_BROKER_URL.strip():
-            errors.append(
-                "CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
-            errors.append(
-                "CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")
