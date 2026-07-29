@@ -39,6 +39,10 @@ dev = [
     "pip-tools==7.4.1",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
