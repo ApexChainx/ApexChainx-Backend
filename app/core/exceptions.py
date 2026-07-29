@@ -8,16 +8,59 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
-class ApexConflictError(Exception):
+class ApexException(Exception):
+    status_code: int = 500
+    error_code: str = "error"
+    extra: dict[str, Any] | None = None
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        status_code: int = 500,
+        error_code: str = "error",
+        extra: dict[str, Any] | None = None,
+    ):
+        self.detail = detail
+        self.status_code = status_code
+        self.error_code = error_code
+        self.extra = extra
+        super().__init__(detail)
+
+
+class ApexConflictError(ApexException):
     def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
-        self.detail = detail
-        self.fields = fields or {}
+        super().__init__(
+            detail,
+            status_code=409,
+            error_code="conflict",
+            extra={"fields": fields or {}},
+        )
 
 
-class ApexValidationError(Exception):
+class ApexValidationError(ApexException):
     def __init__(self, detail: str, errors: Optional[List[Dict[str, Any]]] = None):
-        self.detail = detail
-        self.errors = errors or []
+        super().__init__(
+            detail,
+            status_code=422,
+            error_code="validation_error",
+            extra={"errors": errors or []},
+        )
+
+
+class ApexNotFoundError(ApexException):
+    def __init__(self, detail: str = "Resource not found"):
+        super().__init__(detail, status_code=404, error_code="not_found")
+
+
+class ApexTransientError(ApexException):
+    def __init__(self, detail: str = "A transient error occurred"):
+        super().__init__(
+            detail,
+            status_code=500,
+            error_code="transient_error",
+            extra={"retryable": True},
+        )
 
 
 def _extract_integrity_fields(exc: IntegrityError) -> Dict[str, str]:

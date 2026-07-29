@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
     # Jitter mode for webhook retry backoff: "none", "equal", or "full"
     WEBHOOK_RETRY_JITTER: str = "full"
+    # Concurrency caps for webhook dispatch attempts.
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
@@ -185,6 +188,12 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_RETRY_MAX_DELAY_SECONDS <= 0:
         errors.append("WEBHOOK_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES <= 0:
+        errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES must be > 0.")
+
+    if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
+        errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))

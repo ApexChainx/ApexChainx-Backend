@@ -11,10 +11,11 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from redis import Redis
 from app.core.config import settings
+from app.services.formatters import canonical_json
 
 
 def _compute_fingerprint(method: str, path: str, body: bytes) -> str:
-    canonical = json.dumps(json.loads(body if body else b"{}"), sort_keys=True) if body else "{}"
+    canonical = canonical_json(json.loads(body if body else b"{}")) if body else "{}"
     raw = f"{method}:{path}:{canonical}".encode()
     return hashlib.sha256(raw).hexdigest()
 
