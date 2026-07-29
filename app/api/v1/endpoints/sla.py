@@ -27,6 +27,12 @@ from app.services.sla.config import (
     update_config_for_severity,
 )
 from app.utils.cache import TTLCache
+from app.utils.analytics_exporter import (
+    export_analytics_summary,
+    export_dashboard_kpi,
+    export_performance_aggregation,
+    export_trends,
+)
 
 router = APIRouter()
 

@@ -8,6 +8,37 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
+class ApexException(Exception):
+    """Base exception for all ApexChainx application errors."""
+
+    def __init__(
+        self,
+        detail: str,
+        error_code: Optional[str] = None,
+        status_code: int = 500,
+        extra: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(detail)
+        self.detail = detail
+        self.error_code = error_code or "internal_error"
+        self.status_code = status_code
+        self.extra = extra or {}
+
+
+class ApexNotFoundError(ApexException):
+    """Resource not found error."""
+
+    def __init__(self, detail: str, error_code: Optional[str] = None):
+        super().__init__(detail=detail, error_code=error_code or "not_found", status_code=404)
+
+
+class ApexTransientError(ApexException):
+    """Transient error that can be retried."""
+
+    def __init__(self, detail: str, error_code: Optional[str] = None):
+        super().__init__(detail=detail, error_code=error_code or "transient_error", status_code=500)
+
+
 class ApexConflictError(Exception):
     def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
         self.detail = detail
