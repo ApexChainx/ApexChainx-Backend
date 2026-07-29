@@ -1,6 +1,7 @@
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.models.enums import Severity
 
 
@@ -27,7 +28,7 @@ class SLAResult(BaseModel):
         }
     )
 
-    id: Optional[int] = None
+    id: int | None = None
     outage_id: str
     status: Literal["met", "violated"]
     mttr_minutes: int
@@ -37,8 +38,8 @@ class SLAResult(BaseModel):
     rating: Literal["exceptional", "excellent", "good", "poor"]
     policy_version: str = Field(..., description="Version of SLA policy used for this calculation")
     threshold_source: str = Field(..., description="Source of threshold values (e.g., 'config', 'contract')")
-    reason_code: Optional[str] = Field(None, description="Machine-readable reason code for the decision")
-    decision_trace: Optional[str] = Field(None, description="Machine-readable decision trace for audit")
+    reason_code: str | None = Field(None, description="Machine-readable reason code for the decision")
+    decision_trace: str | None = Field(None, description="Machine-readable decision trace for audit")
 
 
 class SLASeverityConfig(BaseModel):
@@ -75,7 +76,7 @@ class SLATrendPoint(BaseModel):
 
 
 class SLAAnalyticsSnapshot(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     snapshot_key: str
     total_outages: int = Field(ge=0)
     total_violations: int = Field(ge=0)
@@ -84,4 +85,4 @@ class SLAAnalyticsSnapshot(BaseModel):
     net_payout: float
     avg_mttr: float = Field(ge=0.0)
     checksum: str
-    created_at: Optional[str] = None
+    created_at: str | None = None

@@ -2,7 +2,6 @@ from copy import deepcopy
 
 from app.models.sla import SLAConfigUpdateRequest, SLASeverityConfig
 
-
 SLA_CONFIG = {
     "critical": {
         "threshold_minutes": 15,

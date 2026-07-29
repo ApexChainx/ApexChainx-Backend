@@ -19,4 +19,4 @@ typecheck:
 	mypy app/
 
 test:
-	pytest
+	python -m pytest

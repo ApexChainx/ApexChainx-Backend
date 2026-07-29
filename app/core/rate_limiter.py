@@ -10,7 +10,6 @@ import logging
 import random
 from collections import defaultdict
 from time import time
-from typing import Dict, List
 
 import redis.asyncio as redis
 from redis.exceptions import RedisError
@@ -39,7 +38,7 @@ return 1
 
 class SimpleRateLimiter:
     def __init__(self) -> None:
-        self.requests: Dict[str, List[float]] = defaultdict(list)
+        self.requests: dict[str, list[float]] = defaultdict(list)
 
     def is_allowed(self, key: str) -> bool:
         """Check if the key is allowed based on rate limits."""
@@ -56,7 +55,7 @@ class SimpleRateLimiter:
 
 class RedisRateLimiter:
     def __init__(self) -> None:
-        self.fallback = SimpleRateLimiter()
+        self.fallback = _shared_fallback
         self.disabled_until: float | None = None
         self.client = redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
@@ -121,6 +120,10 @@ class RedisRateLimiter:
             self._trip_circuit()
             return self.fallback.is_allowed(key)
 
+
+# Shared fallback for RedisRateLimiter instances so that in-memory rate-limiting
+# state is consistent across all instances when Redis is unavailable.
+_shared_fallback = SimpleRateLimiter()
 
 rate_limiter = (
     RedisRateLimiter() if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER else SimpleRateLimiter()

@@ -1,7 +1,9 @@
 from datetime import datetime
-from typing import Optional
+
 from sqlalchemy.orm import Session
+
 from app.models.orm.session import SessionORM
+
 
 class SessionRepository:
     def __init__(self, db: Session):
@@ -29,10 +31,10 @@ class SessionRepository:
         self.db.refresh(session)
         return session
 
-    def get_session(self, access_token: str) -> Optional[SessionORM]:
+    def get_session(self, access_token: str) -> SessionORM | None:
         return self.db.query(SessionORM).filter(SessionORM.access_token == access_token).first()
 
-    def get_session_by_refresh_token(self, refresh_token: str) -> Optional[SessionORM]:
+    def get_session_by_refresh_token(self, refresh_token: str) -> SessionORM | None:
         return self.db.query(SessionORM).filter(SessionORM.refresh_token == refresh_token).first()
 
     def delete_session(self, access_token: str) -> None:

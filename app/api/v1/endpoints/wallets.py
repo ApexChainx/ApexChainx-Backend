@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query, status, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.security import require_engineer
 from app.models.wallet import (
     Wallet,
     WalletBalanceResponse,
@@ -11,7 +12,6 @@ from app.models.wallet import (
     WalletTrustlineResponse,
 )
 from app.services.wallet_registry import WalletRegistry
-from app.core.security import require_engineer
 
 router = APIRouter()
 

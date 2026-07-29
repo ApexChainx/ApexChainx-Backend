@@ -1,5 +1,6 @@
 """Scheduled task to expire old webhook secrets after the grace period."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from app.db.session import SessionLocal
 from app.models.webhook import Webhook
 
@@ -10,7 +11,7 @@ def expire_old_secrets():
     db: Session = SessionLocal()
     try:
         webhooks = db.query(Webhook).all()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for webhook in webhooks:
             if not webhook.previous_secrets:
                 continue

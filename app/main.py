@@ -1,15 +1,26 @@
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
 from datetime import datetime
-from sqlalchemy import text
-from redis import Redis
 
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from redis import Redis
+from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.exception_handlers import (
+    general_exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+)
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
 from app.db.session import engine
 from app.middleware.correlation import CorrelationMiddleware
-from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
+from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 validate_critical_settings(settings)
 
@@ -57,6 +68,9 @@ app.add_middleware(
 # Security headers should be applied after CORS so preflight responses are handled
 app.add_middleware(SecurityHeadersMiddleware)
 
+# ETag support for GET/HEAD responses
+app.add_middleware(ETagMiddleware)
+
 
 # Health checks
 @app.get("/health/liveness")
@@ -77,10 +91,19 @@ async def readiness():
         }
     }
 
-# Legacy health check (now liveness)
-@app.get("/health")
+# Legacy health check – deprecated, redirects to /health/liveness
+@app.get("/health", include_in_schema=False)
 def health_check():
-    return {"status": "ok"}
+    return RedirectResponse(
+        url="/health/liveness",
+        status_code=308,
+        headers={"Deprecation": "true"},
+    )
+
+# Register RFC 7807 exception handlers
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")

@@ -1,14 +1,16 @@
-from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+import builtins
+from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.orm.audit_log import AuditLogORM
 from app.models.orm.payment import PaymentTransactionORM
 from app.models.payment import PaymentTransaction, validate_transition
 from app.models.sla import SLAResult
-from app.core.config import settings
+from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
 
 
 def _orm_to_pydantic(orm: PaymentTransactionORM) -> PaymentTransaction:
@@ -54,7 +56,7 @@ class PaymentRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def get(self, transaction_id: str) -> Optional[PaymentTransaction]:
+    def get(self, transaction_id: str) -> PaymentTransaction | None:
         orm = (
             self.db.query(PaymentTransactionORM)
             .filter(PaymentTransactionORM.id == transaction_id)
@@ -64,7 +66,7 @@ class PaymentRepository:
             return None
         return _orm_to_pydantic(orm)
 
-    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> Optional[PaymentTransaction]:
+    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> PaymentTransaction | None:
         query = (
             self.db.query(PaymentTransactionORM)
             .filter(PaymentTransactionORM.sla_result_id == sla_result_id)
@@ -80,12 +82,12 @@ class PaymentRepository:
         self,
         page: int = 1,
         page_size: int = 20,
-        status: Optional[str] = None,
-        outage_id: Optional[str] = None,
-        type: Optional[str] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-    ) -> Tuple[List[PaymentTransaction], int]:
+        status: str | None = None,
+        outage_id: str | None = None,
+        type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> tuple[list[PaymentTransaction], int]:
         query = self.db.query(PaymentTransactionORM)
 
         if status:
@@ -108,7 +110,70 @@ class PaymentRepository:
         )
         return [_orm_to_pydantic(r) for r in rows], total
 
-    def list_by_outage(self, outage_id: str) -> List[PaymentTransaction]:
+    def list_cursor(
+        self,
+        cursor: str | None = None,
+        limit: int = 20,
+        status: str | None = None,
+        outage_id: str | None = None,
+        type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> CursorPage:
+        """Cursor-based pagination for payments.
+
+        Returns a CursorPage with items, next_cursor, and has_more.
+        O(1) per page — stable under concurrent writes.
+        Sorts by created_at descending (stable with id tiebreaker).
+        """
+        query = self.db.query(PaymentTransactionORM)
+
+        if status:
+            query = query.filter(PaymentTransactionORM.status == status)
+        if outage_id:
+            query = query.filter(PaymentTransactionORM.outage_id == outage_id)
+        if type:
+            query = query.filter(PaymentTransactionORM.type == type)
+        if date_from:
+            query = query.filter(PaymentTransactionORM.created_at >= date_from)
+        if date_to:
+            query = query.filter(PaymentTransactionORM.created_at <= date_to)
+
+        # Apply cursor filter if provided (sort by created_at desc, id desc)
+        decoded = decode_cursor(cursor)
+        if decoded is not None:
+            cursor_id, cursor_value = decoded
+            cursor_filter = or_(
+                PaymentTransactionORM.created_at < cursor_value,
+                and_(
+                    PaymentTransactionORM.created_at == cursor_value,
+                    PaymentTransactionORM.id < cursor_id,
+                ),
+            )
+            query = query.filter(cursor_filter)
+
+        query = query.order_by(
+            PaymentTransactionORM.created_at.desc(),
+            PaymentTransactionORM.id.desc(),
+        )
+
+        # Fetch limit+1 to determine has_more
+        orm_items = query.limit(limit + 1).all()
+        has_more = len(orm_items) > limit
+        orm_items = orm_items[:limit]
+
+        next_cursor = None
+        if has_more and orm_items:
+            last = orm_items[-1]
+            next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+        return CursorPage(
+            items=[_orm_to_pydantic(o) for o in orm_items],
+            next_cursor=next_cursor,
+            has_more=has_more,
+        )
+
+    def list_by_outage(self, outage_id: str) -> builtins.list[PaymentTransaction]:
         rows = (
             self.db.query(PaymentTransactionORM)
             .filter(PaymentTransactionORM.outage_id == outage_id)
@@ -116,7 +181,7 @@ class PaymentRepository:
         )
         return [_orm_to_pydantic(r) for r in rows]
 
-    def update_status(self, transaction_id: str, status: str) -> Optional[PaymentTransaction]:
+    def update_status(self, transaction_id: str, status: str) -> PaymentTransaction | None:
         orm = (
             self.db.query(PaymentTransactionORM)
             .filter(PaymentTransactionORM.id == transaction_id)
@@ -149,14 +214,14 @@ class PaymentRepository:
             status="pending",
             outage_id=outage_id,
             sla_result_id=sla_result.id,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             confirmed_at=None,
         )
         return self.create(transaction)
 
     MAX_RETRIES = 3
 
-    def reconcile(self, transaction_id: str, new_status: str) -> Optional[PaymentTransaction]:
+    def reconcile(self, transaction_id: str, new_status: str) -> PaymentTransaction | None:
         """Refresh payment status and mark as auditable reconciliation."""
         orm = (
             self.db.query(PaymentTransactionORM)
@@ -168,12 +233,12 @@ class PaymentRepository:
         validate_transition(orm.status, new_status)
         orm.status = new_status
         if new_status == "confirmed":
-            orm.confirmed_at = datetime.now(timezone.utc)
+            orm.confirmed_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def retry(self, transaction_id: str) -> Optional[PaymentTransaction]:
+    def retry(self, transaction_id: str) -> PaymentTransaction | None:
         """Increment retry counter (bounded by MAX_RETRIES) and reset to pending."""
         orm = (
             self.db.query(PaymentTransactionORM)
@@ -186,7 +251,7 @@ class PaymentRepository:
             return None  # caller should raise 409
         validate_transition(orm.status, "pending")
         orm.retry_count += 1
-        orm.last_retried_at = datetime.now(timezone.utc)
+        orm.last_retried_at = datetime.now(UTC)
         orm.status = "pending"
         self.db.commit()
         self.db.refresh(orm)
@@ -194,7 +259,7 @@ class PaymentRepository:
 
     HISTORY_EVENT_TYPES = {"payment_reconciled", "payment_retried"}
 
-    def get_payment_history(self, transaction_id: str) -> List[dict]:
+    def get_payment_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return audit log entries for reconcile/retry actions on a payment."""
         rows = (
             self.db.query(AuditLogORM)
@@ -215,7 +280,7 @@ class PaymentRepository:
             if r.details and r.details.get("id") == transaction_id
         ]
 
-    def get_reconciliation_history(self, transaction_id: str) -> List[dict]:
+    def get_reconciliation_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return detailed reconciliation history with actor context and status transitions.
         
         BE-027: Provides a structured view of who changed what and why, suitable for

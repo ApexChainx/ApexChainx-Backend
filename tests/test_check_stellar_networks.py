@@ -1,5 +1,4 @@
 """Tests for the Stellar network-key separation guard script."""
-import pytest
 from scripts.check_stellar_networks import check_network_key_separation
 
 

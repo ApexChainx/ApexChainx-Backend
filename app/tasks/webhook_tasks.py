@@ -1,13 +1,10 @@
-import json
 import logging
-from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 from uuid import UUID
 
-from app.tasks.celery_app import celery_app
 from app.db.session import SessionLocal
-from app.models.job import Job, JobStatus, JobType
 from app.services.audit_log import audit_log
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +15,7 @@ logger = logging.getLogger(__name__)
     max_retries=5,
     default_retry_delay=30,
 )
-def dispatch_webhook_delivery(self, delivery_id: str) -> Dict[str, Any]:
+def dispatch_webhook_delivery(self, delivery_id: str) -> dict[str, Any]:
     """Deliver a single WebhookDelivery record asynchronously."""
     db = SessionLocal()
     try:
@@ -50,7 +47,7 @@ def dispatch_webhook_delivery(self, delivery_id: str) -> Dict[str, Any]:
 @celery_app.task(
     name="app.tasks.webhook_tasks.retry_pending_webhook_deliveries",
 )
-def retry_pending_webhook_deliveries() -> Dict[str, Any]:
+def retry_pending_webhook_deliveries() -> dict[str, Any]:
     """
     Periodic beat task: finds all due RETRYING deliveries and re-dispatches them.
     Registered in celery_app.conf.beat_schedule to run every 60 seconds.
@@ -72,8 +69,8 @@ def retry_pending_webhook_deliveries() -> Dict[str, Any]:
     default_retry_delay=15,
 )
 def trigger_sla_violation_async(
-    self, sla_data: Dict[str, Any], event: str = "sla.violation"
-) -> Dict[str, Any]:
+    self, sla_data: dict[str, Any], event: str = "sla.violation"
+) -> dict[str, Any]:
     """
     Async task wrapper around webhook_service.trigger_sla_violation_webhooks.
     Called from SLA computation tasks to avoid blocking.

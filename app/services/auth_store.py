@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
+from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
-from app.models.orm.user import UserORM
-from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
-from app.core.security import get_password_hash, verify_password, validate_password_policy, hash_token
+from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.audit_log import audit_log
-from app.db.session import SessionLocal
-from app.core.config import settings
-from app.utils.correlation import get_correlation_id
 
 TOKEN_TTL_SECONDS = 3600
 
@@ -168,7 +167,7 @@ class AuthStore:
         # Check if expired
         # session.expires_at might be offset-naive or aware depending on how it was stored.
         # SQLAlchemy DateTime usually returns naive. We need to compare carefully.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = session.expires_at
         if expires_at.tzinfo is not None:
              now = datetime.now(UTC).replace(tzinfo=None) # Keep it naive for comparison if needed
@@ -326,7 +325,7 @@ class AuthStore:
         
         # Return session info without sensitive token material
         session_list = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for session in sessions:
             expires_at = session.expires_at
             if expires_at.tzinfo is not None:

@@ -4,9 +4,9 @@ Revision ID: 0010_wallet_persistence
 Revises: 0009_token_families
 Create Date: 2026-04-28
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0010_wallet_persistence"
 down_revision = "0009_token_families"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
 
 from app.models.orm.outage import OutageORM
@@ -38,7 +38,7 @@ class SLAOrchestrator:
         else:
             raise ValueError(f"Unsupported period format: {period}")
     
-    def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> List[OutageORM]:
+    def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> list[OutageORM]:
         """Get all outages for a device within the specified period."""
         return (
             self.db.query(OutageORM)
@@ -52,7 +52,7 @@ class SLAOrchestrator:
             .all()
         )
     
-    def calculate_mttr(self, outages: List[OutageORM]) -> float:
+    def calculate_mttr(self, outages: list[OutageORM]) -> float:
         """Calculate Mean Time To Resolution for outages."""
         if not outages:
             return 0.0
@@ -65,13 +65,13 @@ class SLAOrchestrator:
                 mttr_values.append(mttr_minutes)
             elif outage.started_at:
                 # For unresolved outages, calculate time since start
-                duration = datetime.now(timezone.utc) - outage.started_at
+                duration = datetime.now(UTC) - outage.started_at
                 mttr_minutes = duration.total_seconds() / 60
                 mttr_values.append(mttr_minutes)
         
         return round(sum(mttr_values) / len(mttr_values), 2) if mttr_values else 0.0
     
-    def calculate_availability(self, outages: List[OutageORM], period_days: int) -> float:
+    def calculate_availability(self, outages: list[OutageORM], period_days: int) -> float:
         """Calculate availability percentage for the period."""
         if not outages:
             return 100.0
@@ -85,13 +85,13 @@ class SLAOrchestrator:
                 downtime_minutes += downtime.total_seconds() / 60
             elif outage.started_at:
                 # For unresolved outages, calculate downtime since start
-                downtime = datetime.now(timezone.utc) - outage.started_at
+                downtime = datetime.now(UTC) - outage.started_at
                 downtime_minutes += downtime.total_seconds() / 60
         
         availability = max(0.0, (total_minutes - downtime_minutes) / total_minutes * 100)
         return round(availability, 2)
     
-    def check_sla_violations(self, availability: float, mttr: float, sla_thresholds: Dict[str, float]) -> bool:
+    def check_sla_violations(self, availability: float, mttr: float, sla_thresholds: dict[str, float]) -> bool:
         """Check if SLA thresholds are violated."""
         availability_threshold = sla_thresholds.get("availability", 99.9)
         mttr_threshold = sla_thresholds.get("mttr", 60.0)  # minutes
@@ -99,7 +99,7 @@ class SLAOrchestrator:
         return availability < availability_threshold or mttr > mttr_threshold
 
 
-def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds: Optional[Dict[str, float]] = None) -> dict:
+def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds: dict[str, float] | None = None) -> dict:
     """
     Compute SLA metrics for a device with real domain orchestration.
     

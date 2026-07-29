@@ -1,4 +1,5 @@
 from app.models import SLAResult
+
 from .config import SLA_CONFIG, get_config_for_severity
 
 

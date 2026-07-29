@@ -1,14 +1,15 @@
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from passlib.context import CryptContext
+
 from fastapi import Depends, Header, HTTPException
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
-from app.db.session import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -103,7 +104,7 @@ def get_current_user_or_service(
             raise HTTPException(status_code=401, detail="Invalid API key")
         if key.revoked_at is not None:
             raise HTTPException(status_code=401, detail="API key has been revoked")
-        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(timezone.utc).replace(tzinfo=None):
+        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(UTC).replace(tzinfo=None):
             raise HTTPException(status_code=401, detail="API key has expired")
         return {
             "actor_type": "service",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC, timedelta
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.config import settings

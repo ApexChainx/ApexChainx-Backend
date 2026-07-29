@@ -10,7 +10,6 @@ Create Date: 2026-07-28
 """
 from alembic import op
 
-
 revision = "0020_audit_immutable"
 down_revision = "0016_webhook_signature_versioning"
 depends_on = ("0016_outage_event_schema_version",)

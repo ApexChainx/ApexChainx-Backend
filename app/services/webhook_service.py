@@ -1,19 +1,18 @@
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
-    verify_signature,
 )
-from app.core.config import settings
 from app.utils.network_validation import validate_webhook_url
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ def _build_headers(
     payload: str,
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Build webhook delivery headers with explicit signature versioning (BE-087).
     
     Args:
@@ -61,7 +60,7 @@ def _build_headers(
     return headers
 
 
-def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> List[Webhook]:
+def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
     webhooks = db.query(Webhook).filter(Webhook.is_active == True).all()
     result = []
     for webhook in webhooks:
@@ -78,7 +77,7 @@ def create_delivery(
     db: Session,
     webhook: Webhook,
     event: WebhookEvent,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> WebhookDelivery:
     """Create a webhook delivery record with explicit signature version (BE-087).
@@ -192,10 +191,10 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
 def trigger_sla_violation_webhooks(
     db: Session,
-    sla_data: Dict[str, Any],
+    sla_data: dict[str, Any],
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> List[WebhookDelivery]:
+) -> list[WebhookDelivery]:
     """Trigger webhook deliveries for an event with explicit signature versioning (BE-087).
     
     Args:
@@ -263,7 +262,7 @@ def retry_pending_deliveries(db: Session) -> int:
     return count
 
 
-def get_dead_letter_deliveries(db: Session, webhook_id: Optional[UUID] = None, limit: int = 100) -> List[WebhookDelivery]:
+def get_dead_letter_deliveries(db: Session, webhook_id: UUID | None = None, limit: int = 100) -> list[WebhookDelivery]:
     """Get dead-lettered deliveries for auditing and remediation."""
     query = (
         db.query(WebhookDelivery)
@@ -310,8 +309,8 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
 def replay_deliveries_by_event_context(
     db: Session, 
     event: WebhookEvent, 
-    device_id: Optional[str] = None,
-    outage_id: Optional[str] = None,
+    device_id: str | None = None,
+    outage_id: str | None = None,
     limit: int = 50
 ) -> int:
     """Replay deliveries by event and context (device or outage)."""
@@ -332,9 +331,7 @@ def replay_deliveries_by_event_context(
                 payload = json.loads(delivery.payload)
                 data = payload.get("data", {})
                 
-                if device_id and data.get("device_id") == device_id:
-                    matching_deliveries.append(delivery)
-                elif outage_id and data.get("outage_id") == outage_id:
+                if device_id and data.get("device_id") == device_id or outage_id and data.get("outage_id") == outage_id:
                     matching_deliveries.append(delivery)
             except (json.JSONDecodeError, TypeError):
                 continue

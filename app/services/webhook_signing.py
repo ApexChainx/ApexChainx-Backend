@@ -34,11 +34,9 @@ Webhooks include an explicit timestamp in the payload (`timestamp` field) for:
 3. Use timestamp + delivery ID for audit logging and reconciliation
 """
 
-import hmac
 import hashlib
-from datetime import datetime, timezone
-from typing import List, Optional
-
+import hmac
+from datetime import UTC, datetime
 
 # Current signature algorithm version
 CURRENT_SIGNATURE_VERSION = 1
@@ -72,7 +70,7 @@ def verify_signature_v1(secret: str, payload: str, signature: str) -> bool:
     return hmac.compare_digest(expected_signature, signature)
 
 
-def sign_payload(secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION) -> Tuple[str, int]:
+def sign_payload(secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION) -> tuple[str, int]:
     """Generate signature with version support.
     
     Args:
@@ -121,7 +119,7 @@ def verify_signature_with_grace(
     payload: str,
     signature: str,
     version: int = CURRENT_SIGNATURE_VERSION,
-    previous_secrets: Optional[List[dict]] = None,
+    previous_secrets: list[dict] | None = None,
 ) -> bool:
     """Verify signature against current secret and valid previous secrets.
     
@@ -144,7 +142,7 @@ def verify_signature_with_grace(
     if not previous_secrets:
         return False
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for entry in previous_secrets:
         expires_at = datetime.fromisoformat(entry["expires_at"])
         if expires_at < now:

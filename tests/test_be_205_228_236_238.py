@@ -5,14 +5,11 @@ Tests for issues:
   #236 – Make webhook retry backoff policy configurable
   #238 – Structured progress events and partial-result retrieval
 """
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from app.core.config import Settings, validate_critical_settings
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -201,8 +198,8 @@ class TestWebhookRetryConfig(unittest.TestCase):
 
     def test_dispatch_delivery_respects_max_delay_cap(self):
         """Computed delay must never exceed WEBHOOK_RETRY_MAX_DELAY_SECONDS."""
-        from app.services.webhook_service import dispatch_delivery
         from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+        from app.services.webhook_service import dispatch_delivery
 
         db = MagicMock()
 
@@ -228,7 +225,8 @@ class TestWebhookRetryConfig(unittest.TestCase):
         with patch("app.services.webhook_service._attempt_delivery", side_effect=fake_attempt), \
              patch("app.services.webhook_service.settings") as mock_settings, \
              patch("app.services.webhook_service.datetime") as mock_dt:
-            from datetime import datetime as real_dt, timedelta
+            from datetime import datetime as real_dt
+            from datetime import timedelta
             mock_settings.WEBHOOK_RETRY_BASE_DELAYS = "9999,9999,9999"
             mock_settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS = 120
             mock_dt.utcnow.return_value = real_dt(2026, 1, 1)
@@ -256,18 +254,19 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def _make_progress_response(self, **kwargs):
         """Build a JobProgressResponse using only Pydantic — no circular imports."""
-        from pydantic import BaseModel
-        from typing import Optional
         from uuid import UUID
+
+        from pydantic import BaseModel
+
         from app.models.job import JobStatus
 
         class JobProgressResponse(BaseModel):
             id: UUID
             status: JobStatus
             progress: float
-            progress_details: Optional[dict] = None
-            partial_results: Optional[dict] = None
-            per_item_errors: Optional[dict] = None
+            progress_details: dict | None = None
+            partial_results: dict | None = None
+            per_item_errors: dict | None = None
 
         return JobProgressResponse(**kwargs)
 

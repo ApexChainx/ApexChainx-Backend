@@ -1,4 +1,5 @@
-from typing import Dict, List, Optional
+
+import builtins
 
 from app.models import Outage
 from app.models.enums import OutageStatus, Severity
@@ -11,7 +12,7 @@ class OutageStore:
     """
 
     def __init__(self):
-        self._data: Dict[str, Outage] = {}
+        self._data: dict[str, Outage] = {}
 
     def list(
         self,
@@ -38,17 +39,17 @@ class OutageStore:
             "page_size": page_size,
         }
 
-    def list_all(self) -> List[Outage]:
+    def list_all(self) -> builtins.list[Outage]:
         return list(self._data.values())
 
-    def get(self, outage_id: str) -> Optional[Outage]:
+    def get(self, outage_id: str) -> Outage | None:
         return self._data.get(outage_id)
 
     def create(self, outage: Outage) -> Outage:
         self._data[outage.id] = outage
         return outage
 
-    def bulk_create(self, outages: List[Outage]) -> List[Outage]:
+    def bulk_create(self, outages: builtins.list[Outage]) -> builtins.list[Outage]:
         created = []
         for outage in outages:
             created.append(self.create(outage))

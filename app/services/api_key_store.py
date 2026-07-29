@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
-from typing import Optional
+
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_token
@@ -11,7 +11,7 @@ from app.models.orm.api_key import ApiKeyORM
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _generate_id() -> str:
@@ -26,10 +26,10 @@ def generate_api_key() -> tuple[str, str]:
 
 def create_api_key(
     db: Session,
-    name: Optional[str],
+    name: str | None,
     scopes: list[str],
     created_by: str,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
 ) -> tuple[ApiKeyORM, str]:
     raw_key, hashed = generate_api_key()
     key_id = _generate_id()
@@ -48,7 +48,7 @@ def create_api_key(
     return orm, raw_key
 
 
-def get_key_by_hash(db: Session, hashed_key: str) -> Optional[ApiKeyORM]:
+def get_key_by_hash(db: Session, hashed_key: str) -> ApiKeyORM | None:
     return (
         db.query(ApiKeyORM)
         .filter(ApiKeyORM.hashed_key == hashed_key)

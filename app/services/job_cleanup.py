@@ -4,7 +4,7 @@ BE-042: Provides job retention and cleanup policies to prevent unbounded growth
 of job records and maintain database performance.
 """
 from datetime import datetime, timedelta
-from typing import Optional
+
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
@@ -23,8 +23,8 @@ class JobCleanupService:
     
     def cleanup_old_jobs(
         self,
-        successful_retention_days: Optional[int] = None,
-        failed_retention_days: Optional[int] = None,
+        successful_retention_days: int | None = None,
+        failed_retention_days: int | None = None,
         dry_run: bool = False,
         batch_size: int = 1000,
     ) -> dict:

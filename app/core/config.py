@@ -1,8 +1,6 @@
-from typing import List, Optional
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
-
 
 VALID_STELLAR_NETWORKS = {"testnet", "mainnet", "futurenet", "standalone"}
 VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
@@ -13,19 +11,19 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = False
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
-    DATABASE_AUDIT_URL: Optional[str] = None
+    DATABASE_AUDIT_URL: str | None = None
     API_V1_PREFIX: str = "/api/v1"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
     # CORS configuration
-    CORS_ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    CORS_ALLOWED_HEADERS: List[str] = [
+    CORS_ALLOWED_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_ALLOWED_HEADERS: list[str] = [
         "Authorization",
         "X-Correlation-ID",
         "Idempotency-Key",
         "Content-Type",
         "X-Requested-With",
     ]
-    CORS_EXPOSE_HEADERS: List[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
+    CORS_EXPOSE_HEADERS: list[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     CELERY_TASK_ALWAYS_EAGER: bool = True
@@ -68,7 +66,7 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
-    WEBHOOK_URL_ALLOWLIST: List[str] = []
+    WEBHOOK_URL_ALLOWLIST: list[str] = []
     WEBHOOK_URL_VALIDATOR_BYPASS: bool = False
     # Environment name used for conditional behaviours (e.g. HSTS disabled in local)
     ENVIRONMENT: str = "local"

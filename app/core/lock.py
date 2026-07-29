@@ -7,8 +7,8 @@ and recomputation.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 
 class ConcurrencyLockError(Exception):
     """Raised when a lock cannot be acquired."""
-    pass
 
 
 def _lock_id_from_key(key: str) -> int:

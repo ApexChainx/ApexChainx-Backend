@@ -1,19 +1,18 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import audit
-
 
 from app.api.v1.endpoints import (
     api_keys,
+    audit,
     auth,
     jobs,
     metrics,
     oauth,
     outages,
+    payments,
     sla,
     sla_dispute,
-    payments,
-    webhooks,
     wallets,
+    webhooks,
 )
 
 api_router = APIRouter()

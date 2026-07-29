@@ -1,8 +1,9 @@
 from datetime import datetime
-from fastapi import APIRouter, Response, Depends, HTTPException
-from app.services.metrics import metrics
+
+from fastapi import APIRouter, Depends, Response
+
 from app.core.security import require_engineer
-from app.core.config import settings
+from app.services.metrics import metrics
 
 router = APIRouter(prefix="/metrics", tags=["Metrics"])
 

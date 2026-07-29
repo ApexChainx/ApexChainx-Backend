@@ -4,9 +4,9 @@ from uuid import uuid4
 
 from app.api.v1.endpoints.webhooks import WebhookCreate
 from app.models.auth import LoginRequest, RegisterRequest
-from app.models.enums import Role, Severity, OutageStatus
+from app.models.enums import OutageStatus, Role, Severity
 from app.models.outage import Location
-from app.models.outage_dto import BulkOutageCreate, OutageCreate
+from app.models.outage_dto import OutageCreate
 from app.models.payment import PaymentTransaction
 from app.models.sla import SLAResult
 
