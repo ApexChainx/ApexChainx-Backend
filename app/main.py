@@ -25,6 +25,7 @@ from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.api_version import ApiVersionMiddleware
 
 
 configure_logging()
@@ -130,6 +131,9 @@ app.add_middleware(_DynamicCORSMiddleware)
 
 # Security headers should be applied after CORS so preflight responses are handled
 app.add_middleware(SecurityHeadersMiddleware)
+
+# API version and commit headers on every response
+app.add_middleware(ApiVersionMiddleware)
 
 
 @app.exception_handler(ApexException)
