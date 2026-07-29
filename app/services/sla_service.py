@@ -12,10 +12,10 @@ from app.services.audit_log import audit_log
 
 class SLAOrchestrator:
     """Orchestrates SLA computation with real domain logic for outage-centric workflows."""
-    
+
     def __init__(self, db: Session):
         self.db = db
-    
+
     def parse_period(self, period: str) -> tuple[datetime, datetime]:
         """Parse period string into start and end dates."""
         if period.startswith("2024-") and len(period) == 7:  # Monthly format "2024-01"
@@ -39,26 +39,22 @@ class SLAOrchestrator:
             return start_date, end_date
         else:
             raise ValueError(f"Unsupported period format: {period}")
-    
+
     def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> List[OutageORM]:
         """Get all outages for a device within the specified period."""
         return (
             self.db.query(OutageORM)
-            .filter(
-                (OutageORM.site_id == device_id)
-                | (OutageORM.id == device_id)
-                | (OutageORM.site_name == device_id)
-            )
+            .filter((OutageORM.site_id == device_id) | (OutageORM.id == device_id) | (OutageORM.site_name == device_id))
             .filter(OutageORM.created_at >= start_date)
             .filter(OutageORM.created_at < end_date)
             .all()
         )
-    
+
     def calculate_mttr(self, outages: List[OutageORM]) -> float:
         """Calculate Mean Time To Resolution for outages."""
         if not outages:
             return 0.0
-        
+
         mttr_values = []
         for outage in outages:
             if outage.started_at and outage.resolved_at:
@@ -70,17 +66,17 @@ class SLAOrchestrator:
                 duration = datetime.now(timezone.utc) - outage.started_at
                 mttr_minutes = duration.total_seconds() / 60
                 mttr_values.append(mttr_minutes)
-        
+
         return round(sum(mttr_values) / len(mttr_values), 2) if mttr_values else 0.0
-    
+
     def calculate_availability(self, outages: List[OutageORM], period_days: int) -> float:
         """Calculate availability percentage for the period."""
         if not outages:
             return 100.0
-        
+
         total_minutes = period_days * 24 * 60
         downtime_minutes = 0
-        
+
         for outage in outages:
             if outage.started_at and outage.resolved_at:
                 downtime = outage.resolved_at - outage.started_at
@@ -89,22 +85,24 @@ class SLAOrchestrator:
                 # For unresolved outages, calculate downtime since start
                 downtime = datetime.now(timezone.utc) - outage.started_at
                 downtime_minutes += downtime.total_seconds() / 60
-        
+
         availability = max(0.0, (total_minutes - downtime_minutes) / total_minutes * 100)
         return round(availability, 2)
-    
+
     def check_sla_violations(self, availability: float, mttr: float, sla_thresholds: Dict[str, float]) -> bool:
         """Check if SLA thresholds are violated."""
         availability_threshold = sla_thresholds.get("availability", 99.9)
         mttr_threshold = sla_thresholds.get("mttr", 60.0)  # minutes
-        
+
         return availability < availability_threshold or mttr > mttr_threshold
 
 
-def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds: Optional[Dict[str, float]] = None) -> dict:
+def compute_device_sla(
+    db: Session, device_id: str, period: str, sla_thresholds: Optional[Dict[str, float]] = None
+) -> dict:
     """
     Compute SLA metrics for a device with real domain orchestration.
-    
+
     This implementation provides outage-centric runtime behavior with:
     - Period parsing for monthly and quarterly periods
     - Real MTTR and availability calculations
@@ -112,21 +110,21 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
     - Structured results aligned with routed API concepts
     """
     orchestrator = SLAOrchestrator(db)
-    
+
     # Default SLA thresholds if not provided
     if sla_thresholds is None:
         sla_thresholds = {
             "availability": 99.9,  # 99.9% availability
-            "mttr": 60.0           # 60 minutes MTTR
+            "mttr": 60.0,  # 60 minutes MTTR
         }
-    
+
     try:
         start_date, end_date = orchestrator.parse_period(period)
         period_days = (end_date - start_date).days
-        
+
         # Get outages for the device and period
         outages = orchestrator.get_outages_for_device(device_id, start_date, end_date)
-        
+
         if not outages:
             result: dict[str, Any] = {
                 "device_id": device_id,
@@ -144,19 +142,19 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
             record_sla_settlement_audit_events(device_id, period, result, status="initiated")
             record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             return result
-        
+
         # Calculate metrics
         mttr = orchestrator.calculate_mttr(outages)
         availability = orchestrator.calculate_availability(outages, period_days)
         is_violated = orchestrator.check_sla_violations(availability, mttr, sla_thresholds)
-        
+
         # Determine violation reasons
         violation_reasons = []
         if availability < sla_thresholds["availability"]:
             violation_reasons.append(f"Availability {availability}% below threshold {sla_thresholds['availability']}%")
         if mttr > sla_thresholds["mttr"]:
             violation_reasons.append(f"MTTR {mttr} minutes above threshold {sla_thresholds['mttr']} minutes")
-        
+
         # Get latest SLA results for additional context
         outage_ids = [outage.id for outage in outages]
         latest_results = {}
@@ -169,9 +167,9 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
             )
             for row in rows:
                 latest_results.setdefault(row.outage_id, row)
-        
+
         violated_outages = sum(1 for r in latest_results.values() if r and r.status == "violated")
-        
+
         result = {
             "device_id": device_id,
             "period": period,
@@ -191,10 +189,10 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
                     "site_name": outage.site_name,
                     "started_at": outage.started_at.isoformat() if outage.started_at else None,
                     "resolved_at": outage.resolved_at.isoformat() if outage.resolved_at else None,
-                    "severity": getattr(outage, 'severity', 'unknown')
+                    "severity": getattr(outage, "severity", "unknown"),
                 }
                 for outage in outages
-            ]
+            ],
         }
         record_sla_settlement_audit_events(device_id, period, result, status="initiated")
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
@@ -205,9 +203,7 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
             event_type="sla_settlement_failed",
             details={"device_id": device_id, "period": period, "error": str(e)},
         )
-        raise ApexTransientError(
-            detail=f"SLA computation failed for device {device_id}: {e}"
-        ) from e
+        raise ApexTransientError(detail=f"SLA computation failed for device {device_id}: {e}") from e
 
 
 def record_sla_settlement_audit_events(

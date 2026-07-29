@@ -2,6 +2,7 @@
 
 Stores revoked token hashes in Redis with TTL matching the token's remaining lifetime.
 """
+
 from typing import Optional
 from redis import Redis
 from app.core.config import settings

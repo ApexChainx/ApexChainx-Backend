@@ -46,11 +46,11 @@ CURRENT_SIGNATURE_VERSION = 1
 
 def sign_payload_v1(secret: str, payload: str) -> str:
     """Generate HMAC-SHA256 signature for payload.
-    
+
     Args:
         secret: Secret key (will be encoded to UTF-8)
         payload: JSON payload string (will be encoded to UTF-8)
-    
+
     Returns:
         Hex-encoded digest string
     """
@@ -59,12 +59,12 @@ def sign_payload_v1(secret: str, payload: str) -> str:
 
 def verify_signature_v1(secret: str, payload: str, signature: str) -> bool:
     """Verify HMAC-SHA256 signature.
-    
+
     Args:
         secret: Secret key used during signing
         payload: Original JSON payload
         signature: Hex-encoded signature to verify (without 'sha256=' prefix)
-    
+
     Returns:
         True if signature is valid, False otherwise
     """
@@ -74,15 +74,15 @@ def verify_signature_v1(secret: str, payload: str, signature: str) -> bool:
 
 def sign_payload(secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION) -> Tuple[str, int]:
     """Generate signature with version support.
-    
+
     Args:
         secret: Secret key
         payload: JSON payload string
         version: Signature algorithm version (defaults to current)
-    
+
     Returns:
         Tuple of (signature_hex, version)
-    
+
     Raises:
         ValueError: If version is not supported
     """
@@ -99,13 +99,13 @@ def verify_signature(
     version: int = CURRENT_SIGNATURE_VERSION,
 ) -> bool:
     """Verify signature with version support.
-    
+
     Args:
         secret: Secret key used during signing
         payload: Original JSON payload
         signature: Hex-encoded signature (without algorithm prefix like 'sha256=')
         version: Signature algorithm version that was used
-    
+
     Returns:
         True if signature is valid, False otherwise
     """
@@ -124,17 +124,17 @@ def verify_signature_with_grace(
     previous_secrets: Optional[List[dict[str, Any]]] = None,
 ) -> bool:
     """Verify signature against current secret and valid previous secrets.
-    
+
     Tries the current secret first. If that fails, tries each previous
     secret that has not yet expired. This enables zero-downtime secret rotation.
-    
+
     Args:
         secret: Current secret key
         payload: Original JSON payload
         signature: Hex-encoded signature
         version: Signature algorithm version
         previous_secrets: List of dicts with hashed_secret and expires_at
-    
+
     Returns:
         True if any valid secret produces a matching signature
     """

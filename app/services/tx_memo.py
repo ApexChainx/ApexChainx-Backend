@@ -83,8 +83,7 @@ class TxMemo(BaseModel):
         match = MEMO_PATTERN.match(raw)
         if not match:
             raise ValueError(
-                f"Invalid memo format '{raw}'. Expected: <OP>:<agg>:v<hash8> "
-                f"(e.g. SLP:OUT001:va3f2c1b9)"
+                f"Invalid memo format '{raw}'. Expected: <OP>:<agg>:v<hash8> " f"(e.g. SLP:OUT001:va3f2c1b9)"
             )
 
         op, agg, content_hash = match.groups()
@@ -122,8 +121,7 @@ class TxMemo(BaseModel):
 
         if memo.byte_length() > MEMO_MAX_BYTES:
             raise ValueError(
-                f"Encoded memo '{memo.encode()}' is {memo.byte_length()} bytes, "
-                f"exceeds {MEMO_MAX_BYTES} byte limit"
+                f"Encoded memo '{memo.encode()}' is {memo.byte_length()} bytes, " f"exceeds {MEMO_MAX_BYTES} byte limit"
             )
 
         return memo

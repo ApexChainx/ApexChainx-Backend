@@ -48,11 +48,7 @@ async def check_celery() -> bool:
         return False
 
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description="ApexChainx Backend API"
-)
+app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
 
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
@@ -65,6 +61,7 @@ app.add_middleware(PayloadSizeMiddleware)
 
 # Add idempotency middleware (after payload size)
 app.add_middleware(IdempotencyMiddleware)
+
 
 class _DynamicCORSMiddleware(CORSMiddleware):
     def __init__(self, app: ASGIApp) -> None:
@@ -97,10 +94,12 @@ class _DynamicCORSMiddleware(CORSMiddleware):
             preflight_headers["Vary"] = "Origin"
         else:
             preflight_headers["Access-Control-Allow-Origin"] = "*"
-        preflight_headers.update({
-            "Access-Control-Allow-Methods": ", ".join(allow_methods),
-            "Access-Control-Max-Age": str(600),
-        })
+        preflight_headers.update(
+            {
+                "Access-Control-Allow-Methods": ", ".join(allow_methods),
+                "Access-Control-Max-Age": str(600),
+            }
+        )
         merged_headers = sorted(SAFELISTED_HEADERS | set(allow_headers))
         if merged_headers and not allow_all_headers:
             preflight_headers["Access-Control-Allow-Headers"] = ", ".join(merged_headers)
@@ -120,6 +119,7 @@ class _DynamicCORSMiddleware(CORSMiddleware):
         self.preflight_headers = preflight_headers
 
         await CORSMiddleware.__call__(self, scope, receive, send)
+
 
 app.add_middleware(_DynamicCORSMiddleware)
 

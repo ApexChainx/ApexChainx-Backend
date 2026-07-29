@@ -3,6 +3,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from app.models.orm.session import SessionORM
 
+
 class SessionRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -52,12 +53,7 @@ class SessionRepository:
 
     def list_sessions_by_email(self, email: str) -> list[SessionORM]:
         """List all active sessions for a given email."""
-        return (
-            self.db.query(SessionORM)
-            .filter(SessionORM.email == email)
-            .order_by(SessionORM.created_at.desc())
-            .all()
-        )
+        return self.db.query(SessionORM).filter(SessionORM.email == email).order_by(SessionORM.created_at.desc()).all()
 
     def delete_sessions_by_email(self, email: str) -> int:
         """Delete all sessions for a given email. Returns count of deleted sessions."""

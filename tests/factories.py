@@ -12,6 +12,7 @@ from app.models.sla import SLAResult
 
 _seq = itertools.count(1)
 
+
 def _next_id() -> str:
     return str(next(_seq))
 

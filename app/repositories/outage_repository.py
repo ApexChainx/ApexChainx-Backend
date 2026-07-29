@@ -139,12 +139,7 @@ class OutageRepository:
 
     def get_orm_locked(self, outage_id: str) -> Optional[OutageORM]:
         """Acquire a row-level lock (SELECT FOR UPDATE) before mutating."""
-        return (
-            self.db.query(OutageORM)
-            .filter(OutageORM.id == outage_id)
-            .with_for_update()
-            .first()
-        )
+        return self.db.query(OutageORM).filter(OutageORM.id == outage_id).with_for_update().first()
 
     @staticmethod
     def validate_status_transition(current_status: str, next_status: str) -> None:
@@ -281,11 +276,7 @@ class OutageRepository:
     def list_violations(self) -> List[dict]:
         from app.services.sla import SLACalculator
 
-        rows = (
-            self.db.query(OutageORM)
-            .filter(OutageORM.status == OutageStatus.resolved.value)
-            .all()
-        )
+        rows = self.db.query(OutageORM).filter(OutageORM.status == OutageStatus.resolved.value).all()
 
         violations = []
         for orm in rows:

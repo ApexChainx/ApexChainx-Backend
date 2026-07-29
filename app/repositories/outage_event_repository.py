@@ -37,10 +37,7 @@ class OutageEventRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:
-        query = (
-            self.db.query(OutageEventORM)
-            .filter(OutageEventORM.outage_id == outage_id)
-        )
+        query = self.db.query(OutageEventORM).filter(OutageEventORM.outage_id == outage_id)
         if event_type:
             query = query.filter(OutageEventORM.event_type == event_type)
         if start_date:

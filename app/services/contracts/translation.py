@@ -56,6 +56,7 @@ def build_tx_memo_from_result(sla_result: SLAResult) -> str:
     # Audit: flag suspicious memos (#38)
     if TxMemo.is_suspicious(encoded):
         from app.services.audit_log import audit_log
+
         audit_log.log(
             "memo_suspicious",
             {

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, String, Integer, JSON
 from app.db.base import Base
 
+
 class AuditLogORM(Base):
     __tablename__ = "audit_logs"
 

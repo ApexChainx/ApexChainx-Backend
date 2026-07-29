@@ -1,4 +1,5 @@
 """OAuth 2.0 authorization endpoints with PKCE and exact-match redirect_uri validation."""
+
 from typing import Optional
 
 import secrets
@@ -27,7 +28,12 @@ def authorize(provider: str, redirect_uri: str = Query(...), code_challenge: Opt
 
 
 @router.get("/{provider}/callback")
-def callback(provider: str, state: str = Query(...), code: Optional[str] = Query(None), code_verifier: Optional[str] = Query(None)):
+def callback(
+    provider: str,
+    state: str = Query(...),
+    code: Optional[str] = Query(None),
+    code_verifier: Optional[str] = Query(None),
+):
     if provider not in PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
     if not state:

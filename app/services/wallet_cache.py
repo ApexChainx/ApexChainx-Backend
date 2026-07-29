@@ -15,6 +15,7 @@ class WalletCache:
 
     def get(self, address: str) -> Optional[dict]:
         import json
+
         raw = self._redis.get(self._key(address))
         if raw:
             return json.loads(raw)
@@ -22,6 +23,7 @@ class WalletCache:
 
     def set(self, address: str, data: dict) -> None:
         import json
+
         self._redis.setex(self._key(address), self._ttl, json.dumps(data))
 
     def invalidate(self, address: str) -> None:

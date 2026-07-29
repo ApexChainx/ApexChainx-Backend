@@ -28,13 +28,13 @@ class Job(Base):
     celery_task_id = Column(String(255), unique=True, nullable=False, index=True)
     job_type = Column(SAEnum(JobType), nullable=False)
     status = Column(SAEnum(JobStatus), default=JobStatus.PENDING, nullable=False)
-    payload = Column(Text, nullable=True)        # JSON-encoded input params
-    result = Column(Text, nullable=True)         # JSON-encoded result
+    payload = Column(Text, nullable=True)  # JSON-encoded input params
+    result = Column(Text, nullable=True)  # JSON-encoded result
     error = Column(Text, nullable=True)
-    progress = Column(Float, default=0.0)        # 0.0 – 100.0
+    progress = Column(Float, default=0.0)  # 0.0 – 100.0
     progress_details = Column(JSON, nullable=True)  # Structured progress information
-    partial_results = Column(JSON, nullable=True)   # Partial results for bulk operations
-    per_item_errors = Column(JSON, nullable=True)   # Per-item error tracking
+    partial_results = Column(JSON, nullable=True)  # Partial results for bulk operations
+    per_item_errors = Column(JSON, nullable=True)  # Per-item error tracking
     # BE-041: Retry tracking
     retry_count = Column(Integer, default=0, nullable=False)  # Number of times job has been retried
     max_retries = Column(Integer, default=3, nullable=False)  # Maximum allowed retries for this job

@@ -48,7 +48,7 @@ class AuditLogService:
         email: Optional[str] = None,
         actor_id: Optional[str] = None,
         details: Optional[dict[str, Any]] = None,
-        correlation_id: Optional[str] = None
+        correlation_id: Optional[str] = None,
     ) -> None:
         safe_details = scrub_details(details)
 
@@ -58,9 +58,7 @@ class AuditLogService:
         created_at = datetime.now(timezone.utc)
         last_entry = db.query(AuditLogORM).order_by(desc(AuditLogORM.id)).first()
         prev_hash = last_entry.entry_hash if last_entry else None
-        entry_hash = self._compute_entry_hash(
-            prev_hash, event_type, safe_details, correlation_id, created_at
-        )
+        entry_hash = self._compute_entry_hash(prev_hash, event_type, safe_details, correlation_id, created_at)
 
         audit_entry = AuditLogORM(
             event_type=event_type,
@@ -80,7 +78,7 @@ class AuditLogService:
         """
         Simplified log method for compatibility with existing code.
         Uses its own session if not provided.
-        
+
         When DATABASE_AUDIT_URL is configured, writes go through the
         audit-specific DB role/connection for least-privilege isolation.
         """
