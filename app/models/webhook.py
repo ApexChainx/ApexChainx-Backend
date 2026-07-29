@@ -1,3 +1,4 @@
+from sqlalchemy.dialects.postgresql import JSONB
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey, Enum as SAEnum
@@ -31,6 +32,7 @@ class Webhook(Base):
     secret = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     events = Column(Text, nullable=False)  # JSON-encoded list of WebhookEvent values
+    resolved_ips = Column(Text, nullable=True)  # JSON-encoded list of resolved IPs for SSRF validation
     max_retries = Column(Integer, default=3, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -38,6 +40,9 @@ class Webhook(Base):
     # BE-034: Secret lifecycle metadata
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
     secret_version = Column(Integer, default=1, nullable=False)  # Incremented on each rotation
+    # BE-009: Grace period overlap window
+    previous_secrets = Column(JSONB, default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
+    secret_grace_hours = Column(Integer, default=24, nullable=False)  # Configurable grace period per webhook
 
     deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
 

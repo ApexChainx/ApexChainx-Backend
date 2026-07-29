@@ -49,9 +49,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.CORS_ALLOWED_METHODS,
+    allow_headers=settings.CORS_ALLOWED_HEADERS,
+    expose_headers=settings.CORS_EXPOSE_HEADERS,
 )
+
+# Security headers should be applied after CORS so preflight responses are handled
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 # Health checks

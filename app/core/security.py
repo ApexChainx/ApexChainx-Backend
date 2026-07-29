@@ -1,5 +1,7 @@
 import hashlib
 import re
+from datetime import datetime, timezone
+from typing import Any
 from passlib.context import CryptContext
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
@@ -80,3 +82,54 @@ def require_role(required_role: Role):
 # Convenience dependencies for common roles
 require_admin = require_role(Role.admin)
 require_engineer = require_role(Role.engineer)
+
+
+def get_current_user_or_service(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Accepts either:
+      - Authorization: Bearer <token>  (authenticated user)
+      - X-Api-Key: ak_***              (service-to-service)
+    Returns a dict with actor info for audit logging.
+    """
+    if x_api_key:
+        from app.services.api_key_store import get_key_by_hash
+        hashed = hash_token(x_api_key)
+        key = get_key_by_hash(db, hashed)
+        if not key:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        if key.revoked_at is not None:
+            raise HTTPException(status_code=401, detail="API key has been revoked")
+        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(timezone.utc).replace(tzinfo=None):
+            raise HTTPException(status_code=401, detail="API key has expired")
+        return {
+            "actor_type": "service",
+            "actor_id": f"service:{key.id}",
+            "key_id": key.id,
+            "scopes": key.scopes or [],
+        }
+    if authorization:
+        user = get_current_user(authorization=authorization, db=db)
+        return {
+            "actor_type": "user",
+            "actor_id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "scopes": [],
+        }
+    raise HTTPException(status_code=401, detail="Missing Authorization or X-Api-Key header")
+
+
+def require_scope(required_scope: str):
+    def dependency(actor: dict[str, Any] = Depends(get_current_user_or_service)) -> dict[str, Any]:
+        scopes = actor.get("scopes", [])
+        if required_scope not in scopes:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Insufficient scope. Required scope: {required_scope}",
+            )
+        return actor
+    return dependency

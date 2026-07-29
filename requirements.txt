@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 redis
+fakeredis
 
 sqlalchemy>=2.0
 psycopg2-binary
@@ -10,3 +11,6 @@ celery
 httpx
 python-multipart
 passlib[bcrypt]
+# This file is auto-generated from pyproject.toml
+# Run: pip-compile pyproject.toml
+-e .

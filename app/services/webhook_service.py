@@ -14,6 +14,7 @@ from app.services.webhook_signing import (
     verify_signature,
 )
 from app.core.config import settings
+from app.utils.network_validation import validate_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,9 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         delivery.event,
         delivery.signature_version,
     )
+
+    # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
+    validate_webhook_url(webhook.url)
 
     try:
         with httpx.Client(timeout=10.0) as client:

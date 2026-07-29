@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "apexchainx-backend"
+version = "1.0.0"
+description = "ApexChainx Backend API for SLA-aware telecom operations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "ApexChainx Team"},
+]
+
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "redis==5.2.1",
+    "sqlalchemy==2.0.36",
+    "psycopg2-binary==2.9.10",
+    "alembic==1.14.0",
+    "pydantic-settings==2.7.0",
+    "celery==5.4.0",
+    "httpx==0.28.1",
+    "python-multipart==0.0.19",
+    "passlib[bcrypt]==1.7.4",
+    "gunicorn==23.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "ruff==0.8.3",
+    "mypy==1.13.0",
+    "bandit==1.8.0",
+    "pip-tools==7.4.1",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]

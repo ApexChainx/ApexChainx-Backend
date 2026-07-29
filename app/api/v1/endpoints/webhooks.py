@@ -1,6 +1,6 @@
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from uuid import UUID
 
@@ -14,6 +14,7 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.core.security import require_admin
 from app.core.config import settings
+from app.utils.network_validation import validate_webhook_url
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -56,6 +57,7 @@ class WebhookCreate(BaseModel):
         url_str = str(v)
         if len(url_str) > settings.MAX_WEBHOOK_URL_LENGTH:
             raise ValueError(f"url too long. Maximum length is {settings.MAX_WEBHOOK_URL_LENGTH} characters.")
+        validate_webhook_url(url_str)
         return v
 
     @field_validator("events")
@@ -90,6 +92,7 @@ class WebhookUpdate(BaseModel):
             url_str = str(v)
             if len(url_str) > settings.MAX_WEBHOOK_URL_LENGTH:
                 raise ValueError(f"url too long. Maximum length is {settings.MAX_WEBHOOK_URL_LENGTH} characters.")
+            validate_webhook_url(url_str)
         return v
 
     @field_validator("events")
@@ -222,13 +225,16 @@ def _serialize_delivery(delivery: WebhookDelivery) -> WebhookDeliveryResponse:
 
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    url = str(payload.url)
+    resolved_ips = validate_webhook_url(url)
     webhook = Webhook(
         name=payload.name,
-        url=str(payload.url),
+        url=url,
         secret=payload.secret,
         events=json.dumps([e.value for e in payload.events]),
         max_retries=payload.max_retries,
         is_active=payload.is_active,
+        resolved_ips=json.dumps(resolved_ips),
     )
     db.add(webhook)
     db.commit()
@@ -267,7 +273,10 @@ def update_webhook(webhook_id: UUID, payload: WebhookUpdate, current_user=Depend
     if payload.name is not None:
         webhook.name = payload.name
     if payload.url is not None:
-        webhook.url = str(payload.url)
+        url = str(payload.url)
+        resolved_ips = validate_webhook_url(url)
+        webhook.url = url
+        webhook.resolved_ips = json.dumps(resolved_ips)
     if payload.secret is not None:
         webhook.secret = payload.secret
     if payload.events is not None:
@@ -352,19 +361,36 @@ def rotate_webhook_secret(
     current_user=Depends(require_admin),
     db: Session = Depends(get_db)
 ):
-    """Rotate the webhook signing secret. The old secret is immediately invalidated;
-    all subsequent deliveries will be signed with the new secret.
-    
+    """Rotate the webhook signing secret with a grace period overlap window.
+
+    The previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,
+    enabling zero-downtime rotation for consumers.
+
     BE-034: Emits durable audit information with timestamp and actor context.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     from app.services.audit_log import audit_log
+    from app.core.security import hash_token
+    from app.core.config import settings
     
     webhook = _get_webhook_or_404(db, webhook_id)
     
     # Capture old metadata for audit trail
     old_secret_version = webhook.secret_version
     old_rotation_time = webhook.last_secret_rotation_at
+    
+    # Store old secret in previous_secrets with expiry
+    if webhook.secret:
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=settings.WEBHOOK_SECRET_GRACE_HOURS)
+        previous_entry = {
+            "hashed_secret": hash_token(webhook.secret),
+            "created_at": now.isoformat(),
+            "expires_at": expires_at.isoformat(),
+        }
+        if not webhook.previous_secrets:
+            webhook.previous_secrets = []
+        webhook.previous_secrets.append(previous_entry)
     
     # Generate new secret and update metadata
     new_secret = secrets.token_hex(32)
@@ -383,6 +409,7 @@ def rotate_webhook_secret(
             "old_secret_version": old_secret_version,
             "new_secret_version": webhook.secret_version,
             "previous_rotation_at": old_rotation_time.isoformat() if old_rotation_time else None,
+            "grace_hours": settings.WEBHOOK_SECRET_GRACE_HOURS,
             "rotated_by": getattr(current_user, 'email', 'unknown'),
         }
     )
@@ -390,7 +417,7 @@ def rotate_webhook_secret(
     return WebhookSecretRotateResponse(
         webhook_id=webhook.id,
         new_secret=new_secret,
-        message="Secret rotated. Update your consumer to use the new secret immediately.",
+        message=f"Secret rotated. Previous secret will remain valid for {settings.WEBHOOK_SECRET_GRACE_HOURS} hours.",
     )
 
 

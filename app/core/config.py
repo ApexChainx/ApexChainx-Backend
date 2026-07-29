@@ -16,6 +16,16 @@ class Settings(BaseSettings):
     DATABASE_AUDIT_URL: Optional[str] = None
     API_V1_PREFIX: str = "/api/v1"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
+    # CORS configuration
+    CORS_ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_ALLOWED_HEADERS: List[str] = [
+        "Authorization",
+        "X-Correlation-ID",
+        "Idempotency-Key",
+        "Content-Type",
+        "X-Requested-With",
+    ]
+    CORS_EXPOSE_HEADERS: List[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     CELERY_TASK_ALWAYS_EAGER: bool = True
@@ -43,6 +53,7 @@ class Settings(BaseSettings):
     AUTH_LOCKOUT_ENTROPY_THRESHOLD: int = 20  # Unique password prefixes before credential-stuffing alert
     AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES: int = 5  # Rolling window for stuffing detection
     AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
+    USE_REDIS_RATE_LIMITER: bool = False
 
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
@@ -55,6 +66,17 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_EVENTS_COUNT: int = 50  # Max webhook events per webhook
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
+    # Webhook URL validation and SSRF protection
+    WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
+    WEBHOOK_URL_ALLOWLIST: List[str] = []
+    WEBHOOK_URL_VALIDATOR_BYPASS: bool = False
+    # Environment name used for conditional behaviours (e.g. HSTS disabled in local)
+    ENVIRONMENT: str = "local"
+
+    # Security headers and CSP
+    SECURITY_HEADERS_ENABLED: bool = True
+    # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
+    SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
 
     # Webhook retry backoff policy (#236)
     # Comma-separated base delay seconds for each retry attempt.
@@ -65,6 +87,13 @@ class Settings(BaseSettings):
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
+    # Webhook secret rotation grace period (#9)
+    # Number of hours the previous secret remains valid after rotation.
+    WEBHOOK_SECRET_GRACE_HOURS: int = 24
+
+    # OAuth configuration (#10)
+    OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
+    OAUTH_STATE_TTL_SECONDS: int = 600
 
     class Config:
         env_file = ".env"
@@ -98,6 +127,10 @@ def validate_critical_settings(config: Settings) -> None:
     if not config.ALLOWED_ORIGINS:
         errors.append("ALLOWED_ORIGINS must include at least one origin.")
     else:
+        # fail-fast on wildcard origins
+        if any(origin.strip() == "*" for origin in config.ALLOWED_ORIGINS):
+            errors.append("ALLOWED_ORIGINS must not contain wildcard '*' origins for security reasons.")
+
         invalid_origins = [
             origin
             for origin in config.ALLOWED_ORIGINS
