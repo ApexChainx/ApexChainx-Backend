@@ -13,7 +13,7 @@ def _hash_value(value: str | None) -> str | None:
         return None
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
-
+# Add per-user API rate limits using Redis sliding-window counter
 class CorrelationMiddleware:
     """ASGI-native middleware to add correlation IDs to requests and enable request tracing.
 
