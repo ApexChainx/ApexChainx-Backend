@@ -3,6 +3,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from pydantic import ValidationError
 from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -15,6 +17,7 @@ from app.core.exceptions import (
 )
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
+from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
 from app.db.session import engine
 from app.services.health_report import build_readiness_report
 from app.middleware.content_type import ContentTypeMiddleware
@@ -50,6 +53,8 @@ async def check_celery() -> bool:
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
 
+app.add_exception_handler(IntegrityError, integrity_error_handler)
+app.add_exception_handler(ValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
 

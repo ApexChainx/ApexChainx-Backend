@@ -182,6 +182,21 @@ The explicit `X-Webhook-Signature-Version` header enables safe algorithm evoluti
            raise ValueError(f"Unsupported signature version: {version}")
    ```
 
+## Trace Context Propagation
+
+Each webhook delivery includes a W3C `traceparent` header for distributed tracing:
+
+```
+traceparent: 00-{trace_id}-{span_id}-01
+```
+
+- **trace_id**: Derived from the request's correlation ID (UUID with hyphens removed, padded to 32 hex chars if needed)
+- **span_id**: Random 8-byte hex string generated per-delivery attempt
+- **version**: Always `00`
+- **trace-flags**: Always `01` (sampled)
+
+This enables end-to-end request tracing across systems. Receivers can propagate the `traceparent` header to downstream services for full distributed trace visibility.
+
 ## Webhook Delivery Contract
 
 ### Request Format

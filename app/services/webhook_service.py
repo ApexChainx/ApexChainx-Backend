@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,7 @@ from app.services.webhook_signing import (
     sign_payload,
 )
 from app.core.config import settings
+from app.utils.correlation import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
 logger = logging.getLogger(__name__)
@@ -60,10 +62,15 @@ def _build_headers(
         - X-Webhook-Signature: signature (if secret configured)
         - X-Webhook-Signature-Version: signature version (if secret configured)
     """
+    corr_id = get_or_generate_correlation_id()
+    trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
+    span_id = os.urandom(8).hex()
+
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
         "X-Webhook-Timestamp": datetime.utcnow().isoformat(),
+        "traceparent": f"00-{trace_id}-{span_id}-01",
     }
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
