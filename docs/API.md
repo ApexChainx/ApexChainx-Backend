@@ -1125,6 +1125,115 @@ Invalidate the current session. Accepts the access token in the `Authorization: 
 
 ---
 
+## API Key Authentication (Service-to-Service)
+
+Service-to-service callers can authenticate using an API key instead of a JWT bearer token. This is intended for automated systems, background jobs, and trusted integrations that need access to the API without a user session.
+
+### Obtaining an API Key
+
+API keys are created by administrators via the management endpoint:
+
+#### POST `/api/v1/api-keys`
+
+Create a new API key. Requires `admin` role.
+
+**Request Body:**
+```json
+{
+  "name": "ci-cd-pipeline",
+  "scopes": ["outages:read", "sla:read"],
+  "expires_at": "2027-01-01T00:00:00Z"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | no | Human-readable label for the key |
+| `scopes` | array[string] | no | Permission scopes (default: `[]`) |
+| `expires_at` | datetime | no | Optional expiration timestamp (ISO 8601) |
+
+**Response (201 Created):**
+```json
+{
+  "id": "uuid-...",
+  "name": "ci-cd-pipeline",
+  "raw_key": "ak_<base64url-32-byte>",
+  "message": "Store this key securely. It will not be shown again."
+}
+```
+
+> **⚠️ IMPORTANT**: The `raw_key` value is returned **only once** at creation time. Store it immediately in a secure secret manager. If lost, revoke the key and create a new one.
+
+### Authenticating with an API Key
+
+Include the API key in the `X-Api-Key` header on any request:
+
+```
+X-Api-Key: ak_<base64url-32-byte>
+```
+
+The key is hashed (SHA-256) before storage and the raw material is never persisted. Revoked or expired keys return `401 Unauthorized`.
+
+### Listing API Keys
+
+#### GET `/api/v1/api-keys`
+
+List all API keys (raw key material is never exposed). Requires `admin` role.
+
+**Response (200 OK):**
+```json
+{
+  "keys": [
+    {
+      "id": "uuid-...",
+      "name": "ci-cd-pipeline",
+      "scopes": ["outages:read", "sla:read"],
+      "expires_at": "2027-01-01T00:00:00Z",
+      "revoked_at": null,
+      "created_at": "2026-07-28T12:00:00Z",
+      "created_by": "admin@example.com"
+    }
+  ]
+}
+```
+
+### Revoking an API Key
+
+#### DELETE `/api/v1/api-keys/{key_id}`
+
+Revoke an API key immediately. Requires `admin` role.
+
+**Response (200 OK):**
+```json
+{
+  "message": "API key revoked successfully"
+}
+```
+
+Once revoked, the key will be rejected on all subsequent requests.
+
+### Scope-Based Authorization
+
+When an API key includes scopes, endpoints protected with `require_scope()` will enforce that the key's scopes contain the required value.
+
+| Scope | Description |
+|-------|-------------|
+| `outages:read` | Read outage data |
+| `outages:write` | Create and update outages |
+| `sla:read` | Read SLA results |
+| `sla:write` | Compute and manage SLA |
+| `payments:read` | Read payment history |
+| `payments:write` | Execute payments |
+| `webhooks:read` | List webhooks |
+| `webhooks:write` | Create and manage webhooks |
+| `admin:full` | Full administrative access |
+
+### Actor Tracking in Audit Logs
+
+Requests authenticated via API key are recorded in audit logs with `actor_id` set to `service:<key_id>` to distinguish them from user-authenticated actions (which use the user's ID).
+
+---
+
 ## Outage Bulk Import
 
 ### POST `/api/v1/outages/import`
@@ -1195,6 +1304,7 @@ Returns a summary of updated records and any computation errors.
 |--------|----------|-------------|
 | `Content-Type: application/json` | Yes (POST/PUT) | Required for all request bodies |
 | `Authorization: Bearer {token}` | Yes (protected routes) | JWT access token |
+| `X-Api-Key` | No (alternative auth) | API key for service-to-service auth (see [API Key Authentication](#api-key-authentication-service-to-service)) |
 | `X-Correlation-ID` | No | Optional; generated if absent |
 
 ---
