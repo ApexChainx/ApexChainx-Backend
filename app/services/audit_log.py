@@ -5,7 +5,8 @@ import json
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.models.orm.audit_log import AuditLogORM
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, AuditSessionLocal
+from app.core.config import settings
 from app.utils.correlation import get_correlation_id
 from app.services.scrubber import scrub_details
 
@@ -69,6 +70,15 @@ class AuditLogService:
         self._last_hash = entry_hash
 
     def log(self, event_type: str, details: Optional[dict[str, Any]] = None) -> None:
+        """
+        Simplified log method for compatibility with existing code.
+        Uses its own session if not provided.
+        
+        When DATABASE_AUDIT_URL is configured, writes go through the
+        audit-specific DB role/connection for least-privilege isolation.
+        """
+        factory = AuditSessionLocal if settings.DATABASE_AUDIT_URL else self.db_session_factory
+        with factory() as db:
         with self.db_session_factory() as db:
             self.log_event(db, event_type, details=details)
 

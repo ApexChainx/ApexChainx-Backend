@@ -9,7 +9,7 @@ from app.core.config import settings, validate_critical_settings
 from app.db.session import engine
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
-from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.idempotency import IdempotencyMiddleware
 
 validate_critical_settings(settings)
 
@@ -41,6 +41,9 @@ app.add_middleware(CorrelationMiddleware)
 
 # Add payload size middleware (after correlation, before CORS)
 app.add_middleware(PayloadSizeMiddleware)
+
+# Add idempotency middleware (after payload size)
+app.add_middleware(IdempotencyMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

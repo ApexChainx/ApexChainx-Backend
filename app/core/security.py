@@ -58,7 +58,10 @@ def get_current_user(
     authorization: str | None = Header(default=None), db: Session = Depends(get_db)
 ) -> AuthUser:
     from app.services.auth_store import AuthStore
+    from app.services.token_revocation import is_revoked
     token = _extract_bearer_token(authorization)
+    if is_revoked(hash_token(token)):
+        raise HTTPException(status_code=401, detail="Token revoked")
     user = AuthStore.get_user_for_token(token, db=db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
