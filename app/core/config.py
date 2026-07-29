@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
 
+    # Audit-log sensitive fields to redact
+    AUDIT_SENSITIVE_FIELDS: list[str] = [
+        "password", "token", "access_token", "refresh_token",
+        "secret", "secret_key", "api_key", "mnemonic", "seed", "pin",
+        "signed_tx", "stellar_secret",
+    ]
+
     # Webhook retry backoff policy (#236)
     # Comma-separated base delay seconds for each retry attempt.
     # e.g. "30,120,600" means 30 s on first retry, 2 min on second, 10 min on third.
