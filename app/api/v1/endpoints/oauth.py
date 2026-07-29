@@ -2,7 +2,7 @@
 from typing import Optional
 
 import secrets
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from app.core.config import settings
 from app.services.oauth_session import oauth_state_repo
 from app.services.audit_log import audit_log

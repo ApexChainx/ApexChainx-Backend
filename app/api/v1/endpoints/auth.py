@@ -18,7 +18,8 @@ from app.db.session import get_db
 from app.core.security import get_current_user, require_admin, hash_token
 from app.core.rate_limiter import rate_limiter
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
-from app.utils.correlation import get_correlation_id
+from app.core.config import settings
+from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 router = APIRouter()
 
@@ -44,10 +45,6 @@ Configuration (in app.core.config):
 - AUTH_RATE_LIMIT_REQUESTS: 10
 - AUTH_RATE_LIMIT_WINDOW_SECONDS: 300
 """
-
-
-from app.core.config import settings
-from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 
 def _get_client_ip(request: Request) -> str:

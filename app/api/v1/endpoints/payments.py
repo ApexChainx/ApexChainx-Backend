@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
 from app.services.audit_log import audit_log
-from app.core.security import get_current_user, require_admin, require_engineer
+from app.core.security import require_admin, require_engineer
 
 router = APIRouter()
 
