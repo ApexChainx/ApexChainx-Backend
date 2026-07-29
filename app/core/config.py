@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     WEBHOOK_RETRY_BASE_DELAYS: str = "30,120,600"
     # Hard cap on any single computed delay (seconds) to prevent retry storms.
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
+    # Jitter mode for webhook retry backoff: "none", "equal", or "full"
+    WEBHOOK_RETRY_JITTER: str = "full"
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
