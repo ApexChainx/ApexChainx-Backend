@@ -606,10 +606,22 @@ PRs that only modify `.md` files do not require test coverage but must:
 
 ## Dependency Management
 
-- Add new Python dependencies with an exact version: `package==1.2.3`
-- Update `requirements.txt` and commit it as part of the PR that introduces the dependency
-- Do not add dev-only tools to `requirements.txt` — they belong in a separate `requirements-dev.txt`
-- Flag any dependency with a known CVE before merging
+This project uses `pyproject.toml` for declaring dependencies with `pip-tools` for lock file generation.
+
+### One-command bootstrap
+```bash
+make bootstrap
+```
+
+### Updating dependencies
+```bash
+pip-compile pyproject.toml --generate-hashes > requirements.lock
+```
+
+### Installing from lockfile
+```bash
+pip install -r requirements.lock
+```
 
 ---
 

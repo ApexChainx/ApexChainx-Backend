@@ -1,0 +1,11 @@
+.env
+__pycache__
+.git
+.gitignore
+*.md
+.venv
+.pytest_cache
+.DS_Store
+tests/
+apexchainx.json
+venv

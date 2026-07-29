@@ -9,8 +9,11 @@ class AuditLogORM(Base):
     event_type = Column(String(100), index=True, nullable=False)
     # BE-010: Actor attribution - who performed the action
     email = Column(String(255), index=True, nullable=True)
-    actor_id = Column(String(255), index=True, nullable=True)  # User ID for consistent actor tracking
+    actor_id = Column(String(255), index=True, nullable=True)
     # BE-010: Correlation context - request correlation ID
-    correlation_id = Column(String(255), index=True, nullable=True)  # Links related events across services
+    correlation_id = Column(String(255), index=True, nullable=True)
     details = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    # BE-007: Cryptographic chaining for tamper-evident audit logs
+    prev_hash = Column(String(64), nullable=True)
+    entry_hash = Column(String(64), nullable=False, unique=True)
