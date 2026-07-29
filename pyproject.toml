@@ -14,7 +14,7 @@ authors = [
 ]
 
 dependencies = [
-    "fastapi==0.115.6",
+    "fastapi==0.141.1",
     "uvicorn[standard]==0.34.0",
     "redis==5.2.1",
     "sqlalchemy==2.0.36",
