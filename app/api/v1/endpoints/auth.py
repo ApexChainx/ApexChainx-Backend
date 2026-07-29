@@ -2,24 +2,25 @@ from fastapi import APIRouter, Header, HTTPException, status, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.rate_limiter import rate_limiter
+from app.core.security import get_current_user, hash_token, require_admin
+from app.db.session import get_db
 from app.models.auth import (
     AuthLogoutResponse,
     AuthSessionResponse,
     AuthUser,
     LoginRequest,
+    LogoutAllSessionsResponse,
     ProfileUpdateRequest,
     RegisterRequest,
-    SessionInventoryResponse,
     SessionInfo,
-    LogoutAllSessionsResponse,
+    SessionInventoryResponse,
 )
-from app.services.auth_store import AuthStore
-from app.db.session import get_db
-from app.core.security import get_current_user, require_admin, hash_token
-from app.core.rate_limiter import rate_limiter
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.core.config import settings
+from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.token_revocation import revoke
 
 router = APIRouter()
 
@@ -432,7 +433,6 @@ def revoke_token(
 ):
     """Revoke the current access token. Subsequent requests with this token
     will receive 401 'Token revoked' response."""
-    from app.services.token_revocation import revoke
     from app.services.auth_store import TOKEN_TTL_SECONDS
 
     token = _extract_bearer_token(authorization)

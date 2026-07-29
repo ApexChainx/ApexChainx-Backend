@@ -34,8 +34,8 @@ Webhooks include an explicit timestamp in the payload (`timestamp` field) for:
 3. Use timestamp + delivery ID for audit logging and reconciliation
 """
 
-import hmac
 import hashlib
+import hmac
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
@@ -72,7 +72,7 @@ def verify_signature_v1(secret: str, payload: str, signature: str) -> bool:
     return hmac.compare_digest(expected_signature, signature)
 
 
-def sign_payload(secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION) -> Tuple[str, int]:
+def sign_payload(secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION) -> tuple[str, int]:
     """Generate signature with version support.
 
     Args:

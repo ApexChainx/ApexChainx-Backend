@@ -4,22 +4,20 @@ from typing import List, Optional
 from uuid import UUID
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from fastapi import Request
-
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.job import Job, JobStatus, JobType
 from app.services.audit_log import audit_log
+from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_sla_computation, enqueue_bulk_sla_computation
 from app.utils.correlation_ctx import get_correlation_id
 from app.utils.logging import get_structured_logger
-from app.core.security import require_engineer, require_admin
-from app.services.job_cleanup import JobCleanupService
 
 logger = get_structured_logger("jobs_api")
 
@@ -37,7 +35,7 @@ class SLAJobRequest(BaseModel):
 
 
 class BulkSLAJobRequest(BaseModel):
-    device_ids: List[str]
+    device_ids: list[str]
     period: str
 
 
@@ -47,18 +45,18 @@ class JobResponse(BaseModel):
     job_type: JobType
     status: JobStatus
     progress: float
-    progress_details: Optional[dict] = None
-    partial_results: Optional[dict] = None
-    per_item_errors: Optional[dict] = None
-    payload: Optional[dict] = None
-    result: Optional[dict] = None
-    error: Optional[str] = None
+    progress_details: dict | None = None
+    partial_results: dict | None = None
+    per_item_errors: dict | None = None
+    payload: dict | None = None
+    result: dict | None = None
+    error: str | None = None
     # BE-041: Retry metadata
     retry_count: int = 0
     max_retries: int = 3
-    last_retried_at: Optional[str] = None
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
+    last_retried_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -251,10 +249,10 @@ def submit_bulk_sla_computation(
         return _serialize_job(job)
 
 
-@router.get("", response_model=List[JobResponse])
+@router.get("", response_model=list[JobResponse])
 def list_jobs(
-    job_type: Optional[JobType] = Query(None),
-    status_filter: Optional[JobStatus] = Query(None, alias="status"),
+    job_type: JobType | None = Query(None),
+    status_filter: JobStatus | None = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
@@ -283,9 +281,9 @@ class JobProgressResponse(BaseModel):
     id: UUID
     status: JobStatus
     progress: float
-    progress_details: Optional[dict] = None
-    partial_results: Optional[dict] = None
-    per_item_errors: Optional[dict] = None
+    progress_details: dict | None = None
+    partial_results: dict | None = None
+    per_item_errors: dict | None = None
 
     model_config = {"from_attributes": True}
 
@@ -508,7 +506,7 @@ def retry_job(
         logger.error("Failed to retry job", job_id=str(job.id), error=str(e), correlation_id=correlation_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retry job: {str(e)}",
+            detail=f"Failed to retry job: {e!s}",
         )
 
 

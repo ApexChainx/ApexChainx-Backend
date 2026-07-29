@@ -1,14 +1,17 @@
-from datetime import datetime, timezone
-from typing import Any, Optional
 import hashlib
 import json
-from sqlalchemy.orm import Session
+from datetime import datetime, timezone
+from typing import Any, Optional
+
 from sqlalchemy import desc
-from app.models.orm.audit_log import AuditLogORM
-from app.db.session import SessionLocal, AuditSessionLocal
+from sqlalchemy.orm import Session
+
 from app.core.config import settings
 from app.utils.correlation_ctx import get_correlation_id
+from app.models.orm.audit_log import AuditLogORM
 from app.services.scrubber import scrub_details
+
+from app.db.session import SessionLocal, AuditSessionLocal
 
 # --- SLA Settlement Audit Event Types ---
 SLA_SETTLEMENT_INITIATED = "sla_settlement_initiated"
@@ -21,14 +24,14 @@ SLA_DISPUTE_RESOLVED = "sla_dispute_resolved"
 class AuditLogService:
     def __init__(self, db_session_factory=None):
         self.db_session_factory = db_session_factory or SessionLocal
-        self._last_hash: Optional[str] = None
+        self._last_hash: str | None = None
 
     @staticmethod
     def _compute_entry_hash(
-        prev_hash: Optional[str],
+        prev_hash: str | None,
         event_type: str,
-        details: Optional[dict[str, Any]],
-        correlation_id: Optional[str],
+        details: dict[str, Any] | None,
+        correlation_id: str | None,
         created_at: datetime,
     ) -> str:
         data = {
@@ -74,7 +77,7 @@ class AuditLogService:
         db.commit()
         self._last_hash = entry_hash
 
-    def log(self, event_type: str, details: Optional[dict[str, Any]] = None) -> None:
+    def log(self, event_type: str, details: dict[str, Any] | None = None) -> None:
         """
         Simplified log method for compatibility with existing code.
         Uses its own session if not provided.

@@ -9,6 +9,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
@@ -46,7 +47,7 @@ def _build_headers(
     payload: str,
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Build webhook delivery headers with explicit signature versioning (BE-087).
 
     Args:
@@ -97,7 +98,7 @@ def create_delivery(
     db: Session,
     webhook: Webhook,
     event: WebhookEvent,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> WebhookDelivery:
     """Create a webhook delivery record with explicit signature version (BE-087).
@@ -245,10 +246,10 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
 def trigger_sla_violation_webhooks(
     db: Session,
-    sla_data: Dict[str, Any],
+    sla_data: dict[str, Any],
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> List[WebhookDelivery]:
+) -> list[WebhookDelivery]:
     """Trigger webhook deliveries for an event with explicit signature versioning (BE-087).
 
     Args:

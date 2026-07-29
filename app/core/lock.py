@@ -8,8 +8,8 @@ and recomputation.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

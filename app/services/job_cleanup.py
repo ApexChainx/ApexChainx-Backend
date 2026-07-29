@@ -24,8 +24,8 @@ class JobCleanupService:
 
     def cleanup_old_jobs(
         self,
-        successful_retention_days: Optional[int] = None,
-        failed_retention_days: Optional[int] = None,
+        successful_retention_days: int | None = None,
+        failed_retention_days: int | None = None,
         dry_run: bool = False,
         batch_size: int = 1000,
     ) -> dict:

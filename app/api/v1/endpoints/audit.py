@@ -1,10 +1,12 @@
+import hashlib
+import json
+
 from fastapi import APIRouter, Depends
+
+from app.core.security import require_admin
 from app.db.session import get_db
 from app.models.orm.audit_log import AuditLogORM
 from app.services.audit_log import audit_log
-from app.core.security import require_admin
-import hashlib
-import json
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 

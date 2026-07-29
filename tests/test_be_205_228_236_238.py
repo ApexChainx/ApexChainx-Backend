@@ -12,7 +12,6 @@ from uuid import uuid4
 
 from app.core.config import Settings, validate_critical_settings
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -205,8 +204,8 @@ class TestWebhookRetryConfig(unittest.TestCase):
 
     def test_dispatch_delivery_respects_max_delay_cap(self):
         """Computed delay must never exceed WEBHOOK_RETRY_MAX_DELAY_SECONDS."""
-        from app.services.webhook_service import dispatch_delivery
         from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+        from app.services.webhook_service import dispatch_delivery
 
         db = MagicMock()
 
@@ -264,18 +263,19 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def _make_progress_response(self, **kwargs):
         """Build a JobProgressResponse using only Pydantic — no circular imports."""
-        from pydantic import BaseModel
-        from typing import Optional
         from uuid import UUID
+
+        from pydantic import BaseModel
+
         from app.models.job import JobStatus
 
         class JobProgressResponse(BaseModel):
             id: UUID
             status: JobStatus
             progress: float
-            progress_details: Optional[dict] = None
-            partial_results: Optional[dict] = None
-            per_item_errors: Optional[dict] = None
+            progress_details: dict | None = None
+            partial_results: dict | None = None
+            per_item_errors: dict | None = None
 
         return JobProgressResponse(**kwargs)
 

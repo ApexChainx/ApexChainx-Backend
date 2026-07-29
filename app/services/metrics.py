@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 class MetricPoint:
     timestamp: datetime
     value: float
-    tags: Dict[str, str] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 class MetricsRegistry:

@@ -1,9 +1,11 @@
 from typing import Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from app.models.orm.user import UserORM
+
 from app.models.auth import AuthUser
 from app.models.enums import Role
+from app.models.orm.user import UserORM
+
 
 
 def user_orm_to_pydantic(orm: UserORM) -> AuthUser:
@@ -21,10 +23,10 @@ class UserRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_email(self, email: str) -> Optional[UserORM]:
+    def get_by_email(self, email: str) -> UserORM | None:
         return self.db.query(UserORM).filter(UserORM.email == email).first()
 
-    def get_by_id(self, user_id: str) -> Optional[UserORM]:
+    def get_by_id(self, user_id: str) -> UserORM | None:
         return self.db.query(UserORM).filter(UserORM.id == user_id).first()
 
     def create(self, user_id: str, email: str, hashed_password: str, full_name: str, role: Role) -> UserORM:

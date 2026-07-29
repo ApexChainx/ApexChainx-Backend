@@ -1,6 +1,7 @@
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.models.enums import Severity
 
 
@@ -28,7 +29,7 @@ class SLAResult(BaseModel):
         }
     )
 
-    id: Optional[int] = None
+    id: int | None = None
     outage_id: str
     status: Literal["met", "violated"]
     mttr_minutes: int
@@ -98,7 +99,7 @@ class SLAPolicyContent(SLASeverityConfig):
 
 
 class SLAAnalyticsSnapshot(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     snapshot_key: str
     total_outages: int = Field(ge=0)
     total_violations: int = Field(ge=0)
@@ -107,4 +108,4 @@ class SLAAnalyticsSnapshot(BaseModel):
     net_payout: float
     avg_mttr: float = Field(ge=0.0)
     checksum: str
-    created_at: Optional[str] = None
+    created_at: str | None = None

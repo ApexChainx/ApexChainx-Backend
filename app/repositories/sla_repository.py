@@ -1,5 +1,8 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import List, Literal, Mapping, Optional
+from typing import Literal, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import case, func, select, update
@@ -8,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.orm.sla_snapshot import SLAAnalyticsSnapshotORM
-from app.models.sla import SLAResult, SLADashboardKPI, SLAPerformanceAggregation, SLATrendPoint, SLAAnalyticsSnapshot
+from app.models.sla import SLAAnalyticsSnapshot, SLADashboardKPI, SLAPerformanceAggregation, SLAResult, SLATrendPoint
 
 BucketInterval = Literal["day", "week", "month"]
 VALID_BUCKETS: tuple[str, ...] = ("day", "week", "month")
@@ -120,7 +123,7 @@ class SLARepository:
 
         return self.create(payload)
 
-    def get_by_outage(self, outage_id: str) -> Optional[SLAResult]:
+    def get_by_outage(self, outage_id: str) -> SLAResult | None:
         """Return the authoritative latest SLA result for an outage (#154)."""
         orm = (
             self.db.query(SLAResultORM)
@@ -139,7 +142,7 @@ class SLARepository:
             return None
         return _orm_to_pydantic(orm)
 
-    def list_by_outage(self, outage_id: str) -> List[SLAResult]:
+    def list_by_outage(self, outage_id: str) -> list[SLAResult]:
         rows = (
             self.db.query(SLAResultORM)
             .filter(SLAResultORM.outage_id == outage_id)
@@ -150,10 +153,10 @@ class SLARepository:
 
     def aggregate_performance(
         self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        severity: Optional[str] = None,
-        site_id: Optional[str] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        severity: str | None = None,
+        site_id: str | None = None,
     ) -> SLAPerformanceAggregation:
         latest_results_query = select(
             SLAResultORM.outage_id.label("outage_id"),
@@ -203,8 +206,8 @@ class SLARepository:
 
     def aggregate_dashboard_kpis(
         self,
-        severity: Optional[str] = None,
-        site_id: Optional[str] = None,
+        severity: str | None = None,
+        site_id: str | None = None,
     ) -> SLADashboardKPI:
         query = select(
             func.count(SLAResultORM.id).label("total_outages"),
@@ -245,9 +248,9 @@ class SLARepository:
         limit_days: int = 7,
         bucket: BucketInterval = "day",
         tz: str = "UTC",
-        severity: Optional[str] = None,
-        site_id: Optional[str] = None,
-    ) -> List[SLATrendPoint]:
+        severity: str | None = None,
+        site_id: str | None = None,
+    ) -> list[SLATrendPoint]:
         if bucket not in VALID_BUCKETS:
             raise ValueError(f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
 
@@ -339,7 +342,7 @@ class SLARepository:
             created_at=str(orm.created_at),
         )
 
-    def get_latest_snapshot(self, snapshot_key: str = "global") -> Optional[SLAAnalyticsSnapshot]:
+    def get_latest_snapshot(self, snapshot_key: str = "global") -> SLAAnalyticsSnapshot | None:
         """Return the most recent snapshot for the given key."""
         orm = (
             self.db.query(SLAAnalyticsSnapshotORM)
