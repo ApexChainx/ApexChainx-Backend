@@ -1,13 +1,16 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from datetime import datetime
+from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from redis import Redis
 
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
+from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
 from app.db.session import engine
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
@@ -43,6 +46,9 @@ app = FastAPI(
     version=settings.VERSION,
     description="ApexChainx Backend API"
 )
+
+app.add_exception_handler(IntegrityError, integrity_error_handler)
+app.add_exception_handler(ValidationError, pydantic_validation_handler)
 
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)
