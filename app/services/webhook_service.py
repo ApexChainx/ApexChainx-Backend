@@ -17,6 +17,7 @@ from app.services.webhook_signing import (
 )
 from app.services.webhook_breaker import breaker
 from app.core.config import settings
+from app.core.tracing import get_current_traceparent, traced
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
@@ -63,17 +64,26 @@ def _build_headers(
         - X-Webhook-Timestamp: ISO-formatted UTC timestamp
         - X-Webhook-Signature: signature (if secret configured)
         - X-Webhook-Signature-Version: signature version (if secret configured)
+        - traceparent: W3C trace context for distributed tracing (from OTel)
     """
     corr_id = get_or_generate_correlation_id()
-    trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-    span_id = os.urandom(8).hex()
 
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
         "X-Webhook-Timestamp": datetime.now(timezone.utc).isoformat(),
-        "traceparent": f"00-{trace_id}-{span_id}-01",
     }
+
+    # Inject OTel trace context (traceparent) for distributed tracing
+    traceparent = get_current_traceparent()
+    if traceparent:
+        headers["traceparent"] = traceparent
+    else:
+        # Fallback: generate traceparent from correlation ID for non-OTel contexts
+        trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
+        span_id = os.urandom(8).hex()
+        headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
+
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
@@ -171,6 +181,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         return False
 
 
+@traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
@@ -244,6 +255,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     db.commit()
 
 
+@traced("webhook.trigger_sla_violation")
 def trigger_sla_violation_webhooks(
     db: Session,
     sla_data: dict[str, Any],
