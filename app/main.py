@@ -7,6 +7,7 @@ from redis import Redis
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
 from app.db.session import engine
+from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
@@ -36,6 +37,9 @@ app = FastAPI(
     version=settings.VERSION,
     description="ApexChainx Backend API"
 )
+
+# Content-type negotiation middleware (before correlation to catch early)
+app.add_middleware(ContentTypeMiddleware)
 
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)
