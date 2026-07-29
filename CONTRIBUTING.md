@@ -86,6 +86,17 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
+### Pre-commit Setup
+
+This project uses [ruff](https://docs.astral.sh/ruff/) for fast linting and formatting.
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Now `ruff check --fix` and `ruff format` run automatically on every commit.
+
 **Smart Contracts:**
 ```bash
 cd apexchainx-contracts
@@ -140,8 +151,8 @@ npm run type-check
 pytest
 pytest -v
 pytest --cov=app --cov-report=html
-black app/          # auto-format
-flake8 app/         # lint
+ruff check app/     # lint (replaces flake8)
+ruff format app/    # format (replaces black)
 mypy app/           # type-check
 ```
 

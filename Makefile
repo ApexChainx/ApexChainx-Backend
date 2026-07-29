@@ -1,3 +1,4 @@
+.PHONY: bootstrap install dev install-dev lint typecheck test cov
 .PHONY: bootstrap install dev install-dev lint typecheck test help format test-cov migrate clean
 
 help: ## Show all targets
@@ -18,12 +19,17 @@ dev: install
 lint:
 	ruff check .
 
+format:
+	ruff format .
+
 typecheck:
 	mypy app/
 
 test: ## Run tests
 	pytest
 
+cov:
+	pytest --cov-branch --cov-fail-under=80 --cov=app/services/ --cov=app/utils/ --cov=app/db/
 test-cov: ## Run tests with coverage
 	coverage run -m pytest && coverage report -m
 

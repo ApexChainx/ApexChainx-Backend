@@ -79,7 +79,6 @@ class AuditLogService:
         """
         factory = AuditSessionLocal if settings.DATABASE_AUDIT_URL else self.db_session_factory
         with factory() as db:
-        with self.db_session_factory() as db:
             self.log_event(db, event_type, details=details)
 
 
