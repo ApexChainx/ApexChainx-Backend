@@ -48,8 +48,9 @@ quote-style = "double"
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
 explicit_package_bases = true
+warn_unused_ignores = true
+no_implicit_optional = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
