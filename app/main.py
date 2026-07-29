@@ -1,8 +1,20 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
-from datetime import datetime, timezone
+from datetime import datetime
+from sqlalchemy import text
+from redis import Redis
+
+from app.api.v1.router import api_router
+from app.core.config import settings, validate_critical_settings
+from app.core.lifecycle import install_signal_handlers
+from app.db.session import engine
+from app.middleware.correlation import CorrelationMiddleware
+from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.idempotency import IdempotencyMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 validate_critical_settings(settings)
+install_signal_handlers()
 
 async def check_database() -> bool:
     from sqlalchemy import text

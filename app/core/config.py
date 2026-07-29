@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
     PAYMENT_WEBHOOK_SECRET: str = ""
     WALLET_CACHE_TTL_SECONDS: int = 60  # how long wallet data is considered fresh
+    SHUTDOWN_GRACE_SECONDS: int = 30  # grace period for SIGTERM handling
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
