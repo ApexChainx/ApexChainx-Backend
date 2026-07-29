@@ -12,7 +12,6 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
-    verify_signature,
 )
 from app.core.config import settings
 from app.utils.network_validation import validate_webhook_url
@@ -74,7 +73,7 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> List[Webhook]:
-    webhooks = db.query(Webhook).filter(Webhook.is_active == True).all()
+    webhooks = db.query(Webhook).filter(Webhook.is_active).all()
     result = []
     for webhook in webhooks:
         try:

@@ -6,7 +6,7 @@ from app.api.v1.endpoints.webhooks import WebhookCreate
 from app.models.auth import LoginRequest, RegisterRequest
 from app.models.enums import Role, Severity, OutageStatus
 from app.models.outage import Location, Outage
-from app.models.outage_dto import BulkOutageCreate, OutageCreate
+from app.models.outage_dto import OutageCreate
 from app.models.payment import PaymentTransaction
 from app.models.sla import SLAResult
 

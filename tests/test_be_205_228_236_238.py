@@ -5,8 +5,6 @@ Tests for issues:
   #236 – Make webhook retry backoff policy configurable
   #238 – Structured progress events and partial-result retrieval
 """
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 from uuid import uuid4

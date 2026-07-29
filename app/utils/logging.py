@@ -1,7 +1,5 @@
 import json
 import logging
-import time
-from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 
 from app.utils.correlation import get_correlation_id

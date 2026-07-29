@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from app.models.sla import SLAResult
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.sla import SLACalculator
 from tests.properties.sla_scenarios import (

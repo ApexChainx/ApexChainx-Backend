@@ -16,6 +16,7 @@ from app.core.exceptions import (
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
 from app.db.session import engine
+from app.services.health_report import build_readiness_report
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware

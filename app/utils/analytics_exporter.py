@@ -1,7 +1,6 @@
 """Analytics export utilities for dashboard and reporting use cases."""
 import csv
 import io
-import json
 from typing import Any
 
 from app.models.sla import SLADashboardKPI, SLATrendPoint, SLAPerformanceAggregation

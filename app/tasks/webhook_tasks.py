@@ -1,12 +1,9 @@
-import json
 import logging
-from datetime import datetime
 from typing import Any, Dict
 from uuid import UUID
 
 from app.tasks.celery_app import celery_app
 from app.db.session import SessionLocal
-from app.models.job import Job, JobStatus, JobType
 from app.services.audit_log import audit_log
 
 logger = logging.getLogger(__name__)

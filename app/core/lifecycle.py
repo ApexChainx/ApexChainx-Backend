@@ -1,7 +1,6 @@
 """Graceful shutdown handler on SIGTERM/SIGINT for issue #31."""
 
 import asyncio
-import os
 import signal
 import logging
 

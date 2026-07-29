@@ -2,7 +2,6 @@ import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
 from celery import Task
 
@@ -307,7 +306,7 @@ def enqueue_sla_computation(
     Enqueue an SLA computation task and create a Job record for tracking.
     Returns the Job before the Celery task ID is known — updated after dispatch.
     """
-    from app.models.job import Job, JobType  # local import avoids circular deps
+    from app.models.job import Job  # local import avoids circular deps
 
     payload = {"device_id": device_id, "period": period}
     if correlation_id:

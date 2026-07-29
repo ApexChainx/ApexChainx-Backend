@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
-from sqlalchemy import cast, func, or_, String
+from sqlalchemy import cast, or_, String
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db

@@ -5,7 +5,6 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
-from app.models.orm.user import UserORM
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
@@ -13,7 +12,6 @@ from app.core.security import get_password_hash, verify_password, validate_passw
 from app.services.audit_log import audit_log
 from app.db.session import SessionLocal
 from app.core.config import settings
-from app.utils.correlation import get_correlation_id
 
 TOKEN_TTL_SECONDS = 3600
 

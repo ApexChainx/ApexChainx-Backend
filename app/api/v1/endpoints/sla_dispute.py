@@ -17,12 +17,9 @@ from app.schemas.sla_dispute import (
 from app.core.security import require_engineer, require_admin
 from app.services.metrics import (
     increment_counter,
-    record_histogram,
     SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL,
-    SLADISPUTE_NOTIFICATION_DURATION_MS,
 )
 from app.services.sla.sla_calculator import SLACalculator
-from app.repositories.sla_repository import SLARepository
 
 router = APIRouter()
 
@@ -134,7 +131,6 @@ def create_proposed_sla(
     )
 
     # Save proposed SLA (but don't mark as latest yet)
-    repo = SLARepository(db)
     proposed_sla_orm = SLAResultORM(
         outage_id=new_sla.outage_id,
         status=new_sla.status,
@@ -213,7 +209,6 @@ def resolve_dispute(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No proposed SLA result to apply.",
             )
-        repo = SLARepository(db)
         proposed_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.proposed_sla_result_id).first()
         if not proposed_sla:
             raise HTTPException(status_code=404, detail="Proposed SLA not found")

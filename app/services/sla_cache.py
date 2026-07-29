@@ -1,8 +1,6 @@
 """Redis caching layer for SLA calculation results (#25)."""
 
-import hashlib
 import json
-import time
 from typing import Callable, Optional
 
 from redis import Redis

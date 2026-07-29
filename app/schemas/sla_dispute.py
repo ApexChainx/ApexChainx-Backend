@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.models.sla_dispute import DisputeStatus

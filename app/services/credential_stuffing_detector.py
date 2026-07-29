@@ -1,7 +1,6 @@
 from redis import Redis
 from time import time
 from app.core.config import settings
-from app.services.audit_log import audit_log
 
 
 class CredentialStuffingDetector:

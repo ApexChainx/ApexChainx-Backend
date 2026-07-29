@@ -260,7 +260,7 @@ class SLARepository:
             raise ValueError(f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
 
         try:
-            tzinfo = ZoneInfo(tz)
+            _ = ZoneInfo(tz)
         except ZoneInfoNotFoundError:
             raise ValueError(f"Unknown timezone: '{tz}'")
 
