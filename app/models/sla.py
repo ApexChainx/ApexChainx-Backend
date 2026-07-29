@@ -22,7 +22,8 @@ class SLAResult(BaseModel):
                 "payment_type": "reward",
                 "rating": "excellent",
                 "reason_code": "met_excellent",
-                "decision_trace": "MTTR 30 < 60 threshold, performance ratio 50%"
+                "decision_trace": "MTTR 30 < 60 threshold, performance ratio 50%",
+                "compute_hash": "abc123def456"
             }
         }
     )
@@ -39,6 +40,7 @@ class SLAResult(BaseModel):
     threshold_source: str = Field(..., description="Source of threshold values (e.g., 'config', 'contract')")
     reason_code: Optional[str] = Field(None, description="Machine-readable reason code for the decision")
     decision_trace: Optional[str] = Field(None, description="Machine-readable decision trace for audit")
+    compute_hash: Optional[str] = Field(None, description="SHA-256 hash of inputs for idempotent recompute (#35)")
 
 
 class SLASeverityConfig(BaseModel):
@@ -49,6 +51,18 @@ class SLASeverityConfig(BaseModel):
 
 class SLAConfigUpdateRequest(SLASeverityConfig):
     pass
+
+
+class SLAConfigHistoryEntry(BaseModel):
+    """Entry in the SLA config history audit log (#37)."""
+    severity: str
+    policy_version: int
+    threshold_minutes: int
+    penalty_per_minute: int
+    reward_base: int
+    content_hash: str
+    published_at: str
+    published_by: Optional[str] = None
 
 
 class SLAPerformanceAggregation(BaseModel):
@@ -72,6 +86,13 @@ class SLATrendPoint(BaseModel):
     violations: int = Field(ge=0)
     rewards: float = Field(ge=0.0)
     penalties: float = Field(ge=0.0)
+
+
+class SLAPolicyContent(SLASeverityConfig):
+    """Full SLA policy config with content hash for integrity verification (#37)."""
+    severity: str
+    policy_version: int
+    content_hash: str
 
 
 class SLAAnalyticsSnapshot(BaseModel):

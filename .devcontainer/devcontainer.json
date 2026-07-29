@@ -1,0 +1,14 @@
+{
+  "name": "ApexChainx Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "pip install -e . && alembic upgrade head",
+  "forwardPorts": [8000, 5432, 6379],
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance"]
+    }
+  }
+}

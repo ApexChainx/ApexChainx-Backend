@@ -1,6 +1,7 @@
 import json
 import logging
-from datetime import datetime, timedelta
+import random
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -22,6 +23,17 @@ logger = logging.getLogger(__name__)
 def _get_retry_delays() -> list[int]:
     """Parse WEBHOOK_RETRY_BASE_DELAYS from settings into a list of ints."""
     return [int(d.strip()) for d in settings.WEBHOOK_RETRY_BASE_DELAYS.split(",") if d.strip()]
+
+
+def _apply_jitter(delay: float) -> float:
+    """Apply jitter to a retry delay based on WEBHOOK_RETRY_JITTER config."""
+    mode = getattr(settings, "WEBHOOK_RETRY_JITTER", "full")
+    if mode == "none":
+        return delay
+    if mode == "equal":
+        return delay * random.uniform(0.5, 1.5)
+    # "full" (default): random in [0, nominal*2], floor 1s
+    return max(1.0, random.uniform(0, delay * 2))
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
@@ -169,8 +181,9 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
         if retry_index < max_retries and retry_index < len(retry_delays):
             base_delay = retry_delays[retry_index]
-            delay = min(base_delay * (2 ** retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
-            delivery.next_retry_at = datetime.utcnow() + timedelta(seconds=delay)
+            raw_delay = min(base_delay * (2 ** retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
+            delay = _apply_jitter(raw_delay)
+            delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(
                 "Webhook delivery %s failed (attempt %d). Retrying in %ds.",
