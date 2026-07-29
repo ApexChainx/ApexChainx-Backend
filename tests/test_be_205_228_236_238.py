@@ -5,6 +5,7 @@ Tests for issues:
   #236 – Make webhook retry backoff policy configurable
   #238 – Structured progress events and partial-result retrieval
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -14,6 +15,7 @@ from app.core.config import Settings, validate_critical_settings
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_settings(**overrides):
     defaults = dict(
@@ -45,6 +47,7 @@ def _make_settings(**overrides):
 # This mirrors the implementation in app/api/v1/endpoints/auth.py exactly.
 # ---------------------------------------------------------------------------
 
+
 def _get_client_ip_impl(request, trusted_proxy_count: int) -> str:
     """Inline copy of the hardened _get_client_ip logic for isolated testing."""
     trusted = trusted_proxy_count
@@ -60,6 +63,7 @@ def _get_client_ip_impl(request, trusted_proxy_count: int) -> str:
 # ---------------------------------------------------------------------------
 # #205 – Trusted-proxy / forwarded-header hardening
 # ---------------------------------------------------------------------------
+
 
 class TestGetClientIp(unittest.TestCase):
     def _req(self, xff_header, direct_host="1.2.3.4"):
@@ -130,6 +134,7 @@ class TestGetClientIp(unittest.TestCase):
 # #228 – Payment config validation
 # ---------------------------------------------------------------------------
 
+
 class TestPaymentConfigValidation(unittest.TestCase):
     def test_valid_payment_config_passes(self):
         validate_critical_settings(_make_settings())
@@ -158,6 +163,7 @@ class TestPaymentConfigValidation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # #236 – Configurable webhook retry backoff
 # ---------------------------------------------------------------------------
+
 
 class TestWebhookRetryConfig(unittest.TestCase):
     def test_valid_retry_config_passes(self):
@@ -222,11 +228,13 @@ class TestWebhookRetryConfig(unittest.TestCase):
         def fake_attempt(d, w):
             return False  # always fail to trigger retry scheduling
 
-        with patch("app.services.webhook_service._attempt_delivery", side_effect=fake_attempt), \
-             patch("app.services.webhook_service.settings") as mock_settings, \
-             patch("app.services.webhook_service.datetime") as mock_dt:
-            from datetime import datetime as real_dt
-            from datetime import timedelta
+        with (
+            patch("app.services.webhook_service._attempt_delivery", side_effect=fake_attempt),
+            patch("app.services.webhook_service.settings") as mock_settings,
+            patch("app.services.webhook_service.datetime") as mock_dt,
+        ):
+            from datetime import datetime as real_dt, timedelta
+
             mock_settings.WEBHOOK_RETRY_BASE_DELAYS = "9999,9999,9999"
             mock_settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS = 120
             mock_dt.utcnow.return_value = real_dt(2026, 1, 1)
@@ -244,6 +252,7 @@ class TestWebhookRetryConfig(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # #238 – Structured progress endpoint (schema-level tests, no circular import)
 # ---------------------------------------------------------------------------
+
 
 class TestJobProgressSchema(unittest.TestCase):
     """
@@ -273,6 +282,7 @@ class TestJobProgressSchema(unittest.TestCase):
     def test_progress_response_contains_required_fields(self):
         job_id = uuid4()
         from app.models.job import JobStatus
+
         resp = self._make_progress_response(
             id=job_id,
             status=JobStatus.STARTED,
@@ -287,6 +297,7 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def test_progress_response_null_details_allowed(self):
         from app.models.job import JobStatus
+
         resp = self._make_progress_response(
             id=uuid4(),
             status=JobStatus.PENDING,
@@ -297,6 +308,7 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def test_progress_response_partial_results_snapshot(self):
         from app.models.job import JobStatus
+
         partial = {"dev_a": {"ok": True}, "dev_b": {"ok": False, "error": "timeout"}}
         resp = self._make_progress_response(
             id=uuid4(),
@@ -309,6 +321,7 @@ class TestJobProgressSchema(unittest.TestCase):
 
     def test_progress_response_per_item_errors(self):
         from app.models.job import JobStatus
+
         resp = self._make_progress_response(
             id=uuid4(),
             status=JobStatus.STARTED,
@@ -320,6 +333,7 @@ class TestJobProgressSchema(unittest.TestCase):
     def test_job_model_has_progress_columns(self):
         """Verify the Job ORM model exposes the structured progress columns."""
         from app.models.job import Job
+
         self.assertTrue(hasattr(Job, "progress_details"))
         self.assertTrue(hasattr(Job, "partial_results"))
         self.assertTrue(hasattr(Job, "per_item_errors"))

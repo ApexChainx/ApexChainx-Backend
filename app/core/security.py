@@ -1,6 +1,10 @@
+import base64
 import hashlib
+import hmac
+import json
 import re
-from datetime import UTC, datetime
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException
@@ -10,18 +14,24 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
+from app.core.config import settings as app_settings
+from app.db.session import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
 
 def hash_token(token: str) -> str:
     """Return a SHA-256 hex digest of a token for secure storage."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
 
 def validate_password_policy(password: str) -> bool:
     """
@@ -55,12 +65,67 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-def get_current_user(
-    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
-) -> AuthUser:
+def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
+    """Verify a short-lived impersonation JWT.
+
+    Returns the decoded payload if valid, or None if invalid/expired.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+
+        header_b64, payload_b64, sig_b64 = parts
+
+        # Pad for base64
+        header_b64 += "=" * (4 - len(header_b64) % 4) if len(header_b64) % 4 else ""
+        payload_b64 += "=" * (4 - len(payload_b64) % 4) if len(payload_b64) % 4 else ""
+        sig_b64 += "=" * (4 - len(sig_b64) % 4) if len(sig_b64) % 4 else ""
+
+        # Verify signature
+        secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
+        expected_sig = hmac.new(
+            secret,
+            f"{header_b64}.{payload_b64}".encode(),
+            hashlib.sha256,
+        ).digest()
+        actual_sig = base64.urlsafe_b64decode(sig_b64)
+        if not hmac.compare_digest(expected_sig, actual_sig):
+            return None
+
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+
+        # Check expiry
+        now = int(time.time())
+        if payload.get("exp", 0) < now:
+            return None
+
+        # Must have impersonation scope
+        if payload.get("scope") != "impersonate":
+            return None
+
+        return payload
+    except Exception:
+        return None
+
+
+def get_current_user(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthUser:
     from app.services.auth_store import AuthStore
     from app.services.token_revocation import is_revoked
+    from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
+
     token = _extract_bearer_token(authorization)
+
+    # Check for impersonation token first
+    imp_payload = _verify_impersonation_token(token)
+    if imp_payload:
+        user_id = imp_payload.get("sub")
+        if user_id:
+            repo = UserRepository(db)
+            user_orm = repo.get_by_id(user_id)
+            if user_orm:
+                return user_orm_to_pydantic(user_orm)
+
     if is_revoked(hash_token(token)):
         raise HTTPException(status_code=401, detail="Token revoked")
     user = AuthStore.get_user_for_token(token, db=db)
@@ -73,10 +138,10 @@ def require_role(required_role: Role):
     def dependency(current_user: AuthUser = Depends(get_current_user)) -> AuthUser:
         if current_user.role != required_role:
             raise HTTPException(
-                status_code=403,
-                detail=f"Insufficient permissions. Required role: {required_role.value}"
+                status_code=403, detail=f"Insufficient permissions. Required role: {required_role.value}"
             )
         return current_user
+
     return dependency
 
 
@@ -98,13 +163,16 @@ def get_current_user_or_service(
     """
     if x_api_key:
         from app.services.api_key_store import get_key_by_hash
+
         hashed = hash_token(x_api_key)
         key = get_key_by_hash(db, hashed)
         if not key:
             raise HTTPException(status_code=401, detail="Invalid API key")
         if key.revoked_at is not None:
             raise HTTPException(status_code=401, detail="API key has been revoked")
-        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(UTC).replace(tzinfo=None):
+        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(timezone.utc).replace(
+            tzinfo=None
+        ):
             raise HTTPException(status_code=401, detail="API key has expired")
         return {
             "actor_type": "service",
@@ -133,4 +201,5 @@ def require_scope(required_scope: str):
                 detail=f"Insufficient scope. Required scope: {required_scope}",
             )
         return actor
+
     return dependency

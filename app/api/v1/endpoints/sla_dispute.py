@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import json
 from datetime import datetime
 
@@ -15,6 +16,11 @@ from app.schemas.sla_dispute import (
     DisputeFlagRequest,
     DisputeResolveRequest,
     DisputeResponse,
+)
+from app.core.security import require_engineer, require_admin
+from app.services.metrics import (
+    increment_counter,
+    SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL,
 )
 from app.services.sla.sla_calculator import SLACalculator
 
@@ -77,12 +83,14 @@ def flag_dispute(
     db.add(dispute)
     db.flush()
 
-    db.add(DisputeAuditLog(
-        dispute_id=dispute.id,
-        action="flagged",
-        actor=payload.flagged_by,
-        notes=payload.dispute_reason,
-    ))
+    db.add(
+        DisputeAuditLog(
+            dispute_id=dispute.id,
+            action="flagged",
+            actor=payload.flagged_by,
+            notes=payload.dispute_reason,
+        )
+    )
     db.commit()
     db.refresh(dispute)
     return dispute
@@ -112,7 +120,7 @@ def create_proposed_sla(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No pending dispute found for this SLA result.",
         )
-    
+
     # Get baseline SLA to get outage_id
     baseline_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.baseline_sla_result_id).first()
     if not baseline_sla:
@@ -128,7 +136,6 @@ def create_proposed_sla(
     )
 
     # Save proposed SLA (but don't mark as latest yet)
-    repo = SLARepository(db)
     proposed_sla_orm = SLAResultORM(
         outage_id=new_sla.outage_id,
         status=new_sla.status,
@@ -153,12 +160,14 @@ def create_proposed_sla(
     audit_notes = f"Proposed SLA created: {json.dumps(new_sla.model_dump())}"
     if payload.notes:
         audit_notes += f" | Notes: {payload.notes}"
-    db.add(DisputeAuditLog(
-        dispute_id=dispute.id,
-        action="proposed_sla_created",
-        actor=payload.created_by,
-        notes=audit_notes,
-    ))
+    db.add(
+        DisputeAuditLog(
+            dispute_id=dispute.id,
+            action="proposed_sla_created",
+            actor=payload.created_by,
+            notes=audit_notes,
+        )
+    )
     db.commit()
     db.refresh(dispute)
     return dispute
@@ -198,7 +207,7 @@ def resolve_dispute(
     dispute.status = payload.status
     dispute.resolved_by = payload.resolved_by
     dispute.resolution_notes = payload.resolution_notes
-    dispute.resolved_at = datetime.utcnow()
+    dispute.resolved_at = datetime.now(timezone.utc)
 
     # If resolving and apply_proposed is true, mark the proposed SLA as latest
     if payload.status == DisputeStatus.RESOLVED and payload.apply_proposed:
@@ -207,11 +216,10 @@ def resolve_dispute(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No proposed SLA result to apply.",
             )
-        repo = SLARepository(db)
         proposed_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.proposed_sla_result_id).first()
         if not proposed_sla:
             raise HTTPException(status_code=404, detail="Proposed SLA not found")
-        
+
         # Demote existing latest
         existing_latest = (
             db.query(SLAResultORM)
@@ -221,19 +229,23 @@ def resolve_dispute(
         )
         if existing_latest:
             existing_latest.is_latest = False
-        
+
         # Mark proposed as latest
         proposed_sla.is_latest = True
         db.add(proposed_sla)
 
-    db.add(DisputeAuditLog(
-        dispute_id=dispute.id,
-        action=payload.status.value,
-        actor=payload.resolved_by,
-        notes=payload.resolution_notes,
-    ))
+    db.add(
+        DisputeAuditLog(
+            dispute_id=dispute.id,
+            action=payload.status.value,
+            actor=payload.resolved_by,
+            notes=payload.resolution_notes,
+        )
+    )
     db.commit()
     db.refresh(dispute)
+
+    increment_counter(SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL, tags={"status": payload.status.value})
     return dispute
 
 

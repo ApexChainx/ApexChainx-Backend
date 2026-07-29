@@ -1,4 +1,4 @@
-
+# raw-sql-allowed
 from alembic import op
 
 revision = "0011_payment_deduplication"

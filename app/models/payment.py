@@ -30,8 +30,7 @@ class PaymentTransitionError(ValueError):
         self.next_status = next_status
         self.allowed = allowed
         super().__init__(
-            f"Transition from '{current}' to '{next_status}' is not allowed. "
-            f"Allowed: {allowed or 'none'}"
+            f"Transition from '{current}' to '{next_status}' is not allowed. " f"Allowed: {allowed or 'none'}"
         )
 
 
@@ -50,7 +49,8 @@ def validate_transition(current: str, next_status: str) -> None:
             current=current,
             next_status=next_status,
             allowed={s.value for s in VALID_TRANSITIONS.get(PaymentStatus(current), frozenset())}
-            if current in PaymentStatus._value2member_map_ else set(),
+            if current in PaymentStatus._value2member_map_
+            else set(),
         )
     if next_enum not in VALID_TRANSITIONS[current_enum]:
         allowed = {s.value for s in VALID_TRANSITIONS[current_enum]}

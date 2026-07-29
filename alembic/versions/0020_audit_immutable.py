@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Make audit_logs table append-only via PG trigger (BE-013).
 
 Adds a BEFORE DELETE trigger that prevents row deletion from the

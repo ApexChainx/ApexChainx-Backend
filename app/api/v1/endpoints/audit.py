@@ -34,9 +34,7 @@ def verify_audit_chain(current_user=Depends(require_admin)):
                 "correlation_id": entry.correlation_id,
                 "created_at": entry.created_at.isoformat() if entry.created_at else None,
             }
-            expected_hash = hashlib.sha256(
-                json.dumps(data, sort_keys=True, default=str).encode()
-            ).hexdigest()
+            expected_hash = hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
             if entry.prev_hash != prev_hash or entry.entry_hash != expected_hash:
                 return {

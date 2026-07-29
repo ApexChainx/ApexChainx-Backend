@@ -1,5 +1,5 @@
-from .outage import Location, Outage, SLAStatus
-from .outage_dto import BulkOutageCreate, OutageCreate, OutageUpdate
-from .payment import PaymentTransaction
-from .sla import SLAResult
-from .wallet import Wallet
+from .outage import Outage as Outage, Location as Location, SLAStatus as SLAStatus
+from .sla import SLAResult as SLAResult
+from .payment import PaymentTransaction as PaymentTransaction
+from .wallet import Wallet as Wallet
+from .outage_dto import BulkOutageCreate as BulkOutageCreate, OutageCreate as OutageCreate, OutageUpdate as OutageUpdate

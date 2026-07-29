@@ -56,21 +56,14 @@ class PaymentRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def get(self, transaction_id: str) -> PaymentTransaction | None:
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+    def get(self, transaction_id: str) -> Optional[PaymentTransaction]:
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         return _orm_to_pydantic(orm)
 
-    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> PaymentTransaction | None:
-        query = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.sla_result_id == sla_result_id)
-        )
+    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> Optional[PaymentTransaction]:
+        query = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.sla_result_id == sla_result_id)
         if for_update:
             query = query.with_for_update()
         orm = query.first()
@@ -110,83 +103,12 @@ class PaymentRepository:
         )
         return [_orm_to_pydantic(r) for r in rows], total
 
-    def list_cursor(
-        self,
-        cursor: str | None = None,
-        limit: int = 20,
-        status: str | None = None,
-        outage_id: str | None = None,
-        type: str | None = None,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
-    ) -> CursorPage:
-        """Cursor-based pagination for payments.
-
-        Returns a CursorPage with items, next_cursor, and has_more.
-        O(1) per page — stable under concurrent writes.
-        Sorts by created_at descending (stable with id tiebreaker).
-        """
-        query = self.db.query(PaymentTransactionORM)
-
-        if status:
-            query = query.filter(PaymentTransactionORM.status == status)
-        if outage_id:
-            query = query.filter(PaymentTransactionORM.outage_id == outage_id)
-        if type:
-            query = query.filter(PaymentTransactionORM.type == type)
-        if date_from:
-            query = query.filter(PaymentTransactionORM.created_at >= date_from)
-        if date_to:
-            query = query.filter(PaymentTransactionORM.created_at <= date_to)
-
-        # Apply cursor filter if provided (sort by created_at desc, id desc)
-        decoded = decode_cursor(cursor)
-        if decoded is not None:
-            cursor_id, cursor_value = decoded
-            cursor_filter = or_(
-                PaymentTransactionORM.created_at < cursor_value,
-                and_(
-                    PaymentTransactionORM.created_at == cursor_value,
-                    PaymentTransactionORM.id < cursor_id,
-                ),
-            )
-            query = query.filter(cursor_filter)
-
-        query = query.order_by(
-            PaymentTransactionORM.created_at.desc(),
-            PaymentTransactionORM.id.desc(),
-        )
-
-        # Fetch limit+1 to determine has_more
-        orm_items = query.limit(limit + 1).all()
-        has_more = len(orm_items) > limit
-        orm_items = orm_items[:limit]
-
-        next_cursor = None
-        if has_more and orm_items:
-            last = orm_items[-1]
-            next_cursor = encode_cursor(last.id, last.created_at.isoformat())
-
-        return CursorPage(
-            items=[_orm_to_pydantic(o) for o in orm_items],
-            next_cursor=next_cursor,
-            has_more=has_more,
-        )
-
-    def list_by_outage(self, outage_id: str) -> builtins.list[PaymentTransaction]:
-        rows = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.outage_id == outage_id)
-            .all()
-        )
+    def list_by_outage(self, outage_id: str) -> List[PaymentTransaction]:
+        rows = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).all()
         return [_orm_to_pydantic(r) for r in rows]
 
-    def update_status(self, transaction_id: str, status: str) -> PaymentTransaction | None:
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+    def update_status(self, transaction_id: str, status: str) -> Optional[PaymentTransaction]:
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         orm.status = status
@@ -223,11 +145,7 @@ class PaymentRepository:
 
     def reconcile(self, transaction_id: str, new_status: str) -> PaymentTransaction | None:
         """Refresh payment status and mark as auditable reconciliation."""
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         validate_transition(orm.status, new_status)
@@ -240,11 +158,7 @@ class PaymentRepository:
 
     def retry(self, transaction_id: str) -> PaymentTransaction | None:
         """Increment retry counter (bounded by MAX_RETRIES) and reset to pending."""
-        orm = (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.id == transaction_id)
-            .first()
-        )
+        orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         if orm.retry_count >= self.MAX_RETRIES:
@@ -282,7 +196,7 @@ class PaymentRepository:
 
     def get_reconciliation_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return detailed reconciliation history with actor context and status transitions.
-        
+
         BE-027: Provides a structured view of who changed what and why, suitable for
         audit screens and frontend drawers.
         """
@@ -294,24 +208,28 @@ class PaymentRepository:
             .order_by(AuditLogORM.created_at.asc())
             .all()
         )
-        
+
         history = []
         for r in rows:
             if r.details and r.details.get("id") == transaction_id:
                 # Extract previous and new status from details
                 previous_status = r.details.get("previous_status")
                 new_status = r.details.get("status") or r.details.get("new_status")
-                
-                history.append({
-                    "event_type": r.event_type,
-                    "actor": r.email,
-                    "previous_status": previous_status,
-                    "new_status": new_status,
-                    "timestamp": r.created_at.isoformat() if r.created_at else None,
-                    "details": {
-                        k: v for k, v in r.details.items() 
-                        if k not in {"previous_status", "status", "new_status", "id"}
-                    } or None,
-                })
-        
+
+                history.append(
+                    {
+                        "event_type": r.event_type,
+                        "actor": r.email,
+                        "previous_status": previous_status,
+                        "new_status": new_status,
+                        "timestamp": r.created_at.isoformat() if r.created_at else None,
+                        "details": {
+                            k: v
+                            for k, v in r.details.items()
+                            if k not in {"previous_status", "status", "new_status", "id"}
+                        }
+                        or None,
+                    }
+                )
+
         return history

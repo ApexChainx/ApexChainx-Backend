@@ -1,6 +1,6 @@
 import json
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -21,7 +21,7 @@ class OutageEventRepository:
             event_type=event_type,
             detail=json.dumps(detail) if detail else None,
             schema_version=CURRENT_SCHEMA_VERSION,
-            occurred_at=datetime.utcnow(),
+            occurred_at=datetime.now(timezone.utc),
         )
         self.db.add(orm)
         self.db.commit()
@@ -36,11 +36,8 @@ class OutageEventRepository:
         end_date: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> dict[str, Any]:
-        query = (
-            self.db.query(OutageEventORM)
-            .filter(OutageEventORM.outage_id == outage_id)
-        )
+    ) -> Dict[str, Any]:
+        query = self.db.query(OutageEventORM).filter(OutageEventORM.outage_id == outage_id)
         if event_type:
             query = query.filter(OutageEventORM.event_type == event_type)
         if start_date:

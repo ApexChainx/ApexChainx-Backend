@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 VALID_STELLAR_NETWORKS = {"testnet", "mainnet", "futurenet", "standalone"}
 VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
+    SECRET_KEY: str = "apexchainx-dev-secret"
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
     DATABASE_AUDIT_URL: str | None = None
     API_V1_PREFIX: str = "/api/v1"
@@ -32,6 +33,13 @@ class Settings(BaseSettings):
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
     PAYMENT_WEBHOOK_SECRET: str = ""
     WALLET_CACHE_TTL_SECONDS: int = 60  # how long wallet data is considered fresh
+    # SLA cache TTL in seconds
+    SLA_CACHE_TTL_SECONDS: int = 60
+    # DB connection pool settings
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_RECYCLE_SECONDS: int = 1800
+    SHUTDOWN_GRACE_SECONDS: int = 30  # grace period for SIGTERM handling
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
@@ -76,12 +84,19 @@ class Settings(BaseSettings):
     # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
     SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
 
+    # Circuit breaker settings for webhook delivery (#33)
+    WEBHOOK_BREAKER_FAIL_THRESHOLD: int = 10
+    WEBHOOK_BREAKER_WINDOW_SECONDS: int = 300
+    WEBHOOK_BREAKER_RESET_SECONDS: int = 600
+
     # Webhook retry backoff policy (#236)
     # Comma-separated base delay seconds for each retry attempt.
     # e.g. "30,120,600" means 30 s on first retry, 2 min on second, 10 min on third.
     WEBHOOK_RETRY_BASE_DELAYS: str = "30,120,600"
     # Hard cap on any single computed delay (seconds) to prevent retry storms.
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
+    # Jitter mode for webhook retry backoff: "none", "equal", or "full"
+    WEBHOOK_RETRY_JITTER: str = "full"
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
@@ -93,8 +108,7 @@ class Settings(BaseSettings):
     OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
     OAUTH_STATE_TTL_SECONDS: int = 600
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
 
 settings = Settings()
@@ -130,38 +144,24 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("ALLOWED_ORIGINS must not contain wildcard '*' origins for security reasons.")
 
         invalid_origins = [
-            origin
-            for origin in config.ALLOWED_ORIGINS
-            if not origin.startswith(("http://", "https://"))
+            origin for origin in config.ALLOWED_ORIGINS if not origin.startswith(("http://", "https://"))
         ]
         if invalid_origins:
-            errors.append(
-                "ALLOWED_ORIGINS must contain valid http or https origins."
-            )
+            errors.append("ALLOWED_ORIGINS must contain valid http or https origins.")
 
     if config.STELLAR_NETWORK not in VALID_STELLAR_NETWORKS:
-        errors.append(
-            "STELLAR_NETWORK must be one of: "
-            + ", ".join(sorted(VALID_STELLAR_NETWORKS))
-            + "."
-        )
+        errors.append("STELLAR_NETWORK must be one of: " + ", ".join(sorted(VALID_STELLAR_NETWORKS)) + ".")
 
     if config.CONTRACT_EXECUTION_MODE not in VALID_CONTRACT_EXECUTION_MODES:
         errors.append(
-            "CONTRACT_EXECUTION_MODE must be one of: "
-            + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES))
-            + "."
+            "CONTRACT_EXECUTION_MODE must be one of: " + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES)) + "."
         )
 
     if not config.CELERY_TASK_ALWAYS_EAGER:
         if not config.CELERY_BROKER_URL.strip():
-            errors.append(
-                "CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
-            errors.append(
-                "CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")

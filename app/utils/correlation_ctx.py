@@ -1,8 +1,9 @@
 import uuid
 from contextvars import ContextVar
+from typing import Optional
 
 # Context variable to store correlation ID across the request lifecycle
-correlation_id_var: ContextVar[str | None] = ContextVar('correlation_id', default=None)
+correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
 
 
 def get_correlation_id() -> str | None:

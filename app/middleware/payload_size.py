@@ -1,7 +1,4 @@
-from collections.abc import Callable
-
-from fastapi import HTTPException, Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import HTTPException, Request
 
 from app.core.config import settings
 from app.utils.logging import get_structured_logger
@@ -9,13 +6,24 @@ from app.utils.logging import get_structured_logger
 logger = get_structured_logger("payload_size_middleware")
 
 
-class PayloadSizeMiddleware(BaseHTTPMiddleware):
-    """Middleware to enforce payload size limits on incoming requests."""
+class PayloadSizeMiddleware:
+    """ASGI-native middleware to enforce payload size limits on incoming requests."""
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Skip size checking for non-body requests (GET, HEAD, etc.)
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        # Only process HTTP requests
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+
+        # Skip size checking for non-body requests (GET, HEAD, OPTIONS)
         if request.method in ("GET", "HEAD", "OPTIONS"):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         # Check Content-Length header if present
         content_length = request.headers.get("Content-Length")
@@ -28,20 +36,18 @@ class PayloadSizeMiddleware(BaseHTTPMiddleware):
                         content_length=content_length_int,
                         max_allowed=settings.MAX_REQUEST_BODY_SIZE_BYTES,
                         path=request.url.path,
-                        method=request.method
+                        method=request.method,
                     )
                     raise HTTPException(
                         status_code=413,
-                        detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes."
+                        detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
                     )
             except ValueError:
                 # Invalid Content-Length header, let it pass through
                 pass
 
-        # For safety, we'll also check the actual body size as we read it
-        # This is a backup in case Content-Length is missing or incorrect
-        original_receive = request._receive
-
+        # Wrap receive to check actual body size as we read it
+        original_receive = receive
         total_body_size = 0
 
         async def size_limited_receive():
@@ -55,14 +61,12 @@ class PayloadSizeMiddleware(BaseHTTPMiddleware):
                     body_size=total_body_size,
                     max_allowed=settings.MAX_REQUEST_BODY_SIZE_BYTES,
                     path=request.url.path,
-                    method=request.method
+                    method=request.method,
                 )
                 raise HTTPException(
                     status_code=413,
-                    detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes."
+                    detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
                 )
             return message
 
-        request._receive = size_limited_receive
-
-        return await call_next(request)
+        await self.app(scope, size_limited_receive, send)

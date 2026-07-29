@@ -1,10 +1,11 @@
-﻿"""
+"""
 Auth rate limiter implementation.
 
 This module provides a Redis-backed sliding-window rate limiter with a
 fallback to an in-process token bucket when Redis is unavailable or when
 `USE_REDIS_RATE_LIMITER` is disabled.
 """
+
 import asyncio
 import logging
 import random
@@ -37,8 +38,10 @@ return 1
 
 
 class SimpleRateLimiter:
+    _shared: Dict[str, List[float]] = defaultdict(list)
+
     def __init__(self) -> None:
-        self.requests: dict[str, list[float]] = defaultdict(list)
+        self.requests = SimpleRateLimiter._shared
 
     def is_allowed(self, key: str) -> bool:
         """Check if the key is allowed based on rate limits."""
@@ -126,5 +129,7 @@ class RedisRateLimiter:
 _shared_fallback = SimpleRateLimiter()
 
 rate_limiter = (
-    RedisRateLimiter() if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER else SimpleRateLimiter()
+    RedisRateLimiter()
+    if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER
+    else SimpleRateLimiter()
 )

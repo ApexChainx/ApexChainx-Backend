@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Dict
 from uuid import UUID
 
 from app.db.session import SessionLocal
@@ -20,25 +20,22 @@ def dispatch_webhook_delivery(self, delivery_id: str) -> dict[str, Any]:
     db = SessionLocal()
     try:
         from app.services.webhook_service import dispatch_delivery
+
         dispatch_delivery(db, UUID(delivery_id))
         logger.info("Webhook delivery %s dispatched.", delivery_id)
         return {"delivery_id": delivery_id, "dispatched": True}
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("Failed to dispatch webhook delivery %s: %s", delivery_id, error_msg)
-        
+
         # Log retry attempt if we have retries left
         if self.request.retries < self.max_retries:
             audit_log.log_event(
                 db,
                 event_type="webhook_retried",
-                details={
-                    "delivery_id": delivery_id,
-                    "retry_count": self.request.retries + 1,
-                    "error": error_msg
-                }
+                details={"delivery_id": delivery_id, "retry_count": self.request.retries + 1, "error": error_msg},
             )
-        
+
         raise self.retry(exc=exc)
     finally:
         db.close()
@@ -55,6 +52,7 @@ def retry_pending_webhook_deliveries() -> dict[str, Any]:
     db = SessionLocal()
     try:
         from app.services.webhook_service import retry_pending_deliveries
+
         count = retry_pending_deliveries(db)
         logger.info("Retried %d pending webhook deliveries.", count)
         return {"retried": count}
@@ -68,9 +66,7 @@ def retry_pending_webhook_deliveries() -> dict[str, Any]:
     max_retries=3,
     default_retry_delay=15,
 )
-def trigger_sla_violation_async(
-    self, sla_data: dict[str, Any], event: str = "sla.violation"
-) -> dict[str, Any]:
+def trigger_sla_violation_async(self, sla_data: Dict[str, Any], event: str = "sla.violation") -> Dict[str, Any]:
     """
     Async task wrapper around webhook_service.trigger_sla_violation_webhooks.
     Called from SLA computation tasks to avoid blocking.
@@ -80,15 +76,13 @@ def trigger_sla_violation_async(
         from app.models.webhook import WebhookEvent
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
-        deliveries = trigger_sla_violation_webhooks(
-            db, sla_data=sla_data, event=WebhookEvent(event)
-        )
+        deliveries = trigger_sla_violation_webhooks(db, sla_data=sla_data, event=WebhookEvent(event))
         logger.info("Triggered %d webhook deliveries for event=%s.", len(deliveries), event)
         return {"triggered": len(deliveries), "event": event}
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("trigger_sla_violation_async failed: %s", error_msg)
-        
+
         # Log retry attempt if we have retries left
         if self.request.retries < self.max_retries:
             audit_log.log_event(
@@ -98,10 +92,10 @@ def trigger_sla_violation_async(
                     "sla_data": sla_data,
                     "event": event,
                     "retry_count": self.request.retries + 1,
-                    "error": error_msg
-                }
+                    "error": error_msg,
+                },
             )
-        
+
         raise self.retry(exc=exc)
     finally:
         db.close()

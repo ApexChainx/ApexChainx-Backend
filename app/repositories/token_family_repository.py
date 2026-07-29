@@ -1,5 +1,5 @@
-from datetime import datetime
-
+from datetime import datetime, timezone
+from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models.orm.token_family import TokenFamilyORM
@@ -28,7 +28,7 @@ class TokenFamilyRepository:
         family = self.get_family(family_id)
         if family:
             family.current_sequence += 1
-            family.updated_at = datetime.utcnow()
+            family.updated_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(family)
         return family
@@ -37,7 +37,7 @@ class TokenFamilyRepository:
         family = self.get_family(family_id)
         if family:
             family.compromised = True
-            family.updated_at = datetime.utcnow()
+            family.updated_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(family)
         return family

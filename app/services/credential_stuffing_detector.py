@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from redis import Redis
 from time import time
 
 from redis import Redis
@@ -6,7 +9,7 @@ from app.core.config import settings
 
 
 class CredentialStuffingDetector:
-    def __init__(self, redis_client: Redis | None = None):
+    def __init__(self, redis_client: Redis | None = None) -> None:
         self.redis = redis_client or Redis.from_url(settings.CELERY_BROKER_URL)
 
     def _prefix_key(self, ip: str) -> str:

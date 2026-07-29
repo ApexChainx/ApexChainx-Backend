@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import List, Optional
 from uuid import UUID
 
 from celery.result import AsyncResult
@@ -14,9 +15,8 @@ from app.services.audit_log import audit_log
 from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
-from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
-from app.tasks.webhook_tasks import dispatch_webhook_delivery as dispatch_webhook_event
-from app.utils.correlation_utils import get_correlation_id
+from app.tasks.sla_tasks import enqueue_sla_computation, enqueue_bulk_sla_computation
+from app.utils.correlation_ctx import get_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
@@ -27,6 +27,7 @@ router = APIRouter(prefix="/jobs", tags=["Jobs"])
 # --------------------------------------------------------------------------- #
 # Schemas                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 class SLAJobRequest(BaseModel):
     device_id: str
@@ -64,6 +65,7 @@ class JobResponse(BaseModel):
 # BE-042: Job cleanup schemas
 class JobRetentionStatsResponse(BaseModel):
     """Current job retention statistics."""
+
     total_jobs: int
     by_status: dict
     by_age: dict
@@ -71,13 +73,15 @@ class JobRetentionStatsResponse(BaseModel):
 
 class JobCleanupRequest(BaseModel):
     """Request parameters for job cleanup."""
-    successful_retention_days: int | None = None
-    failed_retention_days: int | None = None
+
+    successful_retention_days: Optional[int] = None
+    failed_retention_days: Optional[int] = None
     dry_run: bool = False
 
 
 class JobCleanupResponse(BaseModel):
     """Response from job cleanup operation."""
+
     successful_jobs_deleted: int
     failed_jobs_deleted: int
     revoked_jobs_deleted: int
@@ -90,6 +94,7 @@ class JobCleanupResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def _serialize_job(job: Job) -> JobResponse:
     def _parse(val):
@@ -161,41 +166,41 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
 # Endpoints                                                                    #
 # --------------------------------------------------------------------------- #
 
+
 @router.post(
     "/sla-computation",
     response_model=JobResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def submit_sla_computation(payload: SLAJobRequest, request: Request, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def submit_sla_computation(
+    payload: SLAJobRequest, request: Request, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     """
     Enqueue an async SLA computation job for a single device.
     Returns immediately with a job record for status polling.
     """
     correlation_id = get_correlation_id()
-    
+
     logger.info(
         "Submitting SLA computation job",
         device_id=payload.device_id,
         period=payload.period,
-        correlation_id=correlation_id
+        correlation_id=correlation_id,
     )
-    
+
     with timer("job_submission_duration", {"job_type": "sla_computation"}):
         increment_counter("jobs_submitted", tags={"job_type": "sla_computation"})
         job = enqueue_sla_computation(
-            db, 
-            device_id=payload.device_id, 
-            period=payload.period,
-            correlation_id=correlation_id
+            db, device_id=payload.device_id, period=payload.period, correlation_id=correlation_id
         )
-        
+
         logger.info(
             "SLA computation job submitted",
             job_id=str(job.id),
             celery_task_id=job.celery_task_id,
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
-        
+
         return _serialize_job(job)
 
 
@@ -204,44 +209,43 @@ def submit_sla_computation(payload: SLAJobRequest, request: Request, current_use
     response_model=JobResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def submit_bulk_sla_computation(payload: BulkSLAJobRequest, request: Request, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def submit_bulk_sla_computation(
+    payload: BulkSLAJobRequest, request: Request, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     """
     Enqueue an async bulk SLA computation job for multiple devices.
     Returns immediately with a job record for status polling.
     """
     correlation_id = get_correlation_id()
-    
+
     if not payload.device_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="device_ids must not be empty.",
         )
-    
+
     logger.info(
         "Submitting bulk SLA computation job",
         device_count=len(payload.device_ids),
         period=payload.period,
-        correlation_id=correlation_id
+        correlation_id=correlation_id,
     )
-    
+
     with timer("job_submission_duration", {"job_type": "bulk_sla_computation"}):
         increment_counter("jobs_submitted", tags={"job_type": "bulk_sla_computation"})
         increment_counter("bulk_job_devices_submitted", value=len(payload.device_ids))
         job = enqueue_bulk_sla_computation(
-            db, 
-            device_ids=payload.device_ids, 
-            period=payload.period,
-            correlation_id=correlation_id
+            db, device_ids=payload.device_ids, period=payload.period, correlation_id=correlation_id
         )
-        
+
         logger.info(
             "Bulk SLA computation job submitted",
             job_id=str(job.id),
             celery_task_id=job.celery_task_id,
             device_count=len(payload.device_ids),
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
-        
+
         return _serialize_job(job)
 
 
@@ -324,12 +328,12 @@ def cancel_job(job_id: UUID, current_user=Depends(require_admin), db: Session = 
             "celery_task_id": job.celery_task_id,
             "job_type": job.job_type.value,
             "previous_status": job.status.value,
-            "payload": job.payload
-        }
+            "payload": job.payload,
+        },
     )
 
     increment_counter("jobs_cancelled", tags={"job_type": job.job_type.value})
-    
+
     celery_app.control.revoke(job.celery_task_id, terminate=False)
     job.status = JobStatus.REVOKED
     db.commit()
@@ -337,8 +341,10 @@ def cancel_job(job_id: UUID, current_user=Depends(require_admin), db: Session = 
 
 # BE-041: Job retry endpoint
 
+
 class JobRetryResponse(BaseModel):
     """Response from job retry operation."""
+
     id: UUID
     celery_task_id: str
     job_type: JobType
@@ -362,16 +368,16 @@ def retry_job(
     db: Session = Depends(get_db),
 ):
     """Retry a failed or revoked job.
-    
+
     BE-041: Allows authorized users to intentionally retry eligible failed jobs.
-    
+
     Retry Policy:
     - Only FAILED or REVOKED jobs can be retried
     - Maximum retries per job: configurable via max_retries field (default: 3)
     - Each retry creates a new Celery task with the original payload
     - Retry attempts are tracked and audited
     - Jobs that exceed max_retries are permanently marked as failed
-    
+
     Returns:
         202 Accepted with new job status and incremented retry count
         400 Bad Request if job is not eligible for retry
@@ -379,21 +385,21 @@ def retry_job(
     """
     correlation_id = get_correlation_id()
     job = _get_job_or_404(db, job_id)
-    
+
     # Validate job is eligible for retry
     if job.status not in (JobStatus.FAILURE, JobStatus.REVOKED):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot retry job with status '{job.status.value}'. Only FAILED or REVOKED jobs can be retried.",
         )
-    
+
     # Check retry limit
     if job.retry_count >= job.max_retries:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Job has exceeded maximum retry limit ({job.max_retries}). Current retry count: {job.retry_count}",
         )
-    
+
     # Log retry attempt before performing the action
     audit_log.log_event(
         db,
@@ -408,53 +414,55 @@ def retry_job(
             "payload": job.payload,
             "previous_error": job.error,
             "correlation_id": correlation_id,
-            "initiated_by": getattr(current_user, 'email', 'unknown'),
-        }
+            "initiated_by": getattr(current_user, "email", "unknown"),
+        },
     )
-    
+
     logger.info(
         "Retrying job",
         job_id=str(job.id),
         job_type=job.job_type.value,
         retry_count=job.retry_count + 1,
         max_retries=job.max_retries,
-        correlation_id=correlation_id
+        correlation_id=correlation_id,
     )
-    
+
     # Increment retry count and update status
     job.retry_count += 1
-    job.last_retried_at = datetime.utcnow()
+    job.last_retried_at = datetime.now(timezone.utc)
     job.error = None  # Clear previous error
     job.status = JobStatus.PENDING
     job.progress = 0.0
     job.started_at = None
     job.finished_at = None
-    
+
     # Re-enqueue the job based on its type
     try:
         payload = json.loads(job.payload) if job.payload else {}
-        
+
         if job.job_type == JobType.SLA_COMPUTATION:
             new_task = enqueue_sla_computation(
                 db,
                 device_id=payload.get("device_id", ""),
                 period=payload.get("period", ""),
-                correlation_id=correlation_id
+                correlation_id=correlation_id,
             )
         elif job.job_type == JobType.BULK_SLA_COMPUTATION:
             new_task = enqueue_bulk_sla_computation(
                 db,
                 device_ids=payload.get("device_ids", []),
                 period=payload.get("period", ""),
-                correlation_id=correlation_id
+                correlation_id=correlation_id,
             )
         elif job.job_type == JobType.WEBHOOK_DISPATCH:
             # For webhook jobs, re-dispatch with the original payload
-            task_result = dispatch_webhook_event.delay(payload)
+            from app.tasks.webhook_tasks import dispatch_webhook_delivery
+
+            task_result = dispatch_webhook_delivery.delay(payload)
             job.celery_task_id = task_result.id
             db.commit()
             db.refresh(job)
-            
+
             return JobRetryResponse(
                 id=job.id,
                 celery_task_id=job.celery_task_id,
@@ -469,20 +477,20 @@ def retry_job(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported job type for retry: {job.job_type.value}",
             )
-        
+
         # Update job with new Celery task ID
         job.celery_task_id = new_task.celery_task_id
         db.commit()
         db.refresh(job)
-        
+
         logger.info(
             "Job retry enqueued successfully",
             job_id=str(job.id),
             new_celery_task_id=job.celery_task_id,
             retry_count=job.retry_count,
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
-        
+
         return JobRetryResponse(
             id=job.id,
             celery_task_id=job.celery_task_id,
@@ -492,15 +500,10 @@ def retry_job(
             max_retries=job.max_retries,
             message=f"Job retry #{job.retry_count} initiated successfully",
         )
-        
+
     except Exception as e:
         db.rollback()
-        logger.error(
-            "Failed to retry job",
-            job_id=str(job.id),
-            error=str(e),
-            correlation_id=correlation_id
-        )
+        logger.error("Failed to retry job", job_id=str(job.id), error=str(e), correlation_id=correlation_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry job: {e!s}",
@@ -509,10 +512,11 @@ def retry_job(
 
 # BE-042: Job retention and cleanup endpoints
 
+
 @router.get("/retention-stats", response_model=JobRetentionStatsResponse)
 def get_job_retention_stats(current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """Get current job retention statistics without deleting anything.
-    
+
     BE-042: Provides visibility into job storage usage and aging.
     """
     cleanup_service = JobCleanupService(db)
@@ -520,27 +524,23 @@ def get_job_retention_stats(current_user=Depends(require_admin), db: Session = D
 
 
 @router.post("/cleanup", response_model=JobCleanupResponse)
-def cleanup_old_jobs(
-    payload: JobCleanupRequest,
-    current_user=Depends(require_admin),
-    db: Session = Depends(get_db)
-):
+def cleanup_old_jobs(payload: JobCleanupRequest, current_user=Depends(require_admin), db: Session = Depends(get_db)):
     """Clean up old completed and failed jobs based on retention policy.
-    
+
     BE-042: Removes old job records to prevent unbounded database growth.
     - Successful/revoked jobs: default 30 day retention
     - Failed jobs: default 90 day retention (preserved longer for debugging)
-    
+
     Use dry_run=True to preview what would be deleted without actually deleting.
     """
     cleanup_service = JobCleanupService(db)
-    
+
     result = cleanup_service.cleanup_old_jobs(
         successful_retention_days=payload.successful_retention_days,
         failed_retention_days=payload.failed_retention_days,
         dry_run=payload.dry_run,
     )
-    
+
     # Log the cleanup operation
     audit_log.log_event(
         db,
@@ -551,9 +551,8 @@ def cleanup_old_jobs(
             "failed_deleted": result["failed_jobs_deleted"],
             "revoked_deleted": result["revoked_jobs_deleted"],
             "dry_run": payload.dry_run,
-            "executed_by": getattr(current_user, 'email', 'unknown'),
-        }
+            "executed_by": getattr(current_user, "email", "unknown"),
+        },
     )
-    
-    return JobCleanupResponse(**result)
 
+    return JobCleanupResponse(**result)

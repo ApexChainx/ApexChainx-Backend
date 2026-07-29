@@ -3,6 +3,7 @@
 Reads the Idempotency-Key header on POST/PUT/PATCH/DELETE requests, caches
 responses in Redis, and replays them on duplicate requests with the same key.
 """
+
 import hashlib
 import json
 

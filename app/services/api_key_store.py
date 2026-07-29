@@ -48,12 +48,8 @@ def create_api_key(
     return orm, raw_key
 
 
-def get_key_by_hash(db: Session, hashed_key: str) -> ApiKeyORM | None:
-    return (
-        db.query(ApiKeyORM)
-        .filter(ApiKeyORM.hashed_key == hashed_key)
-        .first()
-    )
+def get_key_by_hash(db: Session, hashed_key: str) -> Optional[ApiKeyORM]:
+    return db.query(ApiKeyORM).filter(ApiKeyORM.hashed_key == hashed_key).first()
 
 
 def revoke_key(db: Session, key_id: str) -> bool:

@@ -4,13 +4,14 @@ from uuid import uuid4
 
 from app.api.v1.endpoints.webhooks import WebhookCreate
 from app.models.auth import LoginRequest, RegisterRequest
-from app.models.enums import OutageStatus, Role, Severity
-from app.models.outage import Location
+from app.models.enums import Role, Severity, OutageStatus
+from app.models.outage import Location, Outage
 from app.models.outage_dto import OutageCreate
 from app.models.payment import PaymentTransaction
 from app.models.sla import SLAResult
 
 _seq = itertools.count(1)
+
 
 def _next_id() -> str:
     return str(next(_seq))
@@ -35,6 +36,28 @@ def make_register_request(
         full_name=full_name,
         role=role,
     )
+
+
+def make_outage(
+    overrides: dict | None = None,
+) -> Outage:
+    overrides = overrides or {}
+    default_payload = {
+        "id": f"outage-{_next_id()}",
+        "site_name": "Example Site",
+        "site_id": "site-123",
+        "severity": Severity.high,
+        "status": OutageStatus.open,
+        "detected_at": datetime(2026, 1, 1, 0, 0),
+        "description": "Example outage description",
+        "affected_services": ["core-api"],
+        "affected_subscribers": 42,
+        "assigned_to": "oncall@example.com",
+        "created_by": "tester@example.com",
+        "location": Location(latitude=40.7128, longitude=-74.0060),
+    }
+    default_payload.update(overrides)
+    return Outage(**default_payload)
 
 
 def make_outage_create(
@@ -74,8 +97,8 @@ def make_payment_transaction(
         "status": "confirmed",
         "outage_id": f"outage-{_next_id()}",
         "sla_result_id": 1,
-        "created_at": datetime.utcnow(),
-        "confirmed_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "confirmed_at": datetime.now(timezone.utc),
         "retry_count": 0,
         "last_retried_at": None,
     }

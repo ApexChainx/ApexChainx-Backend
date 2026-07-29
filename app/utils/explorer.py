@@ -26,16 +26,18 @@ def export_outages(outages: list, format: str):
         output = io.StringIO()
         writer = csv.writer(output)
 
-        writer.writerow([
-            "id",
-            "service",
-            "severity",
-            "status",
-            "started_at",
-            "mttr_minutes",
-            "sla_status",
-            "sla_amount",
-        ])
+        writer.writerow(
+            [
+                "id",
+                "service",
+                "severity",
+                "status",
+                "started_at",
+                "mttr_minutes",
+                "sla_status",
+                "sla_amount",
+            ]
+        )
 
         for outage in outages:
             sla_status = ""
@@ -50,16 +52,18 @@ def export_outages(outages: list, format: str):
                 sla_status = sla["status"]
                 sla_amount = sla["amount"]
 
-            writer.writerow([
-                outage.id,
-                outage.service,
-                outage.severity.value,
-                outage.status.value,
-                outage.started_at,
-                outage.mttr_minutes,
-                sla_status,
-                sla_amount,
-            ])
+            writer.writerow(
+                [
+                    outage.id,
+                    outage.service,
+                    outage.severity.value,
+                    outage.status.value,
+                    outage.started_at,
+                    outage.mttr_minutes,
+                    sla_status,
+                    sla_amount,
+                ]
+            )
 
         return output.getvalue()
 

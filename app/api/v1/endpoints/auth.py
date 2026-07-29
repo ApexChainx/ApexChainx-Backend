@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Header, HTTPException, status, Depends, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.rate_limiter import rate_limiter
@@ -17,7 +17,8 @@ from app.models.auth import (
     SessionInventoryResponse,
 )
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
-from app.services.auth_store import AuthStore
+from app.core.config import settings
+from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 router = APIRouter()
 
@@ -43,10 +44,6 @@ Configuration (in app.core.config):
 - AUTH_RATE_LIMIT_REQUESTS: 10
 - AUTH_RATE_LIMIT_WINDOW_SECONDS: 300
 """
-
-
-from app.core.config import settings
-from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 
 def _get_client_ip(request: Request) -> str:
@@ -107,7 +104,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     from app.services.audit_log import audit_log
 
     client_ip = _get_client_ip(request)
-    
+
     # Credential stuffing detection
     credential_stuffing_detector.record_attempt(client_ip, payload.password)
     if credential_stuffing_detector.detect_stuffing(client_ip):
@@ -125,14 +122,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             status_code=429,
             detail=f"Too many login attempts from this IP. Account locked for {lockout_minutes} minutes.",
         )
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
-        raise HTTPException(
-            status_code=429, 
-            detail="Too many login attempts from this IP. Please try again later."
-        )
-    
+        raise HTTPException(status_code=429, detail="Too many login attempts from this IP. Please try again later.")
+
     try:
         return AuthStore.login(payload, db=db)
     except ValueError as exc:
@@ -142,14 +136,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 @router.post("/refresh", response_model=AuthSessionResponse)
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}"):
-        raise HTTPException(
-            status_code=429, 
-            detail="Too many refresh attempts from this IP. Please try again later."
-        )
-    
+        raise HTTPException(status_code=429, detail="Too many refresh attempts from this IP. Please try again later.")
+
     try:
         return AuthStore.refresh(payload.refresh_token, db=db)
     except ValueError as exc:
@@ -181,16 +172,17 @@ def update_profile(
         raise HTTPException(status_code=404, detail="User not found")
 
     from app.services.audit_log import audit_log
+
     changed = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    audit_log.log_event(db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())})
+    audit_log.log_event(
+        db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())}
+    )
 
     return user_orm_to_pydantic(updated)
 
 
 @router.post("/logout", response_model=AuthLogoutResponse)
-def logout(
-    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
-):
+def logout(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
     token = _extract_bearer_token(authorization)
     AuthStore.logout(token, db=db)
     return AuthLogoutResponse(message="Logged out successfully")
@@ -203,10 +195,10 @@ def get_session_inventory(
 ):
     """Get all active sessions for the current user."""
     sessions = AuthStore.get_user_sessions(current_user.email, db=db)
-    
+
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
-    
+
     return SessionInventoryResponse(
         sessions=session_infos,
         total_count=len(session_infos),
@@ -222,10 +214,10 @@ def get_admin_session_inventory(
 ):
     """Admin endpoint to get all sessions for a specific user."""
     sessions = AuthStore.get_user_sessions(email, db=db)
-    
+
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
-    
+
     return SessionInventoryResponse(
         sessions=session_infos,
         total_count=len(session_infos),
@@ -265,6 +257,168 @@ def auth_ping():
     return {"message": "auth ok"}
 
 
+# --------------------------------------------------------------------------- #
+# GDPR Endpoints                                                              #
+# --------------------------------------------------------------------------- #
+
+
+class GDPRExportResponse(BaseModel):
+    job_id: str
+    exported_at: str
+    size_bytes: int
+    tarball_base64: bytes
+    entry_count: int
+
+
+class GDPREraseResponse(BaseModel):
+    status: str
+    job_id: str
+    message: str
+
+
+@router.post("/me/export", response_model=GDPRExportResponse)
+def export_my_data(
+    current_user: AuthUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Export all personal data for the authenticated user (GDPR compliance).
+
+    Returns a tarball containing user data and audit log entries.
+    Designed to complete in < 30 s for up to 1 000 audit events.
+    """
+    from app.services.gdpr import export_user_data
+
+    repo = UserRepository(db)
+    user_orm = repo.get_by_id(current_user.id)
+    if not user_orm:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    result = export_user_data(db, user_orm)
+    return result
+
+
+@router.post("/me/erase", response_model=GDPREraseResponse, status_code=status.HTTP_202_ACCEPTED)
+def erase_my_data(
+    current_user: AuthUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete the authenticated user account (GDPR right-to-erasure).
+
+    Personal data is pseudonymised and all active sessions are revoked.
+    Returns 202 Accepted with a job id for tracking.
+    """
+    from app.services.gdpr import erase_user_data
+
+    repo = UserRepository(db)
+    user_orm = repo.get_by_id(current_user.id)
+    if not user_orm:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    result = erase_user_data(db, user_orm)
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# Impersonation Endpoint                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class ImpersonateRequest(BaseModel):
+    user_id: str
+    reason: str = Field(..., min_length=1, description="Mandatory reason for impersonation")
+
+
+class ImpersonateResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 900  # 15 minutes for impersonation tokens
+    acting_as: str
+
+
+@router.post("/impersonate", response_model=ImpersonateResponse)
+def impersonate_user(
+    payload: ImpersonateRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint to impersonate a non-admin user (audit-logged).
+
+    Returns a short-lived JWT (15 min) with an ``act`` claim set to the
+    admin's id so that every action performed during impersonation is
+    attributable.
+
+    Acceptance criteria:
+    - Cannot impersonate another admin
+    - Reason is mandatory and recorded in the audit log
+    """
+    from app.services.audit_log import audit_log
+
+    repo = UserRepository(db)
+    target = repo.get_by_id(payload.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    if target.role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot impersonate another admin user",
+        )
+
+    token = _generate_impersonation_token(target, admin_user)
+
+    audit_log.log_event(
+        db,
+        "impersonation_started",
+        email=admin_user.email,
+        actor_id=admin_user.id,
+        details={
+            "target_user_id": target.id,
+            "target_email": target.email,
+            "reason": payload.reason,
+        },
+    )
+
+    return ImpersonateResponse(access_token=token, acting_as=target.id)
+
+
+def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
+    """Generate a short-lived impersonation access token."""
+    import time
+    import hmac
+    import hashlib
+    import base64
+    import json
+
+    from app.core.config import settings as app_settings
+
+    header = base64.urlsafe_b64encode(
+        json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
+    ).rstrip(b"=").decode()
+
+    now = int(time.time())
+    payload_dict = {
+        "sub": target_orm.id,
+        "email": target_orm.email,
+        "act": admin_user.id,  # acting admin
+        "iat": now,
+        "exp": now + 900,  # 15 minutes
+        "scope": "impersonate",
+    }
+    payload = base64.urlsafe_b64encode(
+        json.dumps(payload_dict).encode()
+    ).rstrip(b"=").decode()
+
+    signing_key = (app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
+    signature = hmac.new(
+        signing_key,
+        f"{header}.{payload}".encode(),
+        hashlib.sha256,
+    ).digest()
+    sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+
+    return f"{header}.{payload}.{sig_b64}"
+
+
 class RevokeResponse(BaseModel):
     message: str
 
@@ -278,9 +432,10 @@ def revoke_token(
     """Revoke the current access token. Subsequent requests with this token
     will receive 401 'Token revoked' response."""
     from app.services.auth_store import TOKEN_TTL_SECONDS
-    from app.services.token_revocation import revoke
+
     token = _extract_bearer_token(authorization)
     revoke(hash_token(token), TOKEN_TTL_SECONDS)
     from app.services.audit_log import audit_log
+
     audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
     return RevokeResponse(message="Token revoked successfully")
