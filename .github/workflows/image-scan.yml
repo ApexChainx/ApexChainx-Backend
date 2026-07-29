@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── Build local image so Trivy can scan it ───────────────────────────────
       - name: Build Docker image for scanning
