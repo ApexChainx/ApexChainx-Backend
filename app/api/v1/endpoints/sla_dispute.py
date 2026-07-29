@@ -1,18 +1,21 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
-from app.models.sla_dispute import DisputeAuditLog, SLADispute, DisputeStatus
 from app.models.orm.sla import SLAResultORM
+from app.models.sla_dispute import DisputeAuditLog, DisputeStatus, SLADispute
+from app.repositories.sla_repository import SLARepository
 from app.schemas.sla_dispute import (
+    CreateProposedSLARequest,
     DisputeAuditLogResponse,
     DisputeFlagRequest,
     DisputeResolveRequest,
     DisputeResponse,
-    CreateProposedSLARequest,
 )
 from app.core.security import require_engineer, require_admin
 from app.services.metrics import (
@@ -204,7 +207,7 @@ def resolve_dispute(
     dispute.status = payload.status
     dispute.resolved_by = payload.resolved_by
     dispute.resolution_notes = payload.resolution_notes
-    dispute.resolved_at = datetime.utcnow()
+    dispute.resolved_at = datetime.now(timezone.utc)
 
     # If resolving and apply_proposed is true, mark the proposed SLA as latest
     if payload.status == DisputeStatus.RESOLVED and payload.apply_proposed:

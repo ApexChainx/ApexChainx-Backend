@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import threading
 import time
 from enum import Enum
@@ -18,7 +20,7 @@ class CircuitBreaker:
         fail_threshold: int = 10,
         window_seconds: int = 300,
         reset_seconds: int = 600,
-    ):
+    ) -> None:
         self._fail_threshold = fail_threshold
         self._window_seconds = window_seconds
         self._reset_seconds = reset_seconds
@@ -30,7 +32,10 @@ class CircuitBreaker:
 
     def _host_key(self, url: str) -> str:
         from urllib.parse import urlparse
-        return urlparse(url).hostname or url
+        try:
+            return urlparse(str(url)).hostname or str(url)
+        except Exception:
+            return str(url)
 
     def _record_failure(self, host: str) -> None:
         now = time.time()

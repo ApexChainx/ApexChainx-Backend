@@ -1,7 +1,7 @@
 import csv
 import io
 import json
-from typing import Iterable
+from collections.abc import Iterable
 
 from app.models.outage import Outage
 

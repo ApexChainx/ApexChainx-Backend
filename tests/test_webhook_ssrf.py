@@ -1,4 +1,5 @@
 import pytest
+
 from app.core.config import settings
 from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 

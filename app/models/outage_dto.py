@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from app.models.enums import OutageStatus, Severity
 from app.core.config import settings
+from app.models.enums import OutageStatus, Severity
 
 from .outage import Location
 
@@ -45,16 +45,16 @@ class OutageCreate(BaseModel):
 
     id: str = Field(..., min_length=1)
     site_name: str = Field(..., min_length=1)
-    site_id: Optional[str] = None
+    site_id: str | None = None
     severity: Severity
     status: OutageStatus
     detected_at: datetime
     description: str = Field(..., min_length=1)
-    affected_services: List[str] = Field(..., min_length=1)
-    affected_subscribers: Optional[int] = Field(default=None, ge=0)
-    assigned_to: Optional[str] = None
-    created_by: Optional[str] = None
-    location: Optional[Location] = None
+    affected_services: list[str] = Field(..., min_length=1)
+    affected_subscribers: int | None = Field(default=None, ge=0)
+    assigned_to: str | None = None
+    created_by: str | None = None
+    location: Location | None = None
 
     @field_validator("site_name")
     @classmethod
@@ -72,7 +72,7 @@ class OutageCreate(BaseModel):
 
     @field_validator("affected_services")
     @classmethod
-    def validate_affected_services_count(cls, v: List[str]) -> List[str]:
+    def validate_affected_services_count(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("affected_services must contain at least one entry")
         if len(v) > settings.MAX_AFFECTED_SERVICES_COUNT:
@@ -91,16 +91,16 @@ class OutageCreate(BaseModel):
 
 
 class OutageUpdate(BaseModel):
-    site_name: Optional[str] = None
-    severity: Optional[Severity] = None
-    status: Optional[OutageStatus] = None
-    resolved_at: Optional[datetime] = None
-    description: Optional[str] = None
-    affected_services: Optional[List[str]] = None
-    affected_subscribers: Optional[int] = None
-    assigned_to: Optional[str] = None
-    created_by: Optional[str] = None
-    location: Optional[Location] = None
+    site_name: str | None = None
+    severity: Severity | None = None
+    status: OutageStatus | None = None
+    resolved_at: datetime | None = None
+    description: str | None = None
+    affected_services: list[str] | None = None
+    affected_subscribers: int | None = None
+    assigned_to: str | None = None
+    created_by: str | None = None
+    location: Location | None = None
 
 
 class ImportConsistency(str, Enum):
@@ -131,11 +131,11 @@ class BulkOutageCreate(BaseModel):
         }
     )
 
-    outages: List[OutageCreate]
+    outages: list[OutageCreate]
 
     @field_validator("outages")
     @classmethod
-    def validate_bulk_count(cls, v: List[OutageCreate]) -> List[OutageCreate]:
+    def validate_bulk_count(cls, v: list[OutageCreate]) -> list[OutageCreate]:
         if len(v) > settings.MAX_BULK_OUTAGES_COUNT:
             raise ValueError(f"too many outages in bulk request. Maximum allowed is {settings.MAX_BULK_OUTAGES_COUNT}.")
         return v
@@ -156,13 +156,13 @@ class ImportRowResult(BaseModel):
     """Machine-readable result for a single import row."""
 
     row: int
-    id: Optional[str] = None
+    id: str | None = None
     status: str  # "ok" | "error"
-    errors: Optional[List[ImportFieldError]] = None
-    outage_id: Optional[str] = None
-    persisted: Optional[bool] = None
-    duplicate: Optional[bool] = None
-    existing_id: Optional[str] = None
+    errors: list[ImportFieldError] | None = None
+    outage_id: str | None = None
+    persisted: bool | None = None
+    duplicate: bool | None = None
+    existing_id: str | None = None
 
 
 class ImportResponse(BaseModel):
@@ -174,5 +174,5 @@ class ImportResponse(BaseModel):
     persisted: int
     validated: int
     error_count: int
-    errors: List[ImportRowResult]
-    rows: List[ImportRowResult]
+    errors: list[ImportRowResult]
+    rows: list[ImportRowResult]

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -19,7 +19,7 @@ class SLAResultORM(Base):
     rating = Column(String(20), nullable=False)  # "exceptional" | "excellent" | "good" | "poor"
     policy_version = Column(String(50), nullable=False, default="1.0")
     threshold_source = Column(String(50), nullable=False, default="config")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     is_latest = Column(Boolean, nullable=False, default=False)
     reason_code = Column(String(50), nullable=True)  # e.g., "mttr_exceeded", "met_exceptional"
     decision_trace = Column(Text, nullable=True)  # Machine-readable decision trace

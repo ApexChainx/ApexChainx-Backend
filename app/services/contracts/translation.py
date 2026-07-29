@@ -15,6 +15,8 @@ def translate_contract_result(raw_result: dict) -> SLAResult:
             "good": "good",
             "poor": "poor",
         }[raw_result["rating"]],
+        policy_version=raw_result.get("policy_version", "1.0"),
+        threshold_source=raw_result.get("threshold_source", "contract"),
         compute_hash=raw_result.get("compute_hash"),
     )
 

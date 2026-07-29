@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+
 from app.main import app
 
 
@@ -24,9 +25,11 @@ def test_health_readiness_endpoint():
     assert "timestamp" in body
 
 
-def test_legacy_health_endpoint_is_liveness_alias():
+def test_legacy_health_endpoint_is_deprecated_and_redirects():
+    """Legacy /health now returns 308 redirect to /health/liveness with Deprecation header (BE-041)."""
     client = TestClient(app)
-    response = client.get("/health")
+    response = client.get("/health", follow_redirects=False)
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.status_code == 308
+    assert response.headers.get("location") == "/health/liveness"
+    assert response.headers.get("deprecation") == "true"

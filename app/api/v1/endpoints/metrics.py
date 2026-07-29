@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Response, Depends
 from app.services.metrics import metrics
 from app.core.security import require_engineer
@@ -120,6 +120,6 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
     # Add process metadata
     prometheus_lines.append("# HELP app_metrics_timestamp Timestamp of metrics collection")
     prometheus_lines.append("# TYPE app_metrics_timestamp gauge")
-    prometheus_lines.append(f"app_metrics_timestamp {datetime.utcnow().timestamp()}")
+    prometheus_lines.append(f"app_metrics_timestamp {datetime.now(timezone.utc).timestamp()}")
 
     return Response(content="\n".join(prometheus_lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")

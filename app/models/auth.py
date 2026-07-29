@@ -22,9 +22,9 @@ class AuthUser(BaseModel):
 
     id: str
     email: str
-    full_name: Optional[str] = None
+    full_name: str | None = None
     role: Role = Role.engineer
-    stellar_wallet: Optional[str] = None
+    stellar_wallet: str | None = None
     created_at: datetime
 
 

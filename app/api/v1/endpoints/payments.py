@@ -2,13 +2,14 @@ import hashlib
 import hmac
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
@@ -43,11 +44,11 @@ class ReconciliationHistoryEntry(BaseModel):
     """A single reconciliation history entry."""
 
     event_type: str
-    actor: Optional[str] = None
-    previous_status: Optional[str] = None
+    actor: str | None = None
+    previous_status: str | None = None
     new_status: str
     timestamp: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class ReconciliationHistoryResponse(BaseModel):
@@ -55,24 +56,43 @@ class ReconciliationHistoryResponse(BaseModel):
 
     transaction_id: str
     current_status: str
-    history: List[ReconciliationHistoryEntry]
+    history: list[ReconciliationHistoryEntry]
 
 
-@router.get("/", response_model=PaginatedPayments)
+@router.get("/")
 def list_payments(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    status: Optional[str] = None,
-    type: Optional[str] = None,
-    outage_id: Optional[str] = None,
-    date_from: Optional[datetime] = Query(default=None),
-    date_to: Optional[datetime] = Query(default=None),
+    page: int = Query(default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    cursor: str | None = Query(default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."),
+    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
+    status: str | None = None,
+    type: str | None = None,
+    outage_id: str | None = None,
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
+    """List payments with filtering and pagination.
+
+    Supports both offset-based (page/page_size) and cursor-based (cursor/limit) pagination.
+    When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
+    """
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="date_from cannot be after date_to")
     repo = PaymentRepository(db)
+
+    if cursor is not None:
+        return repo.list_cursor(
+            cursor=cursor,
+            limit=limit,
+            status=status,
+            outage_id=outage_id,
+            type=type,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
     items, total = repo.list(
         page=page,
         page_size=page_size,
@@ -90,7 +110,7 @@ def payments_ping():
     return {"message": "payments ok"}
 
 
-@router.get("/{transaction_id}/history", response_model=List[Dict[str, Any]])
+@router.get("/{transaction_id}/history", response_model=list[dict[str, Any]])
 def get_payment_history(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     repo = PaymentRepository(db)
     if not repo.get(transaction_id):
@@ -196,16 +216,16 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
 class ProviderCallbackRequest(BaseModel):
     transaction_id: str
     status: str
-    provider_ref: Optional[str] = None
+    provider_ref: str | None = None
     # BE-028: callers must supply a per-request nonce for replay protection.
     # The nonce must be unique within the CALLBACK_NONCE_TTL_SECONDS window.
-    nonce: Optional[str] = None
+    nonce: str | None = None
 
 
 def _verify_callback_signature(
     transaction_id: str,
     status: str,
-    nonce: Optional[str],
+    nonce: str | None,
     signature: str,
     secret: str,
 ) -> bool:
@@ -224,8 +244,8 @@ def _verify_callback_signature(
 @router.post("/provider-callback", response_model=PaymentTransaction)
 def provider_callback(
     payload: ProviderCallbackRequest,
-    x_webhook_signature: Optional[str] = Header(default=None),
-    x_callback_nonce: Optional[str] = Header(default=None),
+    x_webhook_signature: str | None = Header(default=None),
+    x_callback_nonce: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ):
     """

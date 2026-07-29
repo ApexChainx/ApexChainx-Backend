@@ -43,4 +43,12 @@ migrate: ## Run alembic migrations
 clean: ## Remove build artifacts
 	rm -rf __pycache__ .pytest_cache .mypy_cache *.egg-info
 
-CI: lint format typecheck test ## Full CI pipeline
+welcome: ## Codespaces onboarding: install dev deps, verify env, run tests
+	@echo "🚀 ApexChainx Backend – Codespaces onboarding"
+	pip install -e ".[dev]"
+	@echo "✅ Dependencies installed"
+	python -c "from app.main import app; print('✅ app.main imports cleanly')"
+	pytest --tb=short -q
+	@echo "🎉 Welcome to ApexChainx! Everything looks good."
+
+ci: lint format typecheck test ## Full CI pipeline

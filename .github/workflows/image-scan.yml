@@ -1,0 +1,56 @@
+name: Image Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run daily at 06:00 UTC to catch newly published CVEs
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+  security-events: write  # upload SARIF to Security tab
+
+jobs:
+  trivy-scan:
+    name: Trivy CVE scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Build local image so Trivy can scan it ───────────────────────────────
+      - name: Build Docker image for scanning
+        run: |
+          docker build -t apexchainx-backend:scan .
+
+      # ── Trivy scan → SARIF ───────────────────────────────────────────────────
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: apexchainx-backend:scan
+          format: sarif
+          output: trivy-results.sarif
+          # Fail the workflow if any HIGH or CRITICAL CVEs are found
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      # ── Upload SARIF to Security tab (always, even on failure) ───────────────
+      - name: Upload Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+
+      # ── Also upload as artifact for download ────────────────────────────────
+      - name: Upload Trivy SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-sarif
+          path: trivy-results.sarif
+          retention-days: 30

@@ -11,6 +11,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.formatters import canonical_json
 from app.services.webhook_signing import (
@@ -19,6 +20,10 @@ from app.services.webhook_signing import (
 )
 from app.services.webhook_breaker import breaker
 from app.core.config import settings
+issue/114-117-webhook-concurrency-canonical-json
+
+from app.core.tracing import get_current_traceparent, traced
+main
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
@@ -100,17 +105,26 @@ def _build_headers(
         - X-Webhook-Timestamp: ISO-formatted UTC timestamp
         - X-Webhook-Signature: signature (if secret configured)
         - X-Webhook-Signature-Version: signature version (if secret configured)
+        - traceparent: W3C trace context for distributed tracing (from OTel)
     """
     corr_id = get_or_generate_correlation_id()
-    trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-    span_id = os.urandom(8).hex()
 
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.utcnow().isoformat(),
-        "traceparent": f"00-{trace_id}-{span_id}-01",
+        "X-Webhook-Timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+    # Inject OTel trace context (traceparent) for distributed tracing
+    traceparent = get_current_traceparent()
+    if traceparent:
+        headers["traceparent"] = traceparent
+    else:
+        # Fallback: generate traceparent from correlation ID for non-OTel contexts
+        trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
+        span_id = os.urandom(8).hex()
+        headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
+
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
@@ -208,6 +222,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         return False
 
 
+@traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
@@ -221,7 +236,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
         delivery.error_message = "Circuit breaker open, delivery deferred"
         delivery.next_retry_at = None
-        delivery.updated_at = datetime.utcnow()
+        delivery.updated_at = datetime.now(timezone.utc)
         db.commit()
         logger.warning(
             "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
@@ -231,7 +246,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
     delivery.attempt_count += 1
     delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.utcnow()
+    delivery.updated_at = datetime.now(timezone.utc)
     db.commit()
 
     with dispatch_limiter.acquire(str(webhook.id)):
@@ -239,7 +254,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS
-        delivery.delivered_at = datetime.utcnow()
+        delivery.delivered_at = datetime.now(timezone.utc)
         delivery.next_retry_at = None
         logger.info(
             "Webhook delivery %s succeeded on attempt %d for webhook %s.",
@@ -258,6 +273,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             base_delay = retry_delays[retry_index]
             raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delay = _apply_jitter(raw_delay)
+            # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
+            delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(
@@ -268,7 +285,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             )
         else:
             delivery.status = WebhookDeliveryStatus.DEAD_LETTER
-            delivery.dead_lettered_at = datetime.utcnow()
+            delivery.dead_lettered_at = datetime.now(timezone.utc)
             delivery.next_retry_at = None
             logger.error(
                 "Webhook delivery %s permanently failed after %d attempts. Marked as dead-letter.",
@@ -276,10 +293,11 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
                 delivery.attempt_count,
             )
 
-    delivery.updated_at = datetime.utcnow()
+    delivery.updated_at = datetime.now(timezone.utc)
     db.commit()
 
 
+@traced("webhook.trigger_sla_violation")
 def trigger_sla_violation_webhooks(
     db: Session,
     sla_data: dict[str, Any],
@@ -306,7 +324,7 @@ def trigger_sla_violation_webhooks(
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
-    event_timestamp = datetime.utcnow().isoformat()
+    event_timestamp = datetime.now(timezone.utc).isoformat()
 
     payload = {
         "schema_version": WEBHOOK_SCHEMA_VERSION,
@@ -338,7 +356,7 @@ def trigger_sla_violation_webhooks(
 
 
 def retry_pending_deliveries(db: Session) -> int:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
@@ -392,7 +410,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
     delivery.response_status_code = None
     delivery.response_body = None
     delivery.delivered_at = None
-    delivery.updated_at = datetime.utcnow()
+    delivery.updated_at = datetime.now(timezone.utc)
 
     db.commit()
 

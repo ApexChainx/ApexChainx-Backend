@@ -5,10 +5,10 @@ Stores revoked token hashes in Redis with TTL matching the token's remaining lif
 
 from typing import Optional
 from redis import Redis
+
 from app.core.config import settings
 
-
-_revocation_redis: Optional[Redis] = None
+_revocation_redis: Redis | None = None
 
 
 def _get_redis() -> Redis:

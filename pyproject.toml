@@ -26,12 +26,20 @@ dependencies = [
     "python-multipart==0.0.19",
     "passlib[bcrypt]==1.7.4",
     "gunicorn==23.0.0",
+    "opentelemetry-api==1.29.0",
+    "opentelemetry-sdk==1.29.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.29.0",
+    "opentelemetry-instrumentation-fastapi==0.50b0",
+    "opentelemetry-instrumentation-sqlalchemy==0.50b0",
+    "opentelemetry-instrumentation-httpx==0.50b0",
+    "opentelemetry-instrumentation-redis==0.50b0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
     "pytest-cov==6.0.0",
+    "pytest-benchmark==5.1.0",
     "pytest-alembic>=0.11.0",
     "hypothesis>=6.100",
     "ruff==0.8.3",
@@ -40,6 +48,8 @@ dev = [
     "bandit==1.8.0",
     "pip-tools==7.4.1",
     "fakeredis>=2.20.0",
+    "schemathesis==3.38.9",
+    "mutmut>=3.0.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -49,6 +59,9 @@ include = ["app*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+
+[tool.ruff.lint]
+extend-select = ["DTZ005"]
 
 [tool.ruff.format]
 quote-style = "double"
