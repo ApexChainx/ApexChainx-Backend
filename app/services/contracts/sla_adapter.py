@@ -31,6 +31,8 @@ class SLAContractAdapter:
         mttr_minutes: int,
         policy_version: str = "1.0",
         threshold_source: str = "config",
+        started_at: str = "",
+        resolved_at: str = "",
     ) -> dict[str, Any]:
         local_result = SLACalculator.calculate(
             outage_id=outage_id,
@@ -38,6 +40,8 @@ class SLAContractAdapter:
             mttr_minutes=mttr_minutes,
             policy_version=policy_version,
             threshold_source=threshold_source,
+            started_at=started_at,
+            resolved_at=resolved_at,
         )
 
         rating_code_map = {
@@ -56,4 +60,5 @@ class SLAContractAdapter:
             "payment_type": "pen" if local_result.payment_type == "penalty" else "rew",
             "rating": rating_code_map[local_result.rating],
             "contract_metadata": cls.get_runtime_metadata(),
+            "compute_hash": local_result.compute_hash,
         }

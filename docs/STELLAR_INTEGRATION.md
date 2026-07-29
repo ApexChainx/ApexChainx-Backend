@@ -1008,11 +1008,62 @@ The correct URL is selected automatically based on `STELLAR_NETWORK`.
 
 ---
 
-## Memo Field
+## Memo Field (#38)
 
-SLA payments include a Stellar transaction memo containing the `outage_id`. This allows on-chain verification of which outage a payment settles, independent of the backend database.
+SLA payments include a Stellar transaction memo for on-chain verification. The memo format is validated end-to-end using a `TxMemo` Pydantic model.
 
-Memo format: `APEX:{outage_id}` (truncated to 28 bytes per Stellar memo limit).
+### Format
+
+```
+<op>:<agg>:v<hash8>
+```
+
+Where:
+- **op**: Operation code (2-3 uppercase letters, whitelisted)
+- **agg**: Aggregation key (up to 16 chars, alphanumeric + `_-`)
+- **v<hash8>**: Versioned content hash — 8-character hex prefix of SHA-256
+
+Total length: ≤ 28 bytes (Stellar memo limit).
+
+### Whitelisted Operation Codes
+
+| Code | Meaning |
+|------|---------|
+| `SLP` | Settle-penalty |
+| `SLR` | Settle-reward |
+| `DSP` | Dispute-proposed |
+| `DSR` | Dispute-resolved |
+| `RCA` | Root-cause-analysis |
+| `CFG` | Config-publish |
+
+### Examples
+
+```
+SLP:OUT001:va3f2c1b9    # Penalty settlement for outage OUT001
+SLR:OUT042:vdeadbeef    # Reward settlement for outage OUT042
+DSP:dispute-99:v01234567  # Dispute proposed for dispute-99
+```
+
+### Validation
+
+Memes are validated at build time:
+- Unknown op codes → rejected
+- Non-hex content hash → rejected  
+- Exceeds 28 bytes → rejected with 422
+- Malformed (missing `v` prefix, wrong delimiters) → rejected
+
+### Audit
+
+Suspicious memos (those that fail `TxMemo.is_suspicious()`) are flagged in audit rows. This detects:
+- Raw UUIDs leaked into memos (privacy loss)
+- Malformed or garbage-stuffed memos
+- memos exceeding byte limits
+
+### Implementation
+
+- **Model**: `app/services/tx_memo.py` — `TxMemo` Pydantic model
+- **Builder**: `app/services/contracts/translation.py` — `build_tx_memo_from_result()`
+- **Tests**: `tests/test_tx_memo.py` — round-trip golden payloads, byte limit, op code whitelist
 
 ---
 
