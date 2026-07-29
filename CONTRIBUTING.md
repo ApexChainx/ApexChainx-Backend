@@ -80,9 +80,15 @@ source .venv/bin/activate
 # On Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env — never commit it
 # Edit .env with your config
 alembic upgrade head
+
+# Seed the dev database with synthetic data
+python -m app.cli.seed --outages 100 --devices 20 --payments 50 --seed 42
+
+# Or clear existing data first (idempotent)
+python -m app.cli.seed --force --outages 100 --devices 20 --payments 50 --seed 42
+
 uvicorn app.main:app --reload
 ```
 
