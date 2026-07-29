@@ -16,7 +16,7 @@ from app.services.webhook_signing import (
 )
 from app.services.webhook_breaker import breaker
 from app.core.config import settings
-from app.utils.correlation import get_or_generate_correlation_id
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
 logger = logging.getLogger(__name__)
@@ -219,6 +219,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             base_delay = retry_delays[retry_index]
             raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delay = _apply_jitter(raw_delay)
+            # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
+            delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(

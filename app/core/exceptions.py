@@ -8,20 +8,48 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
-class ApexConflictError(Exception):
-    def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
+class ApexException(Exception):
+    """Base exception for all ApexChainx domain errors."""
+
+    def __init__(self, detail: str, status_code: int = 500):
         self.detail = detail
+        self.status_code = status_code
+
+
+class ApexNotFoundError(ApexException):
+    """Raised when a requested resource does not exist."""
+
+    def __init__(self, detail: str = "Resource not found"):
+        super().__init__(detail=detail, status_code=404)
+
+
+class ApexTransientError(ApexException):
+    """Raised for transient infrastructure errors that may succeed on retry."""
+
+    def __init__(self, detail: str = "A transient error occurred. Please retry."):
+        super().__init__(detail=detail, status_code=503)
+
+
+class ApexConflictError(ApexException):
+    def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
+        super().__init__(detail=detail, status_code=409)
         self.fields = fields or {}
 
 
-class ApexValidationError(Exception):
+class ApexValidationError(ApexException):
     def __init__(self, detail: str, errors: Optional[List[Dict[str, Any]]] = None):
-        self.detail = detail
+        super().__init__(detail=detail, status_code=422)
         self.errors = errors or []
 
 
 def _extract_integrity_fields(exc: IntegrityError) -> Dict[str, str]:
-    msg = str(exc.orig)
+    # Use the first arg of exc.orig (the raw psycopg2/driver message) when available;
+    # fall back to str(exc.orig) for other drivers.
+    orig = exc.orig
+    if orig is not None and hasattr(orig, "args") and orig.args:
+        msg = str(orig.args[0])
+    else:
+        msg = str(orig)
     fields: Dict[str, str] = {}
     if "Key (" in msg:
         for part in msg.split("Key ")[1:]:

@@ -59,6 +59,8 @@ class SLAContractAdapter:
             "amount": local_result.amount,
             "payment_type": "pen" if local_result.payment_type == "penalty" else "rew",
             "rating": rating_code_map[local_result.rating],
+            "policy_version": local_result.policy_version,
+            "threshold_source": local_result.threshold_source,
             "contract_metadata": cls.get_runtime_metadata(),
             "compute_hash": local_result.compute_hash,
         }
