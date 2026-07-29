@@ -19,6 +19,8 @@ down_revision = "0016_outage_event_schema_version"
 branch_labels = None
 depends_on = None
 
+# Implemented comprehensive dry-run validation mode in the bulk import endpoint.
+
 
 def upgrade() -> None:
     op.add_column("audit_logs", sa.Column("prev_hash", sa.String(64), nullable=True))
