@@ -1,14 +1,24 @@
+issue/114-117-webhook-concurrency-canonical-json
+from datetime import datetime, timezone
+from typing import Any
+import hashlib
+from sqlalchemy.orm import Session
 import hashlib
 import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+main
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.utils.correlation_ctx import get_correlation_id
+issue/114-117-webhook-concurrency-canonical-json
+from app.services.formatters import canonical_json
+
 from app.models.orm.audit_log import AuditLogORM
+main
 from app.services.scrubber import scrub_details
 
 from app.db.session import SessionLocal, AuditSessionLocal
@@ -41,17 +51,17 @@ class AuditLogService:
             "correlation_id": correlation_id,
             "created_at": created_at.isoformat() if created_at else None,
         }
-        raw = json.dumps(data, sort_keys=True, default=str)
+        raw = canonical_json(data)
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def log_event(
         self,
         db: Session,
         event_type: str,
-        email: Optional[str] = None,
-        actor_id: Optional[str] = None,
-        details: Optional[dict[str, Any]] = None,
-        correlation_id: Optional[str] = None,
+        email: str | None = None,
+        actor_id: str | None = None,
+        details: dict[str, Any] | None = None,
+        correlation_id: str | None = None,
     ) -> None:
         safe_details = scrub_details(details)
 

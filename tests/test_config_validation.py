@@ -57,6 +57,19 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("CELERY_BROKER_URL must not be empty", message)
         self.assertIn("CELERY_RESULT_BACKEND must not be empty", message)
 
+    def test_webhook_dispatch_limits_must_be_positive(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_critical_settings(
+                self.make_settings(
+                    WEBHOOK_MAX_CONCURRENT_DISPATCHES=0,
+                    WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK=-1,
+                )
+            )
+
+        message = str(ctx.exception)
+        self.assertIn("WEBHOOK_MAX_CONCURRENT_DISPATCHES must be > 0", message)
+        self.assertIn("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0", message)
+
 
 if __name__ == "__main__":
     unittest.main()

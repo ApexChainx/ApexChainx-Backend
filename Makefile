@@ -35,7 +35,8 @@ test-cov: ## Run tests with coverage
 
 format: ## Format code with ruff
 	ruff format .
-
+modernize:	## Modernize Python syntax for 3.11+ with pyupgrade
+	pyupgrade --py311-plus $(find . -path './.venv' -prune -o -name '*.py' -print)
 migrate: ## Run alembic migrations
 	alembic upgrade head
 

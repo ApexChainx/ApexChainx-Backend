@@ -43,6 +43,7 @@ dev = [
     "pytest-alembic>=0.11.0",
     "hypothesis>=6.100",
     "ruff==0.8.3",
+    "pyupgrade>=3.0",
     "mypy==1.13.0",
     "bandit==1.8.0",
     "pip-tools==7.4.1",

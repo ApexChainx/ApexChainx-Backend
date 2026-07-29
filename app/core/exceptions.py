@@ -9,6 +9,25 @@ from sqlalchemy.exc import IntegrityError
 
 
 class ApexException(Exception):
+114-117-webhook-concurrency-canonical-json
+    status_code: int = 500
+    error_code: str = "error"
+    extra: dict[str, Any] | None = None
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        status_code: int = 500,
+        error_code: str = "error",
+        extra: dict[str, Any] | None = None,
+    ):
+        self.detail = detail
+        self.status_code = status_code
+        self.error_code = error_code
+        self.extra = extra
+        super().__init__(detail)
+
     """Base exception for all ApexChainx domain errors."""
 
     def __init__(self, detail: str, status_code: int = 500):
@@ -28,18 +47,52 @@ class ApexTransientError(ApexException):
 
     def __init__(self, detail: str = "A transient error occurred. Please retry."):
         super().__init__(detail=detail, status_code=503)
+main
 
 
 class ApexConflictError(ApexException):
     def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
+114-117-webhook-concurrency-canonical-json
+        super().__init__(
+            detail,
+            status_code=409,
+            error_code="conflict",
+            extra={"fields": fields or {}},
+        )
+
         super().__init__(detail=detail, status_code=409)
         self.fields = fields or {}
+main
 
 
 class ApexValidationError(ApexException):
     def __init__(self, detail: str, errors: Optional[List[Dict[str, Any]]] = None):
+issue/114-117-webhook-concurrency-canonical-json
+        super().__init__(
+            detail,
+            status_code=422,
+            error_code="validation_error",
+            extra={"errors": errors or []},
+        )
+
+
+class ApexNotFoundError(ApexException):
+    def __init__(self, detail: str = "Resource not found"):
+        super().__init__(detail, status_code=404, error_code="not_found")
+
+
+class ApexTransientError(ApexException):
+    def __init__(self, detail: str = "A transient error occurred"):
+        super().__init__(
+            detail,
+            status_code=500,
+            error_code="transient_error",
+            extra={"retryable": True},
+        )
+
         super().__init__(detail=detail, status_code=422)
         self.errors = errors or []
+main
 
 
 def _extract_integrity_fields(exc: IntegrityError) -> Dict[str, str]:

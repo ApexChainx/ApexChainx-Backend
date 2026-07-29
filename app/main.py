@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
+issue/114-117-webhook-concurrency-canonical-json
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.responses import JSONResponse, RedirectResponse
+main
 from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -66,6 +70,7 @@ app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
+app.add_exception_handler(RequestValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
 

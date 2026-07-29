@@ -24,17 +24,13 @@ def test_rfc7807_structure():
 def test_validation_handler_on_bad_request():
     client = TestClient(app)
     response = client.post(
-        "/api/v1/outages/",
-        json={"site_name": "test"},
+        "/api/v1/auth/register",
+        json={"email": "bad-email", "password": "123"},
     )
 
     assert response.status_code == 422
     body = response.json()
-
-    if "title" in body:
-        assert body["title"] == "Validation Error"
-        assert body["status"] == 422
-        assert "errors" in body
-        assert "type" in body
-    else:
-        pass
+    assert body["title"] == "Validation Error"
+    assert body["status"] == 422
+    assert "errors" in body
+    assert "type" in body
