@@ -143,3 +143,8 @@ def set_gauge(name: str, value: float, tags: Dict[str, str] = None):
 def record_histogram(name: str, value: float, tags: Dict[str, str] = None):
     """Record a histogram value."""
     metrics.record_histogram(name, value, tags)
+
+
+# --- SLA Dispute Metrics ---
+SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL = "sladispute_notification_attempt_total"
+SLADISPUTE_NOTIFICATION_DURATION_MS = "sladispute_notification_duration_ms"

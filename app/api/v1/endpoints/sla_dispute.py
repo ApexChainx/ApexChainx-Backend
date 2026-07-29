@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -15,6 +16,12 @@ from app.schemas.sla_dispute import (
     CreateProposedSLARequest,
 )
 from app.core.security import require_engineer, require_admin
+from app.services.metrics import (
+    increment_counter,
+    record_histogram,
+    SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL,
+    SLADISPUTE_NOTIFICATION_DURATION_MS,
+)
 from app.services.sla.sla_calculator import SLACalculator
 from app.repositories.sla_repository import SLARepository
 
@@ -234,6 +241,8 @@ def resolve_dispute(
     ))
     db.commit()
     db.refresh(dispute)
+
+    increment_counter(SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL, tags={"status": payload.status.value})
     return dispute
 
 

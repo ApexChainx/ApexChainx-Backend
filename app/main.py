@@ -1,12 +1,18 @@
-from fastapi import FastAPI
-from datetime import datetime
+from datetime import datetime, timezone
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
-from redis import Redis
 from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
+from app.core.exceptions import (
+    ApexException,
+    ApexNotFoundError,
+    ApexTransientError,
+)
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
 from app.db.session import engine
@@ -21,24 +27,25 @@ configure_logging()
 validate_critical_settings(settings)
 install_signal_handlers()
 
+
 async def check_database() -> bool:
-    from sqlalchemy import text
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
             conn.commit()
         return True
-    except Exception:
+    except ConnectionError:
         return False
 
+
 async def check_celery() -> bool:
-    from redis import Redis
     try:
         r = Redis.from_url(settings.CELERY_BROKER_URL)
         r.ping()
         return True
-    except Exception:
+    except (ConnectionError, TimeoutError):
         return False
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -119,10 +126,43 @@ app.add_middleware(_DynamicCORSMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 
+@app.exception_handler(ApexException)
+async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": exc.error_code,
+            "detail": exc.detail,
+            **(exc.extra or {}),
+        },
+    )
+
+
+@app.exception_handler(ApexNotFoundError)
+async def apex_not_found_handler(request: Request, exc: ApexNotFoundError) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={"error_code": "not_found", "detail": exc.detail},
+    )
+
+
+@app.exception_handler(ApexTransientError)
+async def apex_transient_error_handler(request: Request, exc: ApexTransientError) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error_code": "transient_error",
+            "detail": exc.detail,
+            "retryable": True,
+        },
+    )
+
+
 # Health checks
 @app.get("/health/liveness")
 def liveness():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
 
 @app.get("/health/readiness")
 async def readiness():
@@ -130,10 +170,12 @@ async def readiness():
     report["timestamp"] = datetime.now(timezone.utc).isoformat()
     return report
 
+
 # Legacy health check (now liveness)
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")

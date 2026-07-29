@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ApexTransientError
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
+from app.services.audit_log import audit_log
 
 
 class SLAOrchestrator:
@@ -126,7 +128,7 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
         outages = orchestrator.get_outages_for_device(device_id, start_date, end_date)
         
         if not outages:
-            return {
+            result: dict[str, Any] = {
                 "device_id": device_id,
                 "period": period,
                 "period_start": start_date.isoformat(),
@@ -137,8 +139,11 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
                 "availability_percentage": 100.0,
                 "is_violated": False,
                 "sla_thresholds": sla_thresholds,
-                "violation_reasons": []
+                "violation_reasons": [],
             }
+            record_sla_settlement_audit_events(device_id, period, result, status="initiated")
+            record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+            return result
         
         # Calculate metrics
         mttr = orchestrator.calculate_mttr(outages)
@@ -165,9 +170,9 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
             for row in rows:
                 latest_results.setdefault(row.outage_id, row)
         
-        violated_outages = sum(1 for result in latest_results.values() if result and result.status == "violated")
+        violated_outages = sum(1 for r in latest_results.values() if r and r.status == "violated")
         
-        return {
+        result = {
             "device_id": device_id,
             "period": period,
             "period_start": start_date.isoformat(),
@@ -191,13 +196,34 @@ def compute_device_sla(db: Session, device_id: str, period: str, sla_thresholds:
                 for outage in outages
             ]
         }
-        
+        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
+        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+        return result
+
     except Exception as e:
-        # Return error structure that aligns with API expectations
-        return {
-            "device_id": device_id,
-            "period": period,
-            "error": str(e),
-            "is_violated": False,
-            "error_type": "computation_failed"
-        }
+        audit_log.log(
+            event_type="sla_settlement_failed",
+            details={"device_id": device_id, "period": period, "error": str(e)},
+        )
+        raise ApexTransientError(
+            detail=f"SLA computation failed for device {device_id}: {e}"
+        ) from e
+
+
+def record_sla_settlement_audit_events(
+    device_id: str,
+    period: str,
+    sla_result: dict[str, Any],
+    *,
+    status: str = "initiated",
+    error: str | None = None,
+) -> None:
+    event_type = f"sla_settlement_{status}"
+    details = {
+        "device_id": device_id,
+        "period": period,
+        "sla_result": sla_result,
+    }
+    if error:
+        details["error"] = error
+    audit_log.log(event_type=event_type, details=details)

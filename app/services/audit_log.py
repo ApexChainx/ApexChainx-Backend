@@ -10,6 +10,13 @@ from app.core.config import settings
 from app.utils.correlation import get_correlation_id
 from app.services.scrubber import scrub_details
 
+# --- SLA Settlement Audit Event Types ---
+SLA_SETTLEMENT_INITIATED = "sla_settlement_initiated"
+SLA_SETTLEMENT_SUCCEEDED = "sla_settlement_succeeded"
+SLA_SETTLEMENT_FAILED = "sla_settlement_failed"
+SLA_DISPUTE_FILED = "sla_dispute_filed"
+SLA_DISPUTE_RESOLVED = "sla_dispute_resolved"
+
 
 class AuditLogService:
     def __init__(self, db_session_factory=None):
