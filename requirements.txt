@@ -14,6 +14,7 @@ passlib[bcrypt]
 hypothesis
 tenacity
 schemathesis
+pytest-alembic
 # This file is auto-generated from pyproject.toml
 # Run: pip-compile pyproject.toml
 -e .
