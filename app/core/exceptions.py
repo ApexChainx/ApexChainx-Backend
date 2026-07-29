@@ -8,6 +8,9 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
+from app.utils.correlation_ctx import get_or_generate_correlation_id
+
+
 class ApexException(Exception):
     """Base exception for all ApexChainx domain errors."""
 
@@ -67,11 +70,13 @@ def _build_rfc7807(
     instance: Optional[str] = None,
     **extra: Any,
 ) -> Dict[str, Any]:
+    correlation_id = extra.pop("correlation_id", None) or get_or_generate_correlation_id()
     body: Dict[str, Any] = {
         "type": f"https://developer.apexchainx.io/errors/{status}",
         "title": title,
         "status": status,
         "detail": detail,
+        "correlation_id": correlation_id,
     }
     if instance:
         body["instance"] = instance
@@ -89,7 +94,13 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
         instance=str(request.url.path),
         fields=fields,
     )
-    return JSONResponse(status_code=409, content=body)
+    correlation_id = body.get("correlation_id") or get_or_generate_correlation_id()
+    return JSONResponse(
+        status_code=409,
+        content=body,
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
+    )
 
 
 async def pydantic_validation_handler(request: Request, exc: ValidationError) -> JSONResponse:
@@ -109,4 +120,10 @@ async def pydantic_validation_handler(request: Request, exc: ValidationError) ->
         instance=str(request.url.path),
         errors=errors,
     )
-    return JSONResponse(status_code=422, content=body)
+    correlation_id = body.get("correlation_id") or get_or_generate_correlation_id()
+    return JSONResponse(
+        status_code=422,
+        content=body,
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
+    )

@@ -3,6 +3,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 
+from app.utils.correlation_ctx import get_or_generate_correlation_id
+
+
 ALLOWED_CONTENT_TYPES = frozenset(
     {
         "application/json",
@@ -32,11 +35,18 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
                 )
 
                 if not is_allowed:
+                    correlation_id = get_or_generate_correlation_id()
                     return JSONResponse(
                         status_code=415,
                         content={
+                            "type": "about:blank",
+                            "title": "Unsupported Media Type",
+                            "status": 415,
                             "detail": "Unsupported media type. Only application/json and multipart/form-data are accepted.",
+                            "correlation_id": correlation_id,
                         },
+                        media_type="application/problem+json",
+                        headers={"X-Correlation-ID": correlation_id},
                     )
 
         return await call_next(request)
