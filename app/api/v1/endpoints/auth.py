@@ -18,7 +18,9 @@ from app.models.auth import (
 )
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.core.config import settings
+from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.token_revocation import revoke
 
 router = APIRouter()
 

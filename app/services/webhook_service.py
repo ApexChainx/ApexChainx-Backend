@@ -17,7 +17,7 @@ from app.services.webhook_signing import (
 )
 from app.services.webhook_breaker import breaker
 from app.core.config import settings
-from app.utils.correlation import get_or_generate_correlation_id
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
 logger = logging.getLogger(__name__)

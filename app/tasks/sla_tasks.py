@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from celery import Task
 
+from app.tasks.celery_app import celery_app
+
 from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent

@@ -10,9 +10,10 @@ from sqlalchemy import cast, or_, String
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import require_admin
+from app.core.security import hash_token, require_admin
 from app.db.session import get_db
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+from app.services.audit_log import audit_log
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.utils.network_validation import validate_webhook_url
 
@@ -380,7 +381,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
 
     # Store old secret in previous_secrets with expiry
     if webhook.secret:
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=settings.WEBHOOK_SECRET_GRACE_HOURS)
         previous_entry = {
             "hashed_secret": hash_token(webhook.secret),

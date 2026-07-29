@@ -14,7 +14,7 @@ class StructuredLogger:
     def _format_message(self, level: str, message: str, **kwargs) -> str:
         """Format a log message with structured context."""
         log_entry = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": level,
             "message": message,
             "logger": self.logger.name,

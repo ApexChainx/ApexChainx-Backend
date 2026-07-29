@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import desc
@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.utils.correlation_ctx import get_correlation_id
+from app.models.orm.audit_log import AuditLogORM
 from app.services.scrubber import scrub_details
+
+from app.db.session import SessionLocal, AuditSessionLocal
 
 # --- SLA Settlement Audit Event Types ---
 SLA_SETTLEMENT_INITIATED = "sla_settlement_initiated"
@@ -55,7 +58,7 @@ class AuditLogService:
         if correlation_id is None:
             correlation_id = get_correlation_id()
 
-        created_at = datetime.now(UTC)
+        created_at = datetime.now(timezone.utc)
         last_entry = db.query(AuditLogORM).order_by(desc(AuditLogORM.id)).first()
         prev_hash = last_entry.entry_hash if last_entry else None
         entry_hash = self._compute_entry_hash(prev_hash, event_type, safe_details, correlation_id, created_at)

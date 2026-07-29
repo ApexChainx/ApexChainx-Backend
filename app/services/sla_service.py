@@ -64,7 +64,7 @@ class SLAOrchestrator:
                 mttr_values.append(mttr_minutes)
             elif outage.started_at:
                 # For unresolved outages, calculate time since start
-                duration = datetime.now(UTC) - outage.started_at
+                duration = datetime.now(timezone.utc) - outage.started_at
                 mttr_minutes = duration.total_seconds() / 60
                 mttr_values.append(mttr_minutes)
 
@@ -84,7 +84,7 @@ class SLAOrchestrator:
                 downtime_minutes += downtime.total_seconds() / 60
             elif outage.started_at:
                 # For unresolved outages, calculate downtime since start
-                downtime = datetime.now(UTC) - outage.started_at
+                downtime = datetime.now(timezone.utc) - outage.started_at
                 downtime_minutes += downtime.total_seconds() / 60
 
         availability = max(0.0, (total_minutes - downtime_minutes) / total_minutes * 100)

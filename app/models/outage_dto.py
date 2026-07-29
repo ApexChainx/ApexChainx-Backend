@@ -1,5 +1,6 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -84,8 +85,8 @@ class OutageCreate(BaseModel):
         if v.tzinfo is None:
             raise ValidationError("detected_at must be timezone-aware")
         # Normalize to UTC
-        if v.tzinfo != UTC:
-            v = v.astimezone(UTC)
+        if v.tzinfo != timezone.utc:
+            v = v.astimezone(timezone.utc)
         return v
 
 

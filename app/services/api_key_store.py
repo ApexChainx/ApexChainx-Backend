@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import secrets
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -11,7 +12,7 @@ from app.models.orm.api_key import ApiKeyORM
 
 
 def _now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 def _generate_id() -> str:

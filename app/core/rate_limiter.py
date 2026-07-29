@@ -11,6 +11,7 @@ import logging
 import random
 from collections import defaultdict
 from time import time
+from typing import Dict, List
 
 import redis.asyncio as redis
 from redis.exceptions import RedisError

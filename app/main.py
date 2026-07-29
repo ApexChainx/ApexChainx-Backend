@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -8,12 +8,7 @@ from pydantic import ValidationError
 from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
-from redis import Redis
-from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.exception_handlers import (
@@ -75,10 +70,7 @@ app.add_middleware(ContentTypeMiddleware)
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)
 
-# Add payload size middleware (after correlation, before CORS)
-app.add_middleware(PayloadSizeMiddleware)
-
-# Add idempotency middleware (after payload size)
+# Add idempotency middleware (after correlation)
 app.add_middleware(IdempotencyMiddleware)
 
 
