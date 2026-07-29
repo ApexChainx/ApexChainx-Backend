@@ -21,7 +21,7 @@ dependencies = [
     "psycopg2-binary==2.9.10",
     "alembic==1.14.0",
     "pydantic-settings==2.7.0",
-    "celery==5.4.0",
+    "celery==5.6.3",
     "httpx==0.28.1",
     "python-multipart==0.0.19",
     "passlib[bcrypt]==1.7.4",
