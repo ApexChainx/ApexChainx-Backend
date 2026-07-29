@@ -4,7 +4,7 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.utils.correlation import get_or_generate_correlation_id, set_correlation_id
+from app.utils.correlation_ctx import get_or_generate_correlation_id, set_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("access")

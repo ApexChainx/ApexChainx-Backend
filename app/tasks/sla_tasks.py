@@ -10,7 +10,7 @@ from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent
 from app.services.audit_log import audit_log
-from app.utils.correlation import set_correlation_id
+from app.utils.correlation_ctx import set_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = logging.getLogger(__name__)

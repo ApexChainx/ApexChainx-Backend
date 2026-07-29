@@ -16,7 +16,7 @@ from app.services.audit_log import audit_log
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_sla_computation, enqueue_bulk_sla_computation
-from app.utils.correlation import get_correlation_id
+from app.utils.correlation_ctx import get_correlation_id
 from app.utils.logging import get_structured_logger
 from app.core.security import require_engineer, require_admin
 from app.services.job_cleanup import JobCleanupService

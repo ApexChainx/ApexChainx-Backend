@@ -7,7 +7,7 @@ from sqlalchemy import desc
 from app.models.orm.audit_log import AuditLogORM
 from app.db.session import SessionLocal, AuditSessionLocal
 from app.core.config import settings
-from app.utils.correlation import get_correlation_id
+from app.utils.correlation_ctx import get_correlation_id
 from app.services.scrubber import scrub_details
 
 # --- SLA Settlement Audit Event Types ---
