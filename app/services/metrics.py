@@ -41,7 +41,7 @@ class MetricsRegistry:
         """Record a histogram value."""
         with self._lock:
             key = self._make_key(name, tags)
-            self._histograms[key].append(MetricPoint(datetime.utcnow(), value, tags or {}))
+            self._histograms[key].append(MetricPoint(datetime.now(timezone.utc), value, tags or {}))
 
     def record_timer(self, name: str, duration_ms: float, tags: Optional[Dict[str, str]] = None) -> None:
         """Record a timing measurement."""

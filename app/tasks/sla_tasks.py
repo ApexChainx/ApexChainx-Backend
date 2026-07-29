@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from celery import Task
@@ -33,7 +33,7 @@ class DatabaseTask(Task):
         job = self._get_job(db, celery_task_id)
         if job:
             job.status = JobStatus.STARTED
-            job.started_at = datetime.utcnow()
+            job.started_at = datetime.now(timezone.utc)
             db.commit()
 
     def _mark_success(self, db, celery_task_id: str, result: Any):
@@ -42,7 +42,7 @@ class DatabaseTask(Task):
             job.status = JobStatus.SUCCESS
             job.result = json.dumps(result)
             job.progress = 100.0
-            job.finished_at = datetime.utcnow()
+            job.finished_at = datetime.now(timezone.utc)
             db.commit()
 
     def _mark_failure(self, db, celery_task_id: str, error: str):
@@ -50,7 +50,7 @@ class DatabaseTask(Task):
         if job:
             job.status = JobStatus.FAILURE
             job.error = error
-            job.finished_at = datetime.utcnow()
+            job.finished_at = datetime.now(timezone.utc)
             db.commit()
 
     def _update_progress(self, db, celery_task_id: str, progress: float, details: Optional[Dict[str, Any]] = None):

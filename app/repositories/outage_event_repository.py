@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -21,7 +21,7 @@ class OutageEventRepository:
             event_type=event_type,
             detail=json.dumps(detail) if detail else None,
             schema_version=CURRENT_SCHEMA_VERSION,
-            occurred_at=datetime.utcnow(),
+            occurred_at=datetime.now(timezone.utc),
         )
         self.db.add(orm)
         self.db.commit()

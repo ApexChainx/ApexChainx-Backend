@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.models.orm.user import UserORM
 from app.models.auth import AuthUser
@@ -63,7 +63,7 @@ class UserRepository:
             return False
         if user.locked_until is None:
             return False
-        return user.locked_until > datetime.utcnow()
+        return user.locked_until > datetime.now(timezone.utc)
 
     def update_profile(
         self, user_id: str, full_name: Optional[str] = None, stellar_wallet: Optional[str] = None
