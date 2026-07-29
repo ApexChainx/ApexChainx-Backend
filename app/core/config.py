@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     AUTH_LOCKOUT_DURATION_MINUTES: int = 15  # Lockout duration in minutes
     AUTH_RATE_LIMIT_REQUESTS: int = 10  # Max requests per window
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300  # Rate limit window in seconds
+    USE_REDIS_RATE_LIMITER: bool = False
 
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
@@ -61,7 +62,10 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_EVENTS_COUNT: int = 50  # Max webhook events per webhook
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
-
+    # Webhook URL validation and SSRF protection
+    WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
+    WEBHOOK_URL_ALLOWLIST: List[str] = []
+    WEBHOOK_URL_VALIDATOR_BYPASS: bool = False
     # Environment name used for conditional behaviours (e.g. HSTS disabled in local)
     ENVIRONMENT: str = "local"
 
