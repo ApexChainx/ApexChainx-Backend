@@ -15,7 +15,8 @@ from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
-from app.utils.correlation import get_correlation_id
+from app.tasks.webhook_tasks import dispatch_webhook_delivery as dispatch_webhook_event
+from app.utils.correlation_utils import get_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")

@@ -37,6 +37,7 @@ Webhooks include an explicit timestamp in the payload (`timestamp` field) for:
 import hashlib
 import hmac
 from datetime import UTC, datetime
+from typing import Any
 
 # Current signature algorithm version
 CURRENT_SIGNATURE_VERSION = 1
@@ -119,7 +120,7 @@ def verify_signature_with_grace(
     payload: str,
     signature: str,
     version: int = CURRENT_SIGNATURE_VERSION,
-    previous_secrets: list[dict] | None = None,
+    previous_secrets: list[dict[str, Any]] | None = None,
 ) -> bool:
     """Verify signature against current secret and valid previous secrets.
     

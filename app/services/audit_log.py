@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.db.session import AuditSessionLocal, SessionLocal
 from app.models.orm.audit_log import AuditLogORM
 from app.services.scrubber import scrub_details
-from app.utils.correlation import get_correlation_id
+from app.utils.correlation_utils import get_correlation_id
 
 
 class AuditLogService:

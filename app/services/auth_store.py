@@ -224,6 +224,9 @@ class AuthStore:
         if not family:
             raise ValueError("Invalid token family")
         
+        # Look up user before branches that reference stored_user
+        stored_user = user_repo.get_by_email(email)
+
         if family.compromised:
             audit_log.log_event(
                 db, 
@@ -257,7 +260,6 @@ class AuthStore:
         token_family_repo.increment_sequence(family_id)
         session_repo.delete_session(old_session.access_token)
 
-        stored_user = user_repo.get_by_email(email)
         if not stored_user:
             raise ValueError("User not found")
 
