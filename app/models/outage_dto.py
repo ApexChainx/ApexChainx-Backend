@@ -143,8 +143,10 @@ class BulkOutageCreate(BaseModel):
 
 # --- #215: Stable machine-readable import error shapes ---
 
+
 class ImportFieldError(BaseModel):
     """A single field-level validation error within an import row."""
+
     field: Optional[str] = None
     type: Optional[str] = None
     message: str
@@ -152,6 +154,7 @@ class ImportFieldError(BaseModel):
 
 class ImportRowResult(BaseModel):
     """Machine-readable result for a single import row."""
+
     row: int
     id: Optional[str] = None
     status: str  # "ok" | "error"
@@ -164,6 +167,7 @@ class ImportRowResult(BaseModel):
 
 class ImportResponse(BaseModel):
     """Top-level response for the import endpoint."""
+
     mode: str  # "dry_run" | "import"
     consistency: ImportConsistency
     total_rows: int

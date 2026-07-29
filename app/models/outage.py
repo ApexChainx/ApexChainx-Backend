@@ -74,12 +74,12 @@ class PaginatedOutages(BaseModel):
                         "assigned_to": None,
                         "created_by": "user1",
                         "location": {"latitude": 40.7128, "longitude": -74.0060},
-                        "sla_status": "met"
+                        "sla_status": "met",
                     }
                 ],
                 "total": 1,
                 "page": 1,
-                "page_size": 20
+                "page_size": 20,
             }
         }
     )

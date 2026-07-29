@@ -11,4 +11,6 @@ class TokenFamilyORM(Base):
     current_sequence = Column(Integer, nullable=False, default=0)
     compromised = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc)
+    )

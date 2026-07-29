@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, String, Integer, ForeignKey
 from app.db.base import Base
 
+
 class SessionORM(Base):
     __tablename__ = "sessions"
 

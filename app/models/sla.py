@@ -23,7 +23,7 @@ class SLAResult(BaseModel):
                 "rating": "excellent",
                 "reason_code": "met_excellent",
                 "decision_trace": "MTTR 30 < 60 threshold, performance ratio 50%",
-                "compute_hash": "abc123def456"
+                "compute_hash": "abc123def456",
             }
         }
     )
@@ -55,6 +55,7 @@ class SLAConfigUpdateRequest(SLASeverityConfig):
 
 class SLAConfigHistoryEntry(BaseModel):
     """Entry in the SLA config history audit log (#37)."""
+
     severity: str
     policy_version: int
     threshold_minutes: int
@@ -90,6 +91,7 @@ class SLATrendPoint(BaseModel):
 
 class SLAPolicyContent(SLASeverityConfig):
     """Full SLA policy config with content hash for integrity verification (#37)."""
+
     severity: str
     policy_version: int
     content_hash: str

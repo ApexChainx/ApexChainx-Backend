@@ -140,38 +140,24 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("ALLOWED_ORIGINS must not contain wildcard '*' origins for security reasons.")
 
         invalid_origins = [
-            origin
-            for origin in config.ALLOWED_ORIGINS
-            if not origin.startswith(("http://", "https://"))
+            origin for origin in config.ALLOWED_ORIGINS if not origin.startswith(("http://", "https://"))
         ]
         if invalid_origins:
-            errors.append(
-                "ALLOWED_ORIGINS must contain valid http or https origins."
-            )
+            errors.append("ALLOWED_ORIGINS must contain valid http or https origins.")
 
     if config.STELLAR_NETWORK not in VALID_STELLAR_NETWORKS:
-        errors.append(
-            "STELLAR_NETWORK must be one of: "
-            + ", ".join(sorted(VALID_STELLAR_NETWORKS))
-            + "."
-        )
+        errors.append("STELLAR_NETWORK must be one of: " + ", ".join(sorted(VALID_STELLAR_NETWORKS)) + ".")
 
     if config.CONTRACT_EXECUTION_MODE not in VALID_CONTRACT_EXECUTION_MODES:
         errors.append(
-            "CONTRACT_EXECUTION_MODE must be one of: "
-            + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES))
-            + "."
+            "CONTRACT_EXECUTION_MODE must be one of: " + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES)) + "."
         )
 
     if not config.CELERY_TASK_ALWAYS_EAGER:
         if not config.CELERY_BROKER_URL.strip():
-            errors.append(
-                "CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
-            errors.append(
-                "CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")

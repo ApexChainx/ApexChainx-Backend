@@ -36,6 +36,7 @@ def policy_version_strategy(draw: st.DrawFn) -> str:  # type: ignore[type-arg]
 
 # ── MTTR generators with boundary coverage ──────────────────────────────
 
+
 def mttr_for_severity(severity: str) -> SearchStrategy[int]:
     """Generate MTTR values that cover boundaries for a given severity.
 
@@ -55,14 +56,14 @@ def mttr_for_severity(severity: str) -> SearchStrategy[int]:
 
     # Boundary-focused values plus random range
     boundary_values = [
-        0,           # zero-duration
-        1,           # minimal
-        max(1, t // 2),   # well under threshold
-        t - 1,       # just under threshold
-        t,           # exactly at threshold (boundary)
-        t + 1,       # just over threshold (boundary)
-        t * 2,       # well over threshold
-        t * 5,       # extreme over threshold
+        0,  # zero-duration
+        1,  # minimal
+        max(1, t // 2),  # well under threshold
+        t - 1,  # just under threshold
+        t,  # exactly at threshold (boundary)
+        t + 1,  # just over threshold (boundary)
+        t * 2,  # well over threshold
+        t * 5,  # extreme over threshold
     ]
 
     return st.one_of(
@@ -72,6 +73,7 @@ def mttr_for_severity(severity: str) -> SearchStrategy[int]:
 
 
 # ── Datetime generators for edge cases ──────────────────────────────────
+
 
 @st.composite
 def edge_datetime_pair(draw: st.DrawFn) -> tuple[datetime, datetime]:  # type: ignore[type-arg]
@@ -86,7 +88,7 @@ def edge_datetime_pair(draw: st.DrawFn) -> tuple[datetime, datetime]:  # type: i
     edge_dates = [
         datetime(2024, 2, 29, 10, 0, 0, tzinfo=timezone.utc),  # leap day
         datetime(2024, 12, 31, 23, 59, 0, tzinfo=timezone.utc),  # year boundary
-        datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),    # year start
+        datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),  # year start
         datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc),  # normal mid-year
     ]
 
@@ -105,6 +107,7 @@ def edge_datetime_pair(draw: st.DrawFn) -> tuple[datetime, datetime]:  # type: i
 
 
 # ── Full SLA scenario generator ─────────────────────────────────────────
+
 
 @st.composite
 def sla_scenario(draw: st.DrawFn) -> dict:  # type: ignore[type-arg]
@@ -134,6 +137,7 @@ def sla_scenario(draw: st.DrawFn) -> dict:  # type: ignore[type-arg]
 
 # ── Determinism test strategy ───────────────────────────────────────────
 
+
 @st.composite
 def scenario_with_repeated_mttr(draw: st.DrawFn) -> tuple[dict, int]:  # type: ignore[type-arg]
     """Generate a scenario and a repeated MTTR value for idempotency tests."""
@@ -143,6 +147,7 @@ def scenario_with_repeated_mttr(draw: st.DrawFn) -> tuple[dict, int]:  # type: i
 
 
 # ── Policy-version test strategy ────────────────────────────────────────
+
 
 @st.composite
 def scenario_with_policy_bump(draw: st.DrawFn) -> tuple[dict, str]:  # type: ignore[type-arg]

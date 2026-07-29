@@ -5,6 +5,7 @@ from app.models.orm.user import UserORM
 from app.models.auth import AuthUser
 from app.models.enums import Role
 
+
 def user_orm_to_pydantic(orm: UserORM) -> AuthUser:
     return AuthUser(
         id=orm.id,
@@ -14,6 +15,7 @@ def user_orm_to_pydantic(orm: UserORM) -> AuthUser:
         stellar_wallet=orm.stellar_wallet,
         created_at=orm.created_at,
     )
+
 
 class UserRepository:
     def __init__(self, db: Session):
@@ -26,13 +28,7 @@ class UserRepository:
         return self.db.query(UserORM).filter(UserORM.id == user_id).first()
 
     def create(self, user_id: str, email: str, hashed_password: str, full_name: str, role: Role) -> UserORM:
-        user = UserORM(
-            id=user_id,
-            email=email,
-            hashed_password=hashed_password,
-            full_name=full_name,
-            role=role
-        )
+        user = UserORM(id=user_id, email=email, hashed_password=hashed_password, full_name=full_name, role=role)
         self.db.add(user)
         self.db.commit()
         self.db.refresh(user)
@@ -69,7 +65,9 @@ class UserRepository:
             return False
         return user.locked_until > datetime.utcnow()
 
-    def update_profile(self, user_id: str, full_name: Optional[str] = None, stellar_wallet: Optional[str] = None) -> Optional[UserORM]:
+    def update_profile(
+        self, user_id: str, full_name: Optional[str] = None, stellar_wallet: Optional[str] = None
+    ) -> Optional[UserORM]:
         """Update mutable profile fields. Returns updated ORM or None if not found."""
         user = self.get_by_id(user_id)
         if not user:

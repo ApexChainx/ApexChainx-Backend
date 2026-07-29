@@ -79,10 +79,7 @@ def get_current_token(severity: str) -> str:
 
 
 def get_all_config() -> dict[str, SLASeverityConfig]:
-    return {
-        severity: SLASeverityConfig(**deepcopy(values))
-        for severity, values in SLA_CONFIG.items()
-    }
+    return {severity: SLASeverityConfig(**deepcopy(values)) for severity, values in SLA_CONFIG.items()}
 
 
 def get_all_config_with_hashes() -> dict[str, SLAPolicyContent]:
@@ -124,9 +121,7 @@ def get_config_with_hash(severity: str) -> SLAPolicyContent:
     )
 
 
-def update_config_for_severity(
-    severity: str, payload: SLAConfigUpdateRequest
-) -> SLASeverityConfig:
+def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest) -> SLASeverityConfig:
     """Update config (backward-compatible). Does NOT bump version or check tokens."""
     normalized = severity.lower()
     if normalized not in SLA_CONFIG:
@@ -165,8 +160,7 @@ def publish_config_for_severity(
     # Optimistic concurrency: reject if token doesn't match
     if expected_token is not None and expected_token != _publish_tokens[normalized]:
         raise ConcurrencyError(
-            f"Config for '{severity}' was modified by another request. "
-            f"Re-fetch the current config and retry."
+            f"Config for '{severity}' was modified by another request. " f"Re-fetch the current config and retry."
         )
 
     # Bump version and write config atomically
@@ -209,4 +203,5 @@ def publish_config_for_severity(
 
 class ConcurrencyError(Exception):
     """Raised when an optimistic concurrency check fails (→ 409)."""
+
     pass

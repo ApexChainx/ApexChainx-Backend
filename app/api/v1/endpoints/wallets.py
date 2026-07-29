@@ -58,7 +58,9 @@ def get_wallet_status(
     return wallet_status
 
 
-@router.get("/{user_id}/trustline", response_model=WalletTrustlineResponse, summary="Check trustline readiness for a wallet")
+@router.get(
+    "/{user_id}/trustline", response_model=WalletTrustlineResponse, summary="Check trustline readiness for a wallet"
+)
 def get_wallet_trustline(
     user_id: str,
     refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),
@@ -70,7 +72,11 @@ def get_wallet_trustline(
     return result
 
 
-@router.get("/{user_id}/funding-state", response_model=WalletFundingStateResponse, summary="Get current funding state of a wallet")
+@router.get(
+    "/{user_id}/funding-state",
+    response_model=WalletFundingStateResponse,
+    summary="Get current funding state of a wallet",
+)
 def get_wallet_funding_state(
     user_id: str,
     refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),

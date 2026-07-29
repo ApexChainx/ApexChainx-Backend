@@ -1,73 +1,89 @@
+import hashlib
 import time
 from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.utils.correlation import get_or_generate_correlation_id, set_correlation_id
+from app.utils.correlation_ctx import get_or_generate_correlation_id, set_correlation_id
 from app.utils.logging import get_structured_logger
 
-logger = get_structured_logger("correlation_middleware")
+logger = get_structured_logger("access")
+
+
+def _hash_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 class CorrelationMiddleware(BaseHTTPMiddleware):
-    """Middleware to add correlation IDs to requests and enable request tracing."""
-    
+    """Middleware to add correlation IDs to requests and enable request tracing.
+
+    Emits structured access logs with:
+    - trace_id (correlation ID)
+    - method (HTTP method)
+    - route_template (URL path template)
+    - status (HTTP response status)
+    - duration_ms (request duration)
+    - query_hash (SHA-256 prefix of query string)
+    - user_id_hash (SHA-256 prefix of user identifier, if authenticated)
+    """
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Extract correlation ID from header or generate new one
         correlation_id = request.headers.get("X-Correlation-ID") or get_or_generate_correlation_id()
         set_correlation_id(correlation_id)
-        
-        # Add correlation ID to request state for easy access
         request.state.correlation_id = correlation_id
-        
-        # Record request start time
+
         start_time = time.time()
-        
-        # Log incoming request
-        logger.info(
-            "Incoming request",
-            method=request.method,
-            url=str(request.url),
-            client_host=request.client.host if request.client else None,
-            user_agent=request.headers.get("User-Agent"),
-            correlation_id=correlation_id
-        )
-        
+
+        query_hash = _hash_value(str(request.query_params)) if request.query_params else None
+
+        route_template: str | None = None
+        user_id_hash: str | None = None
+
         try:
-            # Process the request
             response = await call_next(request)
-            
-            # Calculate request duration
+
             duration_ms = (time.time() - start_time) * 1000
-            
-            # Add correlation ID to response headers
+
             response.headers["X-Correlation-ID"] = correlation_id
-            
-            # Log outgoing response
+
+            if request.scope.get("route"):
+                route_template = getattr(request.scope["route"], "path", None)
+
+            try:
+                if hasattr(request.state, "user") and request.state.user:
+                    uid = str(getattr(request.state.user, "id", ""))
+                    if uid:
+                        user_id_hash = _hash_value(uid)
+            except Exception:
+                pass
+
             logger.info(
                 "Request completed",
+                trace_id=correlation_id,
                 method=request.method,
-                url=str(request.url),
-                status_code=response.status_code,
+                route_template=route_template,
+                status=response.status_code,
                 duration_ms=round(duration_ms, 2),
-                correlation_id=correlation_id
+                query_hash=query_hash,
+                user_id_hash=user_id_hash,
             )
-            
+
             return response
-            
+
         except Exception as exc:
-            # Calculate request duration for failed requests
             duration_ms = (time.time() - start_time) * 1000
-            
-            # Log request failure
+
             logger.error(
                 "Request failed",
+                trace_id=correlation_id,
                 method=request.method,
-                url=str(request.url),
+                route_template=route_template,
                 error=str(exc),
                 duration_ms=round(duration_ms, 2),
-                correlation_id=correlation_id
+                query_hash=query_hash,
+                user_id_hash=user_id_hash,
             )
-            
-            # Re-raise the exception to let FastAPI handle it
+
             raise

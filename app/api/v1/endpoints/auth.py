@@ -18,7 +18,8 @@ from app.db.session import get_db
 from app.core.security import get_current_user, require_admin, hash_token
 from app.core.rate_limiter import rate_limiter
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
-from app.utils.correlation import get_correlation_id
+from app.core.config import settings
+from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 router = APIRouter()
 
@@ -44,10 +45,6 @@ Configuration (in app.core.config):
 - AUTH_RATE_LIMIT_REQUESTS: 10
 - AUTH_RATE_LIMIT_WINDOW_SECONDS: 300
 """
-
-
-from app.core.config import settings
-from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 
 def _get_client_ip(request: Request) -> str:
@@ -108,7 +105,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     from app.services.audit_log import audit_log
 
     client_ip = _get_client_ip(request)
-    
+
     # Credential stuffing detection
     credential_stuffing_detector.record_attempt(client_ip, payload.password)
     if credential_stuffing_detector.detect_stuffing(client_ip):
@@ -126,14 +123,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             status_code=429,
             detail=f"Too many login attempts from this IP. Account locked for {lockout_minutes} minutes.",
         )
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
-        raise HTTPException(
-            status_code=429, 
-            detail="Too many login attempts from this IP. Please try again later."
-        )
-    
+        raise HTTPException(status_code=429, detail="Too many login attempts from this IP. Please try again later.")
+
     try:
         return AuthStore.login(payload, db=db)
     except ValueError as exc:
@@ -143,14 +137,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 @router.post("/refresh", response_model=AuthSessionResponse)
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}"):
-        raise HTTPException(
-            status_code=429, 
-            detail="Too many refresh attempts from this IP. Please try again later."
-        )
-    
+        raise HTTPException(status_code=429, detail="Too many refresh attempts from this IP. Please try again later.")
+
     try:
         return AuthStore.refresh(payload.refresh_token, db=db)
     except ValueError as exc:
@@ -182,16 +173,17 @@ def update_profile(
         raise HTTPException(status_code=404, detail="User not found")
 
     from app.services.audit_log import audit_log
+
     changed = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    audit_log.log_event(db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())})
+    audit_log.log_event(
+        db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())}
+    )
 
     return user_orm_to_pydantic(updated)
 
 
 @router.post("/logout", response_model=AuthLogoutResponse)
-def logout(
-    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
-):
+def logout(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
     token = _extract_bearer_token(authorization)
     AuthStore.logout(token, db=db)
     return AuthLogoutResponse(message="Logged out successfully")
@@ -204,10 +196,10 @@ def get_session_inventory(
 ):
     """Get all active sessions for the current user."""
     sessions = AuthStore.get_user_sessions(current_user.email, db=db)
-    
+
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
-    
+
     return SessionInventoryResponse(
         sessions=session_infos,
         total_count=len(session_infos),
@@ -223,10 +215,10 @@ def get_admin_session_inventory(
 ):
     """Admin endpoint to get all sessions for a specific user."""
     sessions = AuthStore.get_user_sessions(email, db=db)
-    
+
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
-    
+
     return SessionInventoryResponse(
         sessions=session_infos,
         total_count=len(session_infos),
@@ -280,8 +272,10 @@ def revoke_token(
     will receive 401 'Token revoked' response."""
     from app.services.token_revocation import revoke
     from app.services.auth_store import TOKEN_TTL_SECONDS
+
     token = _extract_bearer_token(authorization)
     revoke(hash_token(token), TOKEN_TTL_SECONDS)
     from app.services.audit_log import audit_log
+
     audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
     return RevokeResponse(message="Token revoked successfully")

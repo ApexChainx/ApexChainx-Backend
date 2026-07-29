@@ -13,12 +13,12 @@ from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
 from app.services.audit_log import audit_log
-from app.core.security import get_current_user, require_admin, require_engineer
+from app.core.security import require_admin, require_engineer
 
 router = APIRouter()
 
 _SEEN_NONCES: dict[str, float] = {}
-CALLBACK_NONCE_TTL_SECONDS = 300  
+CALLBACK_NONCE_TTL_SECONDS = 300
 
 
 def _evict_stale_nonces() -> None:
@@ -41,6 +41,7 @@ def _is_replay(nonce: str) -> bool:
 # BE-027: Schemas for reconciliation history
 class ReconciliationHistoryEntry(BaseModel):
     """A single reconciliation history entry."""
+
     event_type: str
     actor: Optional[str] = None
     previous_status: Optional[str] = None
@@ -51,6 +52,7 @@ class ReconciliationHistoryEntry(BaseModel):
 
 class ReconciliationHistoryResponse(BaseModel):
     """Payment reconciliation history response."""
+
     transaction_id: str
     current_status: str
     history: List[ReconciliationHistoryEntry]
@@ -98,21 +100,19 @@ def get_payment_history(transaction_id: str, current_user=Depends(require_engine
 
 @router.get("/{transaction_id}/reconciliation-history", response_model=ReconciliationHistoryResponse)
 def get_payment_reconciliation_history(
-    transaction_id: str,
-    current_user=Depends(require_engineer),
-    db: Session = Depends(get_db)
+    transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)
 ):
     """Get detailed reconciliation history for a payment with timestamps and actor context.
-    
+
     BE-027: Returns a stable, structured history suitable for frontend drawer or audit screen.
     """
     repo = PaymentRepository(db)
     payment = repo.get(transaction_id)
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
-    
+
     history = repo.get_reconciliation_history(transaction_id)
-    
+
     return ReconciliationHistoryResponse(
         transaction_id=transaction_id,
         current_status=payment.status,
@@ -135,16 +135,13 @@ class ReconcileRequest(BaseModel):
 
 @router.post("/{transaction_id}/reconcile", response_model=PaymentTransaction)
 def reconcile_payment(
-    transaction_id: str,
-    payload: ReconcileRequest,
-    current_user=Depends(require_admin),
-    db: Session = Depends(get_db)
+    transaction_id: str, payload: ReconcileRequest, current_user=Depends(require_admin), db: Session = Depends(get_db)
 ):
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Payment not found")
-    
+
     try:
         payment = repo.reconcile(transaction_id, payload.status)
     except PaymentTransitionError as exc:
@@ -159,7 +156,7 @@ def reconcile_payment(
         )
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
-    
+
     # BE-027: Include previous status in audit log for reconciliation history
     audit_log.log(
         "payment_reconciled",
@@ -167,17 +164,13 @@ def reconcile_payment(
             "id": transaction_id,
             "previous_status": existing.status,
             "status": payload.status,
-        }
+        },
     )
     return payment
 
 
 @router.post("/{transaction_id}/retry", response_model=PaymentTransaction)
-def retry_payment(
-    transaction_id: str,
-    current_user=Depends(require_engineer),
-    db: Session = Depends(get_db)
-):
+def retry_payment(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:

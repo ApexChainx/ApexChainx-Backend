@@ -6,6 +6,7 @@ Usage:
     cache.set("key", value)
     cache.invalidate("key")   # call after writes that affect cached data
 """
+
 from __future__ import annotations
 
 import time

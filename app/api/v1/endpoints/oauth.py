@@ -1,8 +1,9 @@
 """OAuth 2.0 authorization endpoints with PKCE and exact-match redirect_uri validation."""
+
 from typing import Optional
 
 import secrets
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from app.core.config import settings
 from app.services.oauth_session import oauth_state_repo
 from app.services.audit_log import audit_log
@@ -27,7 +28,12 @@ def authorize(provider: str, redirect_uri: str = Query(...), code_challenge: Opt
 
 
 @router.get("/{provider}/callback")
-def callback(provider: str, state: str = Query(...), code: Optional[str] = Query(None), code_verifier: Optional[str] = Query(None)):
+def callback(
+    provider: str,
+    state: str = Query(...),
+    code: Optional[str] = Query(None),
+    code_verifier: Optional[str] = Query(None),
+):
     if provider not in PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
     if not state:

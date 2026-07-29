@@ -13,7 +13,6 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
-    verify_signature,
 )
 from app.core.config import settings
 from app.utils.correlation import get_or_generate_correlation_id
@@ -48,13 +47,13 @@ def _build_headers(
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> Dict[str, str]:
     """Build webhook delivery headers with explicit signature versioning (BE-087).
-    
+
     Args:
         webhook: Webhook configuration
         payload: JSON payload string
         event: Webhook event type
         signature_version: Explicit signature algorithm version
-    
+
     Returns:
         Dictionary of headers including:
         - Content-Type: application/json
@@ -81,7 +80,7 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> List[Webhook]:
-    webhooks = db.query(Webhook).filter(Webhook.is_active == True).all()
+    webhooks = db.query(Webhook).filter(Webhook.is_active).all()
     result = []
     for webhook in webhooks:
         try:
@@ -101,14 +100,14 @@ def create_delivery(
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> WebhookDelivery:
     """Create a webhook delivery record with explicit signature version (BE-087).
-    
+
     Args:
         db: Database session
         webhook: Webhook configuration
         event: Webhook event type
         payload: Event payload dict (will be JSON-serialized)
         signature_version: Signature algorithm version to use
-    
+
     Returns:
         Created WebhookDelivery record
     """
@@ -179,7 +178,9 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         delivery.next_retry_at = None
         logger.info(
             "Webhook delivery %s succeeded on attempt %d for webhook %s.",
-            delivery.id, delivery.attempt_count, webhook.id,
+            delivery.id,
+            delivery.attempt_count,
+            webhook.id,
         )
     else:
         retry_index = delivery.attempt_count - 1
@@ -188,13 +189,15 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
         if retry_index < max_retries and retry_index < len(retry_delays):
             base_delay = retry_delays[retry_index]
-            raw_delay = min(base_delay * (2 ** retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
+            raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delay = _apply_jitter(raw_delay)
             delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(
                 "Webhook delivery %s failed (attempt %d). Retrying in %ds.",
-                delivery.id, delivery.attempt_count, delay,
+                delivery.id,
+                delivery.attempt_count,
+                delay,
             )
         else:
             # Mark as dead-letter instead of just failed
@@ -203,7 +206,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             delivery.next_retry_at = None
             logger.error(
                 "Webhook delivery %s permanently failed after %d attempts. Marked as dead-letter.",
-                delivery.id, delivery.attempt_count,
+                delivery.id,
+                delivery.attempt_count,
             )
 
     delivery.updated_at = datetime.utcnow()
@@ -217,16 +221,16 @@ def trigger_sla_violation_webhooks(
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> List[WebhookDelivery]:
     """Trigger webhook deliveries for an event with explicit signature versioning (BE-087).
-    
+
     Args:
         db: Database session
         sla_data: Event data to include in webhook payload
         event: Webhook event type
         signature_version: Signature algorithm version (defaults to current supported version)
-    
+
     Returns:
         List of created WebhookDelivery records
-    
+
     Note:
         - Each delivery includes explicit signature_version metadata in headers
         - Timestamp is immutable across retries (idempotency support)
@@ -237,7 +241,7 @@ def trigger_sla_violation_webhooks(
 
     # Timestamp is captured once and reused across all retries (idempotency support)
     event_timestamp = datetime.utcnow().isoformat()
-    
+
     payload = {
         "schema_version": WEBHOOK_SCHEMA_VERSION,
         "event": event.value,
@@ -256,7 +260,10 @@ def trigger_sla_violation_webhooks(
         deliveries.append(delivery)
         logger.info(
             "Queued webhook delivery %s for webhook %s on event %s (sig_version=%d).",
-            delivery.id, webhook.id, event.value, signature_version,
+            delivery.id,
+            webhook.id,
+            event.value,
+            signature_version,
         )
         # Dispatch immediately (in production, offload to a background task/queue)
         dispatch_delivery(db, delivery.id)
@@ -283,17 +290,19 @@ def retry_pending_deliveries(db: Session) -> int:
     return count
 
 
-def get_dead_letter_deliveries(db: Session, webhook_id: Optional[UUID] = None, limit: int = 100) -> List[WebhookDelivery]:
+def get_dead_letter_deliveries(
+    db: Session, webhook_id: Optional[UUID] = None, limit: int = 100
+) -> List[WebhookDelivery]:
     """Get dead-lettered deliveries for auditing and remediation."""
     query = (
         db.query(WebhookDelivery)
         .filter(WebhookDelivery.status == WebhookDeliveryStatus.DEAD_LETTER)
         .order_by(WebhookDelivery.dead_lettered_at.desc())
     )
-    
+
     if webhook_id:
         query = query.filter(WebhookDelivery.webhook_id == webhook_id)
-    
+
     return query.limit(limit).all()
 
 
@@ -303,11 +312,11 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
     if not delivery:
         logger.error("Dead-letter delivery %s not found.", delivery_id)
         return False
-    
+
     if delivery.status != WebhookDeliveryStatus.DEAD_LETTER:
         logger.warning("Delivery %s is not in dead-letter status (current: %s).", delivery_id, delivery.status)
         return False
-    
+
     # Reset delivery state for replay
     delivery.status = WebhookDeliveryStatus.PENDING
     delivery.attempt_count = 0
@@ -318,9 +327,9 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
     delivery.response_body = None
     delivery.delivered_at = None
     delivery.updated_at = datetime.utcnow()
-    
+
     db.commit()
-    
+
     # Dispatch the replay
     dispatch_delivery(db, delivery.id)
     logger.info("Replayed dead-letter delivery %s", delivery_id)
@@ -328,11 +337,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
 
 
 def replay_deliveries_by_event_context(
-    db: Session, 
-    event: WebhookEvent, 
-    device_id: Optional[str] = None,
-    outage_id: Optional[str] = None,
-    limit: int = 50
+    db: Session, event: WebhookEvent, device_id: Optional[str] = None, outage_id: Optional[str] = None, limit: int = 50
 ) -> int:
     """Replay deliveries by event and context (device or outage)."""
     # Get dead-lettered deliveries matching the criteria
@@ -341,36 +346,39 @@ def replay_deliveries_by_event_context(
         .filter(WebhookDelivery.status == WebhookDeliveryStatus.DEAD_LETTER)
         .filter(WebhookDelivery.event == event)
     )
-    
+
     # Filter by payload context if provided
     if device_id or outage_id:
         deliveries = query.all()
         matching_deliveries = []
-        
+
         for delivery in deliveries:
             try:
                 payload = json.loads(delivery.payload)
                 data = payload.get("data", {})
-                
+
                 if device_id and data.get("device_id") == device_id:
                     matching_deliveries.append(delivery)
                 elif outage_id and data.get("outage_id") == outage_id:
                     matching_deliveries.append(delivery)
             except (json.JSONDecodeError, TypeError):
                 continue
-        
+
         deliveries = matching_deliveries[:limit]
     else:
         deliveries = query.limit(limit).all()
-    
+
     # Replay matching deliveries
     replayed_count = 0
     for delivery in deliveries:
         if replay_dead_letter_delivery(db, delivery.id):
             replayed_count += 1
-    
+
     logger.info(
         "Replayed %d dead-letter deliveries for event=%s, device_id=%s, outage_id=%s",
-        replayed_count, event.value, device_id, outage_id
+        replayed_count,
+        event.value,
+        device_id,
+        outage_id,
     )
     return replayed_count

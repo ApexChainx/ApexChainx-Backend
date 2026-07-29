@@ -1,7 +1,6 @@
 """Graceful shutdown handler on SIGTERM/SIGINT for issue #31."""
 
 import asyncio
-import os
 import signal
 import logging
 
@@ -27,8 +26,8 @@ def install_signal_handlers(grace_seconds: int = 30) -> None:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, _handler, sig, None)
-    except NotImplementedError:
-        # Windows fallback
+    except (NotImplementedError, RuntimeError):
+        # Windows fallback / no running loop (e.g., during test import)
         signal.signal(signal.SIGTERM, _handler)
         signal.signal(signal.SIGINT, _handler)
 

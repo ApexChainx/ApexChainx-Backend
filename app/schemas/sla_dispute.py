@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.models.sla_dispute import DisputeStatus
@@ -14,7 +14,9 @@ class DisputeResolveRequest(BaseModel):
     resolved_by: str = Field(..., description="Identifier of the operator resolving the dispute")
     resolution_notes: str = Field(..., min_length=10, description="Notes explaining the resolution decision")
     status: DisputeStatus = Field(..., description="Resolution outcome: resolved or rejected")
-    apply_proposed: bool = Field(default=False, description="Whether to apply the proposed SLA result as the new latest")
+    apply_proposed: bool = Field(
+        default=False, description="Whether to apply the proposed SLA result as the new latest"
+    )
 
 
 class DisputeResponse(BaseModel):

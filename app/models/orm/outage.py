@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSON
 
 from app.db.base import Base
@@ -21,8 +21,8 @@ class OutageORM(Base):
     affected_subscribers = Column(Integer, nullable=True)
     assigned_to = Column(String(255), nullable=True)
     created_by = Column(String(255), nullable=True)
-    location = Column(JSON, nullable=True)          # {"latitude": float, "longitude": float}
-    sla_status = Column(JSON, nullable=True)        # SLAStatus dict
+    location = Column(JSON, nullable=True)  # {"latitude": float, "longitude": float}
+    sla_status = Column(JSON, nullable=True)  # SLAStatus dict
     mttr_minutes = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
     updated_at = Column(

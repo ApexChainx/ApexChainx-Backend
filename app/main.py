@@ -1,18 +1,25 @@
-from fastapi import FastAPI
-from datetime import datetime
-from pydantic import ValidationError
+from datetime import datetime, timezone
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from redis import Redis
+from pydantic import ValidationError
 from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
+from app.core.exceptions import (
+    ApexException,
+    ApexNotFoundError,
+    ApexTransientError,
+)
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
 from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
 from app.db.session import engine
+from app.services.health_report import build_readiness_report
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
@@ -24,30 +31,27 @@ configure_logging()
 validate_critical_settings(settings)
 install_signal_handlers()
 
+
 async def check_database() -> bool:
-    from sqlalchemy import text
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
             conn.commit()
         return True
-    except Exception:
+    except ConnectionError:
         return False
 
+
 async def check_celery() -> bool:
-    from redis import Redis
     try:
         r = Redis.from_url(settings.CELERY_BROKER_URL)
         r.ping()
         return True
-    except Exception:
+    except (ConnectionError, TimeoutError):
         return False
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description="ApexChainx Backend API"
-)
+
+app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
@@ -62,6 +66,7 @@ app.add_middleware(PayloadSizeMiddleware)
 
 # Add idempotency middleware (after payload size)
 app.add_middleware(IdempotencyMiddleware)
+
 
 class _DynamicCORSMiddleware(CORSMiddleware):
     def __init__(self, app: ASGIApp) -> None:
@@ -94,10 +99,12 @@ class _DynamicCORSMiddleware(CORSMiddleware):
             preflight_headers["Vary"] = "Origin"
         else:
             preflight_headers["Access-Control-Allow-Origin"] = "*"
-        preflight_headers.update({
-            "Access-Control-Allow-Methods": ", ".join(allow_methods),
-            "Access-Control-Max-Age": str(600),
-        })
+        preflight_headers.update(
+            {
+                "Access-Control-Allow-Methods": ", ".join(allow_methods),
+                "Access-Control-Max-Age": str(600),
+            }
+        )
         merged_headers = sorted(SAFELISTED_HEADERS | set(allow_headers))
         if merged_headers and not allow_all_headers:
             preflight_headers["Access-Control-Allow-Headers"] = ", ".join(merged_headers)
@@ -118,10 +125,43 @@ class _DynamicCORSMiddleware(CORSMiddleware):
 
         await CORSMiddleware.__call__(self, scope, receive, send)
 
+
 app.add_middleware(_DynamicCORSMiddleware)
 
 # Security headers should be applied after CORS so preflight responses are handled
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+@app.exception_handler(ApexException)
+async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": exc.error_code,
+            "detail": exc.detail,
+            **(exc.extra or {}),
+        },
+    )
+
+
+@app.exception_handler(ApexNotFoundError)
+async def apex_not_found_handler(request: Request, exc: ApexNotFoundError) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={"error_code": "not_found", "detail": exc.detail},
+    )
+
+
+@app.exception_handler(ApexTransientError)
+async def apex_transient_error_handler(request: Request, exc: ApexTransientError) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error_code": "transient_error",
+            "detail": exc.detail,
+            "retryable": True,
+        },
+    )
 
 
 # Health checks
@@ -129,16 +169,19 @@ app.add_middleware(SecurityHeadersMiddleware)
 def liveness():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
+
 @app.get("/health/readiness")
 async def readiness():
     report = build_readiness_report(engine, settings.CELERY_BROKER_URL)
     report["timestamp"] = datetime.now(timezone.utc).isoformat()
     return report
 
+
 # Legacy health check (now liveness)
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")
