@@ -10,6 +10,7 @@ from app.db.session import engine
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 validate_critical_settings(settings)
 

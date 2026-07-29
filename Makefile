@@ -1,4 +1,4 @@
-.PHONY: bootstrap install dev install-dev lint typecheck test
+.PHONY: bootstrap install dev install-dev lint typecheck test cov
 
 bootstrap:
 	pip install pip-tools
@@ -15,8 +15,14 @@ dev: install
 lint:
 	ruff check .
 
+format:
+	ruff format .
+
 typecheck:
 	mypy app/
 
 test:
 	pytest
+
+cov:
+	pytest --cov-branch --cov-fail-under=80 --cov=app/services/ --cov=app/utils/ --cov=app/db/

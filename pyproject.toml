@@ -53,5 +53,19 @@ strict = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+omit = [
+    "tests/*",
+    "**/__init__.py",
+    "**/conftest.py",
+]
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

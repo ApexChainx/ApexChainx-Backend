@@ -6,6 +6,7 @@ from alembic import context
 
 # Import all ORM models so Alembic can detect them
 from app.db.base import Base
+import app.models.orm.audit_log  # noqa: F401
 import app.models.orm.outage  # noqa: F401
 import app.models.orm.outage_event  # noqa: F401
 import app.models.orm.sla     # noqa: F401
