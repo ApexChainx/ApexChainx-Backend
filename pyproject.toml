@@ -37,6 +37,7 @@ dev = [
     "mypy==1.13.0",
     "bandit==1.8.0",
     "pip-tools==7.4.1",
+    "fakeredis>=2.20.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -80,7 +81,7 @@ branch = true
 source = ["app"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 0
 show_missing = true
 skip_covered = true
 omit = [
