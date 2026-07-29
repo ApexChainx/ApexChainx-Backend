@@ -503,9 +503,16 @@ def retry_job(
             message=f"Job retry #{job.retry_count} initiated successfully",
         )
 
+    except (ValueError, KeyError, TypeError) as e:
+        db.rollback()
+        logger.error("Failed to retry job due to data issue", job_id=str(job.id), error=str(e), correlation_id=correlation_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to retry job due to invalid payload: {str(e)}",
+        )
     except Exception as e:
         db.rollback()
-        logger.error("Failed to retry job", job_id=str(job.id), error=str(e), correlation_id=correlation_id)
+        logger.exception("Unexpected error retrying job", job_id=str(job.id), correlation_id=correlation_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry job: {str(e)}",

@@ -8,15 +8,52 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
-class ApexConflictError(Exception):
-    def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
+class ApexException(Exception):
+    """Base exception for all ApexChainx domain errors.
+
+    Every raised exception in the codebase should subclass this or one
+    of its children so that middleware and error handlers can act on
+    typed conditions rather than bare ``except Exception``.
+    """
+
+    def __init__(
+        self,
+        detail: str = "An unexpected error occurred.",
+        *,
+        error_code: str = "internal_error",
+        status_code: int = 500,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         self.detail = detail
+        self.error_code = error_code
+        self.status_code = status_code
+        self.extra = extra or {}
+        super().__init__(detail)
+
+
+class ApexNotFoundError(ApexException):
+    """Resource not found (404)."""
+
+    def __init__(self, detail: str = "Resource not found.", **kwargs: Any) -> None:
+        super().__init__(detail=detail, error_code="not_found", status_code=404, **kwargs)
+
+
+class ApexTransientError(ApexException):
+    """Transient / retryable error (503 by default)."""
+
+    def __init__(self, detail: str = "A transient error occurred.", **kwargs: Any) -> None:
+        super().__init__(detail=detail, error_code="transient_error", status_code=503, **kwargs)
+
+
+class ApexConflictError(ApexException):
+    def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
+        super().__init__(detail=detail, error_code="conflict", status_code=409)
         self.fields = fields or {}
 
 
-class ApexValidationError(Exception):
+class ApexValidationError(ApexException):
     def __init__(self, detail: str, errors: Optional[List[Dict[str, Any]]] = None):
-        self.detail = detail
+        super().__init__(detail=detail, error_code="validation_error", status_code=422)
         self.errors = errors or []
 
 

@@ -10,6 +10,7 @@ from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent
 from app.services.audit_log import audit_log
+from app.core.exceptions import ApexTransientError
 from app.utils.correlation_ctx import set_correlation_id
 from app.utils.logging import get_structured_logger
 
@@ -179,6 +180,8 @@ def compute_sla_for_device(
         logger.info("SLA computation complete for device=%s", device_id)
         return result
 
+    except ApexTransientError:
+        raise  # let Celery handle retry of transient errors
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("SLA computation failed for device=%s: %s", device_id, error_msg)
@@ -188,7 +191,7 @@ def compute_sla_for_device(
             self._log_retry(db, self.request.id, self.request.retries + 1, error_msg)
 
         self._mark_failure(db, self.request.id, error_msg)
-        raise self.retry(exc=exc)
+        raise self.retry(exc=ApexTransientError(detail=f"SLA computation failed for device {device_id}: {error_msg}"))
     finally:
         db.close()
 
@@ -243,6 +246,11 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> 
 
                 processed_count += 1
 
+            except ApexTransientError as device_exc:
+                logger.warning("SLA transient error for device=%s: %s", device_id, device_exc)
+                results.append({"device_id": device_id, "error": str(device_exc)})
+                self._add_item_error(db, self.request.id, device_id, str(device_exc))
+                error_count += 1
             except Exception as device_exc:
                 logger.warning("SLA failed for device=%s: %s", device_id, device_exc)
                 results.append({"device_id": device_id, "error": str(device_exc)})
@@ -295,6 +303,8 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> 
         logger.info("Bulk SLA computation complete. Violations: %d/%d, Errors: %d", len(violations), total, error_count)
         return summary
 
+    except ApexTransientError:
+        raise  # let Celery handle retry
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("Bulk SLA computation failed: %s", error_msg)
@@ -304,7 +314,7 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> 
             self._log_retry(db, self.request.id, self.request.retries + 1, error_msg)
 
         self._mark_failure(db, self.request.id, error_msg)
-        raise self.retry(exc=exc)
+        raise self.retry(exc=ApexTransientError(detail=f"Bulk SLA computation failed: {error_msg}"))
     finally:
         db.close()
 
