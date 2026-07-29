@@ -47,6 +47,7 @@ class CorrelationMiddleware:
         user_id_hash: str | None = None
 
         async def send_wrapper(message):
+            nonlocal route_template, user_id_hash
             if message["type"] == "http.response.start":
                 headers = dict(message.get("headers", []))
                 headers[b"x-correlation-id"] = correlation_id.encode()
