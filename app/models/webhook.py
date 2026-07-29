@@ -21,6 +21,7 @@ class WebhookDeliveryStatus(str, enum.Enum):
     FAILED = "failed"
     RETRYING = "retrying"
     DEAD_LETTER = "dead_letter"  # BE-086: Dead-letter status for permanently failed deliveries
+    BREAKER_OPEN = "breaker_open"  # Circuit breaker open, delivery deferred
 
 
 class Webhook(Base):
