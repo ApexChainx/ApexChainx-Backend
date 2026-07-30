@@ -15,6 +15,10 @@ class MetricPoint:
     tags: dict[str, str] = field(default_factory=dict)
 
 
+# Default Prometheus-style histogram buckets for common latency ranges (seconds)
+_DEFAULT_LATENCY_BUCKETS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]
+
+
 class MetricsRegistry:
     """Thread-safe metrics registry for collecting and exposing application metrics."""
 
@@ -23,6 +27,7 @@ class MetricsRegistry:
         self._counters: Dict[str, float] = defaultdict(float)
         self._gauges: Dict[str, float] = {}
         self._histograms: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self._histogram_buckets: Dict[str, Dict[float, int]] = defaultdict(lambda: defaultdict(int))
         self._timers: Dict[str, List[float]] = defaultdict(list)
 
     def increment_counter(self, name: str, value: float = 1.0, tags: Optional[Dict[str, str]] = None) -> None:
@@ -38,10 +43,14 @@ class MetricsRegistry:
             self._gauges[key] = value
 
     def record_histogram(self, name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
-        """Record a histogram value."""
+        """Record a histogram value with automatic bucket tracking."""
         with self._lock:
             key = self._make_key(name, tags)
             self._histograms[key].append(MetricPoint(datetime.now(timezone.utc), value, tags or {}))
+            # Increment histogram buckets for Prometheus-compatible export
+            for bucket_bound in _DEFAULT_LATENCY_BUCKETS:
+                if value <= bucket_bound:
+                    self._histogram_buckets[key][bucket_bound] += 1
 
     def record_timer(self, name: str, duration_ms: float, tags: Optional[Dict[str, str]] = None) -> None:
         """Record a timing measurement."""
@@ -60,27 +69,32 @@ class MetricsRegistry:
         return f"{name}{{{tag_str}}}"
 
     def get_metrics_summary(self) -> dict[str, Any]:
-        """Get a summary of all metrics for exposure."""
+        """Get a summary of all metrics for exposure (JSON and Prometheus)."""
         with self._lock:
             summary: dict[str, Any] = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "counters": dict(self._counters),
                 "gauges": dict(self._gauges),
                 "histograms": {},
+                "histogram_buckets": {},
                 "timers": {},
             }
 
-            # Summarize histograms
+            # Summarize histograms with bucket data for Prometheus
             for key, points in self._histograms.items():
                 if points:
                     values = [p.value for p in points]
                     summary["histograms"][key] = {
                         "count": len(values),
+                        "sum": sum(values),
                         "min": min(values),
                         "max": max(values),
                         "avg": sum(values) / len(values),
                         "latest": points[-1].timestamp.isoformat(),
                     }
+                    # Include actual bucket counts for Prometheus exporter
+                    if key in self._histogram_buckets:
+                        summary["histogram_buckets"][key] = dict(self._histogram_buckets[key])
 
             # Summarize timers
             for key, timings in self._timers.items():
