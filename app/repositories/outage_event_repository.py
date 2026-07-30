@@ -28,6 +28,8 @@ class OutageEventRepository:
         self.db.refresh(orm)
         return orm
 
+
+# Add bulk Payments state-transition endpoint with all-or-nothing semantics
     def list_for_outage(
         self,
         outage_id: str,
