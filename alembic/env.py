@@ -2,7 +2,15 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
+import app.models.job
+import app.models.orm.outage
+import app.models.orm.outage_event
+import app.models.orm.payment
+import app.models.orm.sla
+import app.models.sla_dispute
+import app.models.webhook  # noqa: F401
 from alembic import context
+from app.core.config import settings
 
 # Import all ORM models so Alembic can detect them
 from app.db.base import Base

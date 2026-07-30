@@ -6,10 +6,12 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any
-from passlib.context import CryptContext
+
 from fastapi import Depends, Header, HTTPException
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
 from app.core.config import settings as app_settings

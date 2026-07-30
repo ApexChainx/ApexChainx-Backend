@@ -14,7 +14,7 @@ def _hash_value(value: str | None) -> str | None:
         return None
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
-
+# Add per-user API rate limits using Redis sliding-window counter
 class CorrelationMiddleware:
     """ASGI-native middleware to add correlation IDs to requests and enable request tracing.
 
@@ -48,6 +48,7 @@ class CorrelationMiddleware:
         user_id_hash: str | None = None
 
         async def send_wrapper(message):
+            nonlocal route_template, user_id_hash
             if message["type"] == "http.response.start":
                 headers = dict(message.get("headers", []))
                 headers[b"x-correlation-id"] = correlation_id.encode()

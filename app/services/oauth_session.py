@@ -8,8 +8,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from redis import Redis
 
@@ -17,25 +16,25 @@ from app.core.config import settings
 
 
 class OAuthStateRepository:
-    def __init__(self, redis_client: Optional[Redis] = None):
+    def __init__(self, redis_client: Redis | None = None):
         self.redis = redis_client or Redis.from_url(settings.CELERY_BROKER_URL)
         self.ttl = settings.OAUTH_STATE_TTL_SECONDS
 
     def _state_key(self, state: str) -> str:
         return f"oauth_state:{state}"
 
-    def create_state(self, provider: str, redirect_uri: str, code_verifier: Optional[str] = None) -> str:
+    def create_state(self, provider: str, redirect_uri: str, code_verifier: str | None = None) -> str:
         state = f"oauth_state_{secrets.token_hex(16)}"
         payload = {
             "provider": provider,
             "redirect_uri": redirect_uri,
             "code_verifier": code_verifier,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         self.redis.setex(self._state_key(state), self.ttl, json.dumps(payload))
         return state
 
-    def consume_state(self, state: str) -> Optional[dict]:
+    def consume_state(self, state: str) -> dict | None:
         key = self._state_key(state)
         data = self.redis.get(key)
         if data is None:
@@ -43,7 +42,7 @@ class OAuthStateRepository:
         self.redis.delete(key)
         return json.loads(data)
 
-    def get_state(self, state: str) -> Optional[dict]:
+    def get_state(self, state: str) -> dict | None:
         data = self.redis.get(self._state_key(state))
         if data is None:
             return None

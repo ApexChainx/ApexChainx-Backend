@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.security import require_admin
 from app.db.session import get_db
 from app.core.security import require_admin
 from app.models.auth import AuthUser
@@ -14,24 +15,24 @@ router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 
 class ApiKeyCreateRequest(BaseModel):
-    name: Optional[str] = None
+    name: str | None = None
     scopes: list[str] = []
-    expires_at: Optional[datetime] = None
+    expires_at: datetime | None = None
 
 
 class ApiKeyCreateResponse(BaseModel):
     id: str
-    name: Optional[str]
+    name: str | None
     raw_key: str
     message: str = "Store this key securely. It will not be shown again."
 
 
 class ApiKeyItem(BaseModel):
     id: str
-    name: Optional[str]
+    name: str | None
     scopes: list[str]
-    expires_at: Optional[datetime]
-    revoked_at: Optional[datetime]
+    expires_at: datetime | None
+    revoked_at: datetime | None
     created_at: datetime
     created_by: str
 

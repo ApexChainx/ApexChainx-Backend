@@ -1,6 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
-from sqlalchemy import Column, String, DateTime, JSON
+
+from sqlalchemy import JSON, Column, DateTime, String
+
 from app.db.base import Base
 
 
@@ -13,5 +15,5 @@ class ApiKeyORM(Base):
     scopes = Column(JSON, nullable=False, default=list)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     created_by = Column(String(255), nullable=False)

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
+
 from app.models.orm.token_family import TokenFamilyORM
 
 
@@ -20,10 +21,10 @@ class TokenFamilyRepository:
         self.db.refresh(family)
         return family
 
-    def get_family(self, family_id: str) -> Optional[TokenFamilyORM]:
+    def get_family(self, family_id: str) -> TokenFamilyORM | None:
         return self.db.query(TokenFamilyORM).filter(TokenFamilyORM.family_id == family_id).first()
 
-    def increment_sequence(self, family_id: str) -> Optional[TokenFamilyORM]:
+    def increment_sequence(self, family_id: str) -> TokenFamilyORM | None:
         family = self.get_family(family_id)
         if family:
             family.current_sequence += 1
@@ -32,7 +33,7 @@ class TokenFamilyRepository:
             self.db.refresh(family)
         return family
 
-    def compromise_family(self, family_id: str) -> Optional[TokenFamilyORM]:
+    def compromise_family(self, family_id: str) -> TokenFamilyORM | None:
         family = self.get_family(family_id)
         if family:
             family.compromised = True

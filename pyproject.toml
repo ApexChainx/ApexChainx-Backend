@@ -18,7 +18,7 @@ dependencies = [
     "uvicorn[standard]==0.34.0",
     "redis==5.2.1",
     "sqlalchemy==2.0.36",
-    "psycopg2-binary==2.9.10",
+    "psycopg2-binary>=2.9.10",
     "alembic==1.14.0",
     "pydantic-settings==2.7.0",
     "celery==5.4.0",
@@ -26,19 +26,30 @@ dependencies = [
     "python-multipart==0.0.19",
     "passlib[bcrypt]==1.7.4",
     "gunicorn==23.0.0",
+    "opentelemetry-api==1.29.0",
+    "opentelemetry-sdk==1.29.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.29.0",
+    "opentelemetry-instrumentation-fastapi==0.50b0",
+    "opentelemetry-instrumentation-sqlalchemy==0.50b0",
+    "opentelemetry-instrumentation-httpx==0.50b0",
+    "opentelemetry-instrumentation-redis==0.50b0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
     "pytest-cov==6.0.0",
+    "pytest-benchmark==5.1.0",
     "pytest-alembic>=0.11.0",
     "hypothesis>=6.100",
     "ruff==0.8.3",
+    "pyupgrade>=3.0",
     "mypy==1.13.0",
     "bandit==1.8.0",
     "pip-tools==7.4.1",
     "fakeredis>=2.20.0",
+    "schemathesis==3.38.9",
+    "mutmut>=3.0.0",
 ]
 
 [tool.setuptools.packages.find]

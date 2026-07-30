@@ -1,8 +1,8 @@
+import enum
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, DateTime, Text, Enum as SAEnum, Float, JSON
 from sqlalchemy.dialects.postgresql import UUID
-import enum
 
 from app.db.base_class import Base
 

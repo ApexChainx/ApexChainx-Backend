@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
+issue/114-117-webhook-concurrency-canonical-json
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+main
 from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +12,14 @@ from pydantic import ValidationError
 from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.exception_handlers import (
+    general_exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+)
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
 from app.core.exceptions import (
@@ -17,12 +29,13 @@ from app.core.exceptions import (
 )
 from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
+from app.core.tracing import init_tracing, instrument_app
 from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
 from app.db.session import engine
 from app.services.health_report import build_readiness_report
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
-from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.api_version import ApiVersionMiddleware
@@ -31,6 +44,7 @@ from app.middleware.api_version import ApiVersionMiddleware
 configure_logging()
 validate_critical_settings(settings)
 install_signal_handlers()
+init_tracing()
 
 
 async def check_database() -> bool:
@@ -56,16 +70,14 @@ app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
+app.add_exception_handler(RequestValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
 
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)
 
-# Add payload size middleware (after correlation, before CORS)
-app.add_middleware(PayloadSizeMiddleware)
-
-# Add idempotency middleware (after payload size)
+# Add idempotency middleware (after correlation)
 app.add_middleware(IdempotencyMiddleware)
 
 
@@ -136,35 +148,62 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(ApiVersionMiddleware)
 
 
+from app.utils.correlation_ctx import get_or_generate_correlation_id
+
+
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "error_code": exc.error_code,
+            "type": f"https://developer.apexchainx.io/errors/{exc.status_code}",
+            "title": getattr(exc, "error_code", "Domain Error"),
+            "status": exc.status_code,
             "detail": exc.detail,
-            **(exc.extra or {}),
+            "correlation_id": correlation_id,
+            "error_code": getattr(exc, "error_code", "domain_error"),
+            **(getattr(exc, "extra", None) or {}),
         },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 @app.exception_handler(ApexNotFoundError)
 async def apex_not_found_handler(request: Request, exc: ApexNotFoundError) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
         status_code=404,
-        content={"error_code": "not_found", "detail": exc.detail},
+        content={
+            "type": "https://developer.apexchainx.io/errors/404",
+            "title": "Not Found",
+            "status": 404,
+            "detail": exc.detail,
+            "correlation_id": correlation_id,
+            "error_code": "not_found",
+        },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 @app.exception_handler(ApexTransientError)
 async def apex_transient_error_handler(request: Request, exc: ApexTransientError) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
-        status_code=500,
+        status_code=exc.status_code,
         content={
-            "error_code": "transient_error",
+            "type": f"https://developer.apexchainx.io/errors/{exc.status_code}",
+            "title": "Service Unavailable",
+            "status": exc.status_code,
             "detail": exc.detail,
+            "correlation_id": correlation_id,
+            "error_code": "transient_error",
             "retryable": True,
         },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
@@ -181,11 +220,23 @@ async def readiness():
     return report
 
 
-# Legacy health check (now liveness)
-@app.get("/health")
+# Legacy health check – deprecated, redirects to /health/liveness
+@app.get("/health", include_in_schema=False)
 def health_check():
-    return {"status": "ok"}
+    return RedirectResponse(
+        url="/health/liveness",
+        status_code=308,
+        headers={"Deprecation": "true"},
+    )
+
+# Register RFC 7807 exception handlers
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")
+
+# Apply OpenTelemetry auto-instrumentation (after all routes registered)
+instrument_app(app)

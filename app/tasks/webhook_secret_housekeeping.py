@@ -12,7 +12,7 @@ def expire_old_secrets():
     db: Session = SessionLocal()
     try:
         webhooks = db.query(Webhook).all()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for webhook in webhooks:
             if not webhook.previous_secrets:
                 continue

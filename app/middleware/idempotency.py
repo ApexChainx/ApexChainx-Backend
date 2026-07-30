@@ -6,21 +6,23 @@ responses in Redis, and replays them on duplicate requests with the same key.
 
 import hashlib
 import json
-from typing import Optional
+
 from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
 from redis import Redis
+from starlette.middleware.base import BaseHTTPMiddleware
+
 from app.core.config import settings
+from app.services.formatters import canonical_json
 
 
 def _compute_fingerprint(method: str, path: str, body: bytes) -> str:
-    canonical = json.dumps(json.loads(body if body else b"{}"), sort_keys=True) if body else "{}"
+    canonical = canonical_json(json.loads(body if body else b"{}")) if body else "{}"
     raw = f"{method}:{path}:{canonical}".encode()
     return hashlib.sha256(raw).hexdigest()
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, redis_client: Optional[Redis] = None):
+    def __init__(self, app, redis_client: Redis | None = None):
         super().__init__(app)
         self.redis = redis_client or Redis.from_url(settings.CELERY_BROKER_URL)
         self.ttl = settings.IDEMPOTENCY_KEY_TTL_HOURS * 3600

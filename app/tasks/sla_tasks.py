@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from celery import Task
 
 from app.tasks.celery_app import celery_app
+
 from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent
@@ -27,7 +28,7 @@ class DatabaseTask(Task):
     def get_db(self):
         return SessionLocal()
 
-    def _get_job(self, db, celery_task_id: str) -> Optional[Job]:
+    def _get_job(self, db, celery_task_id: str) -> Job | None:
         return db.query(Job).filter(Job.celery_task_id == celery_task_id).first()
 
     def _mark_started(self, db, celery_task_id: str):
@@ -54,7 +55,7 @@ class DatabaseTask(Task):
             job.finished_at = datetime.now(timezone.utc)
             db.commit()
 
-    def _update_progress(self, db, celery_task_id: str, progress: float, details: Optional[Dict[str, Any]] = None):
+    def _update_progress(self, db, celery_task_id: str, progress: float, details: dict[str, Any] | None = None):
         job = self._get_job(db, celery_task_id)
         if job:
             job.progress = min(progress, 99.0)
@@ -203,7 +204,7 @@ def compute_sla_for_device(
     max_retries=2,
     default_retry_delay=60,
 )
-def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> Dict[str, Any]:
+def compute_bulk_sla(self: DatabaseTask, device_ids: list[str], period: str) -> dict[str, Any]:
     """
     Compute SLA for multiple devices. Dispatches individual tasks per device
     and tracks overall progress.
@@ -324,7 +325,7 @@ def enqueue_sla_computation(
     device_id: str,
     period: str,
     job_type: JobType = JobType.SLA_COMPUTATION,
-    correlation_id: Optional[str] = None,
+    correlation_id: str | None = None,
 ) -> Job:
     """
     Enqueue an SLA computation task and create a Job record for tracking.
@@ -349,7 +350,7 @@ def enqueue_sla_computation(
     return job
 
 
-def enqueue_bulk_sla_computation(db, device_ids: List[str], period: str, correlation_id: Optional[str] = None) -> Job:
+def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correlation_id: str | None = None) -> Job:
     """Enqueue a bulk SLA computation task and return the tracking Job."""
     from app.models.job import Job, JobType
 

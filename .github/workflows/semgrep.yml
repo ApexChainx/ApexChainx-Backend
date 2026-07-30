@@ -1,0 +1,56 @@
+name: Semgrep Static Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Full scan every Monday at 09:00 UTC (offset from CodeQL to avoid congestion)
+    - cron: "0 9 * * 1"
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      # Required to post findings as PR annotations and upload SARIF
+      security-events: write
+      actions: read
+      contents: read
+
+    container:
+      image: semgrep/semgrep:1.78.0
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Run the three required rule packs:
+      #   p/security-audit  – broad security anti-patterns
+      #   p/python          – Python-specific bugs and style issues
+      #   p/owasp-top-ten   – OWASP Top 10 coverage
+      - name: Run Semgrep
+        run: |
+          semgrep ci \
+            --config p/security-audit \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --sarif \
+            --output semgrep.sarif \
+            --error   # exit non-zero on findings (blocks merge for critical findings)
+        env:
+          # Set SEMGREP_APP_TOKEN to upload results to the Semgrep Cloud dashboard.
+          # If unset, results are surfaced only via SARIF / PR annotations.
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      # Upload SARIF results to the GitHub Security tab so findings appear
+      # alongside CodeQL findings.
+      - name: Upload SARIF results to GitHub Security tab
+        if: always()   # upload even when semgrep exits non-zero
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

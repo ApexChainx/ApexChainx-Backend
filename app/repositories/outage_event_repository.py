@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.orm.outage_event import OutageEventORM, CURRENT_SCHEMA_VERSION
+from app.models.orm.outage_event import CURRENT_SCHEMA_VERSION, OutageEventORM
 from app.models.outage_event import validate_event_detail
 
 
@@ -13,7 +13,7 @@ class OutageEventRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def record(self, outage_id: str, event_type: str, detail: Optional[Dict[str, Any]] = None) -> OutageEventORM:
+    def record(self, outage_id: str, event_type: str, detail: dict[str, Any] | None = None) -> OutageEventORM:
         detail = validate_event_detail(event_type, detail)
         orm = OutageEventORM(
             id=f"evt_{uuid4().hex[:12]}",
@@ -28,12 +28,14 @@ class OutageEventRepository:
         self.db.refresh(orm)
         return orm
 
+
+# Add bulk Payments state-transition endpoint with all-or-nothing semantics
     def list_for_outage(
         self,
         outage_id: str,
-        event_type: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        event_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:

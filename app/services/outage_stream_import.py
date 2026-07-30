@@ -6,7 +6,7 @@ Adds a streaming JSON import path for POST /outages/import.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, List
 
 from sqlalchemy.orm import Session
 

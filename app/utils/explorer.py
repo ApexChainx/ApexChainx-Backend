@@ -1,7 +1,8 @@
 import csv
 import io
-from app.services.sla import calculate_sla
+
 from app.models.enums import OutageStatus
+from app.services.sla import calculate_sla
 
 
 def export_outages(outages: list, format: str):

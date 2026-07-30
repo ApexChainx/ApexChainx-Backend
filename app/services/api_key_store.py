@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timezone
-from uuid import uuid4
 from typing import Optional
+from uuid import uuid4
+
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_token
@@ -26,10 +27,10 @@ def generate_api_key() -> tuple[str, str]:
 
 def create_api_key(
     db: Session,
-    name: Optional[str],
+    name: str | None,
     scopes: list[str],
     created_by: str,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
 ) -> tuple[ApiKeyORM, str]:
     raw_key, hashed = generate_api_key()
     key_id = _generate_id()

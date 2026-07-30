@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, String, Integer, Boolean, ForeignKey
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+
 from app.db.base import Base
 
 

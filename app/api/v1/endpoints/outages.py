@@ -8,17 +8,21 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints.sla import _invalidate_analytics_cache
+from app.core.config import settings
+from app.core.lock import ConcurrencyLockError, advisory_lock_nowait
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models import BulkOutageCreate, Outage, OutageCreate, OutageUpdate
 from app.models.enums import OutageStatus, Severity
-from app.models.outage import PaginatedOutages, ResolveOutageRequest
+from app.models.outage import ResolveOutageRequest
 from app.models.outage_dto import (
-    OutageSortDirection,
-    OutageSortField,
     ImportConsistency,
     ImportFieldError,
-    ImportRowResult,
     ImportResponse,
+    ImportRowResult,
+    OutageSortDirection,
+    OutageSortField,
 )
 from app.models.webhook import WebhookEvent
 from app.repositories.outage_event_repository import OutageEventRepository
@@ -29,10 +33,6 @@ from app.services.audit_log import audit_log
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.webhook_service import trigger_sla_violation_webhooks
 from app.utils.exporter import export_outages
-from app.api.v1.endpoints.sla import _invalidate_analytics_cache
-from app.core.security import require_engineer, require_admin
-from app.core.config import settings
-from app.core.lock import advisory_lock_nowait, ConcurrencyLockError
 
 router = APIRouter()
 
@@ -76,15 +76,17 @@ def list_violations(current_user=Depends(require_engineer), db: Session = Depend
     return repo.list_violations()
 
 
-@router.get("/", response_model=PaginatedOutages)
+@router.get("/")
 def list_outages(
     severity: Severity | None = None,
     status: OutageStatus | None = None,
     search: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    cursor: str | None = Query(default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."),
+    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
     sort_by: OutageSortField = Query(
         default=OutageSortField.detected_at,
         description="Sort field (enum). Supported: detected_at, site_name, severity, status, id. Invalid values rejected with 422.",
@@ -96,7 +98,15 @@ def list_outages(
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """List outages with optional filtering, search, and sorting.
+    """List outages with optional filtering, search, sorting, and pagination.
+
+    Supports both offset-based (page/page_size) and cursor-based (cursor/limit) pagination.
+    When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
+
+    **Cursor Pagination (BE-039)**
+    - Pass ``cursor`` from the previous response's ``next_cursor`` field.
+    - O(1) per page — stable under concurrent writes.
+    - Returns ``{items, next_cursor, has_more}``.
 
     **Search (BE-011)**
     - `search`: case-insensitive substring match across `id`, `site_id`, and `site_name`
@@ -115,6 +125,20 @@ def list_outages(
     - Invalid sort values: rejected with 422 validation error
     """
     repo = OutageRepository(db)
+
+    if cursor is not None:
+        return repo.list_cursor(
+            severity=severity,
+            status=status,
+            search=search,
+            start_date=start_date,
+            end_date=end_date,
+            cursor=cursor,
+            limit=limit,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
+
     return repo.list(
         severity=severity,
         status=status,

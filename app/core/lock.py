@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import logging
 from contextlib import contextmanager
-from typing import Generator
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

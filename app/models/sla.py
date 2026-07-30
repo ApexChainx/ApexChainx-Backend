@@ -1,7 +1,43 @@
-from typing import Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.models.enums import Severity
+
+
+class SLACalculationError(BaseModel):
+    """Error branch for SLA computation failures.
+
+    Returned when compute_device_sla encounters a recoverable error
+    instead of raising an exception.  Consumers can pattern-match on
+    the discriminated type to avoid try/except in hot paths.
+    """
+
+    device_id: str
+    period: str
+    error_code: str
+    detail: str
+
+
+class SLACalculationResult(BaseModel):
+    """Structured result of compute_device_sla.
+
+    Replaces the loose dict previously returned so consumers get
+    compile-time guarantees and OpenAPI can reflect the exact shape.
+    """
+
+    device_id: str
+    period: str
+    period_start: str
+    period_end: str
+    total_outages: int = Field(ge=0)
+    violated_outages: int = Field(ge=0)
+    avg_mttr_minutes: float = Field(ge=0.0)
+    availability_percentage: float = Field(ge=0.0, le=100.0)
+    is_violated: bool
+    sla_thresholds: dict[str, float]
+    violation_reasons: list[str] = Field(default_factory=list)
+    outage_details: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SLAPreviewRequest(BaseModel):
@@ -28,7 +64,7 @@ class SLAResult(BaseModel):
         }
     )
 
-    id: Optional[int] = None
+    id: int | None = None
     outage_id: str
     status: Literal["met", "violated"]
     mttr_minutes: int
@@ -98,7 +134,7 @@ class SLAPolicyContent(SLASeverityConfig):
 
 
 class SLAAnalyticsSnapshot(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     snapshot_key: str
     total_outages: int = Field(ge=0)
     total_violations: int = Field(ge=0)
@@ -107,4 +143,4 @@ class SLAAnalyticsSnapshot(BaseModel):
     net_payout: float
     avg_mttr: float = Field(ge=0.0)
     checksum: str
-    created_at: Optional[str] = None
+    created_at: str | None = None

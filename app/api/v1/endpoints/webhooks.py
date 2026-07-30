@@ -9,11 +9,16 @@ from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
 from sqlalchemy import cast, or_, String
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.security import hash_token, require_admin
 from app.db.session import get_db
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+issue/114-117-webhook-concurrency-canonical-json
+from app.services.formatters import canonical_json
+
+from app.services.audit_log import audit_log
+main
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
-from app.core.security import require_admin
-from app.core.config import settings
 from app.utils.network_validation import validate_webhook_url
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -40,8 +45,8 @@ class WebhookCreate(BaseModel):
 
     name: str
     url: HttpUrl
-    secret: Optional[str] = None
-    events: List[WebhookEvent]
+    secret: str | None = None
+    events: list[WebhookEvent]
     max_retries: int = 3
     is_active: bool = True
 
@@ -63,7 +68,7 @@ class WebhookCreate(BaseModel):
 
     @field_validator("events")
     @classmethod
-    def validate_events_count(cls, v: List[WebhookEvent]) -> List[WebhookEvent]:
+    def validate_events_count(cls, v: list[WebhookEvent]) -> list[WebhookEvent]:
         if not v:
             raise ValueError("At least one event must be specified.")
         if len(v) > settings.MAX_WEBHOOK_EVENTS_COUNT:
@@ -72,12 +77,12 @@ class WebhookCreate(BaseModel):
 
 
 class WebhookUpdate(BaseModel):
-    name: Optional[str] = None
-    url: Optional[HttpUrl] = None
-    secret: Optional[str] = None
-    events: Optional[List[WebhookEvent]] = None
-    max_retries: Optional[int] = None
-    is_active: Optional[bool] = None
+    name: str | None = None
+    url: HttpUrl | None = None
+    secret: str | None = None
+    events: list[WebhookEvent] | None = None
+    max_retries: int | None = None
+    is_active: bool | None = None
 
     @field_validator("name")
     @classmethod
@@ -98,7 +103,7 @@ class WebhookUpdate(BaseModel):
 
     @field_validator("events")
     @classmethod
-    def validate_events_count(cls, v: List[WebhookEvent]) -> List[WebhookEvent]:
+    def validate_events_count(cls, v: list[WebhookEvent]) -> list[WebhookEvent]:
         if v is not None:
             if not v:
                 raise ValueError("At least one event must be specified.")
@@ -127,12 +132,12 @@ class WebhookResponse(BaseModel):
     name: str
     url: str
     is_active: bool
-    events: List[str]
+    events: list[str]
     max_retries: int
     schema_version: str = WEBHOOK_SCHEMA_VERSION  # BE-082: explicit schema version
     # BE-034: Secret lifecycle metadata (without exposing the secret)
     secret_version: int = 1
-    last_secret_rotation_at: Optional[str] = None
+    last_secret_rotation_at: str | None = None
 
 
 class WebhookDeliveryResponse(BaseModel):
@@ -141,10 +146,10 @@ class WebhookDeliveryResponse(BaseModel):
     event: WebhookEvent
     status: WebhookDeliveryStatus
     attempt_count: int
-    response_status_code: Optional[int]
-    error_message: Optional[str]
-    delivered_at: Optional[str]
-    dead_lettered_at: Optional[str]  # BE-086: Include dead-letter timestamp
+    response_status_code: int | None
+    error_message: str | None
+    delivered_at: str | None
+    dead_lettered_at: str | None  # BE-086: Include dead-letter timestamp
     signature_version: int  # BE-087: Explicit signature algorithm version
     created_at: str
 
@@ -152,7 +157,7 @@ class WebhookDeliveryResponse(BaseModel):
 
 
 class PaginatedWebhookDeliveries(BaseModel):
-    items: List[WebhookDeliveryResponse]
+    items: list[WebhookDeliveryResponse]
     total: int
     offset: int
     limit: int
@@ -167,8 +172,8 @@ class WebhookSecretRotateResponse(BaseModel):
 
 
 class WebhookReplayRequest(BaseModel):
-    device_id: Optional[str] = None
-    outage_id: Optional[str] = None
+    device_id: str | None = None
+    outage_id: str | None = None
     limit: int = 50
 
 
@@ -236,10 +241,10 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         name=payload.name,
         url=url,
         secret=payload.secret,
-        events=json.dumps([e.value for e in payload.events]),
+        events=canonical_json([e.value for e in payload.events]),
         max_retries=payload.max_retries,
         is_active=payload.is_active,
-        resolved_ips=json.dumps(resolved_ips),
+        resolved_ips=canonical_json(resolved_ips),
     )
     db.add(webhook)
     db.commit()
@@ -247,10 +252,10 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
     return _serialize_webhook(webhook)
 
 
-@router.get("", response_model=List[WebhookResponse])
+@router.get("", response_model=list[WebhookResponse])
 def list_webhooks(
-    is_active: Optional[bool] = Query(None),
-    name: Optional[str] = Query(None, description="Filter by name (case-insensitive substring match)"),  # BE-083
+    is_active: bool | None = Query(None),
+    name: str | None = Query(None, description="Filter by name (case-insensitive substring match)"),  # BE-083
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),  # BE-083
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),  # BE-083
     current_user=Depends(require_admin),
@@ -283,11 +288,11 @@ def update_webhook(
         url = str(payload.url)
         resolved_ips = validate_webhook_url(url)
         webhook.url = url
-        webhook.resolved_ips = json.dumps(resolved_ips)
+        webhook.resolved_ips = canonical_json(resolved_ips)
     if payload.secret is not None:
         webhook.secret = payload.secret
     if payload.events is not None:
-        webhook.events = json.dumps([e.value for e in payload.events])
+        webhook.events = canonical_json([e.value for e in payload.events])
     if payload.max_retries is not None:
         webhook.max_retries = payload.max_retries
     if payload.is_active is not None:
@@ -368,9 +373,8 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
 
     BE-034: Emits durable audit information with timestamp and actor context.
     """
-    from datetime import datetime, timezone
-    from app.services.audit_log import audit_log
-    from app.core.security import hash_token
+    from datetime import datetime
+
     from app.core.config import settings
 
     webhook = _get_webhook_or_404(db, webhook_id)

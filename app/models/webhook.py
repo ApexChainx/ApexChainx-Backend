@@ -1,10 +1,9 @@
-from sqlalchemy.dialects.postgresql import JSONB
+import enum
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey, Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
-import enum
 
 from app.db.base_class import Base
 

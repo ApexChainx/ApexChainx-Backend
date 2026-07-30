@@ -4,7 +4,7 @@ import csv
 import io
 from typing import Any
 
-from app.models.sla import SLADashboardKPI, SLATrendPoint, SLAPerformanceAggregation
+from app.models.sla import SLADashboardKPI, SLAPerformanceAggregation, SLATrendPoint
 
 
 def export_dashboard_kpi(kpi: SLADashboardKPI, format: str = "json") -> Any:

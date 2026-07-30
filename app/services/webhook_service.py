@@ -2,24 +2,67 @@ import json
 import logging
 import os
 import random
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from threading import Lock, Semaphore
+from typing import Any, Iterator
 from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+from app.services.formatters import canonical_json
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
 )
 from app.services.webhook_breaker import breaker
 from app.core.config import settings
-from app.utils.correlation import get_or_generate_correlation_id
+issue/114-117-webhook-concurrency-canonical-json
+
+from app.core.tracing import get_current_traceparent, traced
+main
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
 logger = logging.getLogger(__name__)
+
+
+class WebhookDispatchLimiter:
+    """Limit concurrent webhook delivery attempts globally and per webhook."""
+
+    def __init__(self, global_limit: int = 10, per_webhook_limit: int = 5) -> None:
+        self._global_semaphore = Semaphore(max(1, global_limit))
+        self._per_webhook_limit = max(1, per_webhook_limit)
+        self._per_webhook_semaphores: dict[str, Semaphore] = {}
+        self._lock = Lock()
+
+    def _get_per_webhook_semaphore(self, webhook_id: str) -> Semaphore:
+        with self._lock:
+            semaphore = self._per_webhook_semaphores.get(webhook_id)
+            if semaphore is None:
+                semaphore = Semaphore(self._per_webhook_limit)
+                self._per_webhook_semaphores[webhook_id] = semaphore
+            return semaphore
+
+    @contextmanager
+    def acquire(self, webhook_id: str) -> Iterator[None]:
+        self._global_semaphore.acquire()
+        try:
+            semaphore = self._get_per_webhook_semaphore(webhook_id)
+            semaphore.acquire()
+            yield
+        finally:
+            semaphore.release()
+            self._global_semaphore.release()
+
+
+dispatch_limiter = WebhookDispatchLimiter(
+    global_limit=settings.WEBHOOK_MAX_CONCURRENT_DISPATCHES,
+    per_webhook_limit=settings.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK,
+)
 
 
 def _get_retry_delays() -> list[int]:
@@ -46,7 +89,7 @@ def _build_headers(
     payload: str,
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Build webhook delivery headers with explicit signature versioning (BE-087).
 
     Args:
@@ -62,17 +105,26 @@ def _build_headers(
         - X-Webhook-Timestamp: ISO-formatted UTC timestamp
         - X-Webhook-Signature: signature (if secret configured)
         - X-Webhook-Signature-Version: signature version (if secret configured)
+        - traceparent: W3C trace context for distributed tracing (from OTel)
     """
     corr_id = get_or_generate_correlation_id()
-    trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-    span_id = os.urandom(8).hex()
 
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
         "X-Webhook-Timestamp": datetime.now(timezone.utc).isoformat(),
-        "traceparent": f"00-{trace_id}-{span_id}-01",
     }
+
+    # Inject OTel trace context (traceparent) for distributed tracing
+    traceparent = get_current_traceparent()
+    if traceparent:
+        headers["traceparent"] = traceparent
+    else:
+        # Fallback: generate traceparent from correlation ID for non-OTel contexts
+        trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
+        span_id = os.urandom(8).hex()
+        headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
+
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
@@ -80,7 +132,7 @@ def _build_headers(
     return headers
 
 
-def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> List[Webhook]:
+def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
     webhooks = db.query(Webhook).filter(Webhook.is_active).all()
     result = []
     for webhook in webhooks:
@@ -97,7 +149,7 @@ def create_delivery(
     db: Session,
     webhook: Webhook,
     event: WebhookEvent,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> WebhookDelivery:
     """Create a webhook delivery record with explicit signature version (BE-087).
@@ -115,7 +167,7 @@ def create_delivery(
     delivery = WebhookDelivery(
         webhook_id=webhook.id,
         event=event,
-        payload=json.dumps(payload),
+        payload=canonical_json(payload),
         status=WebhookDeliveryStatus.PENDING,
         signature_version=signature_version,
     )
@@ -170,6 +222,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         return False
 
 
+@traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
@@ -196,7 +249,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     delivery.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    success = _attempt_delivery(delivery, webhook)
+    with dispatch_limiter.acquire(str(webhook.id)):
+        success = _attempt_delivery(delivery, webhook)
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS
@@ -219,6 +273,8 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             base_delay = retry_delays[retry_index]
             raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delay = _apply_jitter(raw_delay)
+            # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
+            delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(
@@ -241,12 +297,13 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     db.commit()
 
 
+@traced("webhook.trigger_sla_violation")
 def trigger_sla_violation_webhooks(
     db: Session,
-    sla_data: Dict[str, Any],
+    sla_data: dict[str, Any],
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> List[WebhookDelivery]:
+) -> list[WebhookDelivery]:
     """Trigger webhook deliveries for an event with explicit signature versioning (BE-087).
 
     Args:
@@ -318,8 +375,8 @@ def retry_pending_deliveries(db: Session) -> int:
 
 
 def get_dead_letter_deliveries(
-    db: Session, webhook_id: Optional[UUID] = None, limit: int = 100
-) -> List[WebhookDelivery]:
+    db: Session, webhook_id: UUID | None = None, limit: int = 100
+) -> list[WebhookDelivery]:
     """Get dead-lettered deliveries for auditing and remediation."""
     query = (
         db.query(WebhookDelivery)
@@ -364,7 +421,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
 
 
 def replay_deliveries_by_event_context(
-    db: Session, event: WebhookEvent, device_id: Optional[str] = None, outage_id: Optional[str] = None, limit: int = 50
+    db: Session, event: WebhookEvent, device_id: str | None = None, outage_id: str | None = None, limit: int = 50
 ) -> int:
     """Replay deliveries by event and context (device or outage)."""
     # Get dead-lettered deliveries matching the criteria

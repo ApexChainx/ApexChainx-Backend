@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
 import hashlib
 import json
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, String
 
@@ -19,7 +19,7 @@ class SLAAnalyticsSnapshotORM(Base):
     net_payout = Column(Float, nullable=False, default=0.0)
     avg_mttr = Column(Float, nullable=False, default=0.0)
     checksum = Column(String(64), nullable=False)  # SHA-256 hash of the snapshot data
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
 
     def compute_checksum(self) -> str:
         """Compute SHA-256 checksum of snapshot data (excluding id and checksum fields)."""

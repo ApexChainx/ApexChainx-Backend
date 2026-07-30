@@ -1,14 +1,17 @@
+import builtins
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from uuid import uuid4
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.orm.audit_log import AuditLogORM
 from app.models.orm.payment import PaymentTransactionORM
 from app.models.payment import PaymentTransaction, validate_transition
 from app.models.sla import SLAResult
-from app.core.config import settings
+from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
 
 
 def _orm_to_pydantic(orm: PaymentTransactionORM) -> PaymentTransaction:
@@ -73,12 +76,12 @@ class PaymentRepository:
         self,
         page: int = 1,
         page_size: int = 20,
-        status: Optional[str] = None,
-        outage_id: Optional[str] = None,
-        type: Optional[str] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-    ) -> Tuple[List[PaymentTransaction], int]:
+        status: str | None = None,
+        outage_id: str | None = None,
+        type: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> tuple[list[PaymentTransaction], int]:
         query = self.db.query(PaymentTransactionORM)
 
         if status:
@@ -141,7 +144,7 @@ class PaymentRepository:
 
     MAX_RETRIES = 3
 
-    def reconcile(self, transaction_id: str, new_status: str) -> Optional[PaymentTransaction]:
+    def reconcile(self, transaction_id: str, new_status: str) -> PaymentTransaction | None:
         """Refresh payment status and mark as auditable reconciliation."""
         orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
@@ -154,7 +157,7 @@ class PaymentRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def retry(self, transaction_id: str) -> Optional[PaymentTransaction]:
+    def retry(self, transaction_id: str) -> PaymentTransaction | None:
         """Increment retry counter (bounded by MAX_RETRIES) and reset to pending."""
         orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
@@ -171,7 +174,7 @@ class PaymentRepository:
 
     HISTORY_EVENT_TYPES = {"payment_reconciled", "payment_retried"}
 
-    def get_payment_history(self, transaction_id: str) -> List[dict]:
+    def get_payment_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return audit log entries for reconcile/retry actions on a payment."""
         rows = (
             self.db.query(AuditLogORM)
@@ -192,7 +195,7 @@ class PaymentRepository:
             if r.details and r.details.get("id") == transaction_id
         ]
 
-    def get_reconciliation_history(self, transaction_id: str) -> List[dict]:
+    def get_reconciliation_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return detailed reconciliation history with actor context and status transitions.
 
         BE-027: Provides a structured view of who changed what and why, suitable for
