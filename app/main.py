@@ -148,35 +148,62 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(ApiVersionMiddleware)
 
 
+from app.utils.correlation_ctx import get_or_generate_correlation_id
+
+
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "error_code": exc.error_code,
+            "type": f"https://developer.apexchainx.io/errors/{exc.status_code}",
+            "title": getattr(exc, "error_code", "Domain Error"),
+            "status": exc.status_code,
             "detail": exc.detail,
-            **(exc.extra or {}),
+            "correlation_id": correlation_id,
+            "error_code": getattr(exc, "error_code", "domain_error"),
+            **(getattr(exc, "extra", None) or {}),
         },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 @app.exception_handler(ApexNotFoundError)
 async def apex_not_found_handler(request: Request, exc: ApexNotFoundError) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
         status_code=404,
-        content={"error_code": "not_found", "detail": exc.detail},
+        content={
+            "type": "https://developer.apexchainx.io/errors/404",
+            "title": "Not Found",
+            "status": 404,
+            "detail": exc.detail,
+            "correlation_id": correlation_id,
+            "error_code": "not_found",
+        },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 @app.exception_handler(ApexTransientError)
 async def apex_transient_error_handler(request: Request, exc: ApexTransientError) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
-        status_code=500,
+        status_code=exc.status_code,
         content={
-            "error_code": "transient_error",
+            "type": f"https://developer.apexchainx.io/errors/{exc.status_code}",
+            "title": "Service Unavailable",
+            "status": exc.status_code,
             "detail": exc.detail,
+            "correlation_id": correlation_id,
+            "error_code": "transient_error",
             "retryable": True,
         },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 

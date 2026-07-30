@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.utils.correlation_ctx import get_correlation_id
+from app.utils.correlation_ctx import get_correlation_id, get_or_generate_correlation_id
 
 
 class ProblemDetail(BaseModel):
@@ -47,7 +47,7 @@ def _problem_response(
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
 ) -> JSONResponse:
-    correlation_id = get_correlation_id()
+    correlation_id = get_or_generate_correlation_id()
     problem = ProblemDetail(
         type="about:blank",
         title=title,
@@ -60,7 +60,7 @@ def _problem_response(
         status_code=status,
         content=problem.model_dump(exclude_none=True),
         media_type="application/problem+json",
-        headers={"X-Correlation-ID": correlation_id} if correlation_id else {},
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
