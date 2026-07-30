@@ -8,92 +8,53 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
-from app.utils.correlation_ctx import get_or_generate_correlation_id
-
-
 class ApexException(Exception):
-114-117-webhook-concurrency-canonical-json
-    status_code: int = 500
-    error_code: str = "error"
-    extra: dict[str, Any] | None = None
+    """Base exception for all ApexChainx domain errors.
+
+    Every raised exception in the codebase should subclass this or one
+    of its children so that middleware and error handlers can act on
+    typed conditions rather than bare ``except Exception``.
+    """
 
     def __init__(
         self,
-        detail: str,
+        detail: str = "An unexpected error occurred.",
         *,
+        error_code: str = "internal_error",
         status_code: int = 500,
-        error_code: str = "error",
         extra: dict[str, Any] | None = None,
-    ):
+    ) -> None:
         self.detail = detail
-        self.status_code = status_code
         self.error_code = error_code
-        self.extra = extra
-        super().__init__(detail)
-
-    """Base exception for all ApexChainx domain errors."""
-
-    def __init__(self, detail: str, status_code: int = 500):
-        self.detail = detail
         self.status_code = status_code
+        self.extra = extra or {}
+        super().__init__(detail)
 
 
 class ApexNotFoundError(ApexException):
-    """Raised when a requested resource does not exist."""
+    """Resource not found (404)."""
 
-    def __init__(self, detail: str = "Resource not found"):
-        super().__init__(detail=detail, status_code=404)
+    def __init__(self, detail: str = "Resource not found.", **kwargs: Any) -> None:
+        super().__init__(detail=detail, error_code="not_found", status_code=404, **kwargs)
 
 
 class ApexTransientError(ApexException):
-    """Raised for transient infrastructure errors that may succeed on retry."""
+    """Transient / retryable error (503 by default)."""
 
-    def __init__(self, detail: str = "A transient error occurred. Please retry."):
-        super().__init__(detail=detail, status_code=503)
-main
+    def __init__(self, detail: str = "A transient error occurred.", **kwargs: Any) -> None:
+        super().__init__(detail=detail, error_code="transient_error", status_code=503, **kwargs)
 
 
 class ApexConflictError(ApexException):
     def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
-114-117-webhook-concurrency-canonical-json
-        super().__init__(
-            detail,
-            status_code=409,
-            error_code="conflict",
-            extra={"fields": fields or {}},
-        )
-
-        super().__init__(detail=detail, status_code=409)
+        super().__init__(detail=detail, error_code="conflict", status_code=409)
         self.fields = fields or {}
 main
 
 
 class ApexValidationError(ApexException):
     def __init__(self, detail: str, errors: Optional[List[Dict[str, Any]]] = None):
-issue/114-117-webhook-concurrency-canonical-json
-        super().__init__(
-            detail,
-            status_code=422,
-            error_code="validation_error",
-            extra={"errors": errors or []},
-        )
-
-
-class ApexNotFoundError(ApexException):
-    def __init__(self, detail: str = "Resource not found"):
-        super().__init__(detail, status_code=404, error_code="not_found")
-
-
-class ApexTransientError(ApexException):
-    def __init__(self, detail: str = "A transient error occurred"):
-        super().__init__(
-            detail,
-            status_code=500,
-            error_code="transient_error",
-            extra={"retryable": True},
-        )
-
-        super().__init__(detail=detail, status_code=422)
+        super().__init__(detail=detail, error_code="validation_error", status_code=422)
         self.errors = errors or []
 main
 

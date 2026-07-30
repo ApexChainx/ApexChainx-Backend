@@ -5,6 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints.sla import _invalidate_analytics_cache
@@ -244,8 +245,10 @@ async def import_outages(
     elif filename.endswith(".csv"):
         try:
             rows = list(csv.DictReader(io.StringIO(content.decode("utf-8"))))
-        except Exception as exc:
+        except (csv.Error, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
     else:
         raise HTTPException(status_code=400, detail="Unsupported file format. Use .json or .csv")
 
@@ -285,7 +288,7 @@ async def import_outages(
                             duplicate=False,
                         )
                     )
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 row_outcomes.append(_row_error(i, row, exc))
     elif consistency == ImportConsistency.atomic:
         parsed: list[OutageCreate] = []
@@ -293,7 +296,7 @@ async def import_outages(
             try:
                 parsed.append(OutageCreate(**row))
                 row_outcomes.append(ImportRowResult(row=i, id=row.get("id"), status="ok"))
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 row_outcomes.append(_row_error(i, row, exc))
 
         if any(r.status == "error" for r in row_outcomes):
@@ -310,9 +313,12 @@ async def import_outages(
                     row_outcomes[i].duplicate = True
                     row_outcomes[i].existing_id = created.id
             db.commit()
-        except Exception as exc:
+        except (IntegrityError, SQLAlchemyError) as exc:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}") from exc
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Unexpected import error: {exc}") from exc
     else:
         for i, row in enumerate(rows):
             try:
@@ -331,7 +337,7 @@ async def import_outages(
                 )
                 if persisted:
                     persisted_count += 1
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 db.rollback()
                 row_outcomes.append(_row_error(i, row, exc))
 

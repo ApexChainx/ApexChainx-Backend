@@ -8,17 +8,22 @@ and recomputation.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Generator
+import logging
 from contextlib import contextmanager
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ApexTransientError
 
-class ConcurrencyLockError(Exception):
+logger = logging.getLogger(__name__)
+
+
+class ConcurrencyLockError(ApexTransientError):
     """Raised when a lock cannot be acquired."""
 
-    pass
+    def __init__(self, detail: str = "Could not acquire lock.") -> None:
+        super().__init__(detail=detail, error_code="concurrency_lock", status_code=409)
 
 
 def _lock_id_from_key(key: str) -> int:
@@ -66,9 +71,11 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
 
     try:
         yield
-    except Exception:
-        # Lock is automatically released on transaction rollback
-        raise
+    except ApexTransientError:
+        raise  # let domain errors propagate naturally
+    except Exception as exc:
+        logger.exception("Error inside advisory lock for '%s'", lock_key)
+        raise ApexTransientError(detail=f"Unexpected error in locked section: {exc}") from exc
 
 
 @contextmanager
@@ -103,5 +110,8 @@ def advisory_lock_nowait(db: Session, lock_key: str) -> Generator[None, None, No
 
     try:
         yield
-    except Exception:
-        raise
+    except ApexTransientError:
+        raise  # let domain errors propagate
+    except Exception as exc:
+        logger.exception("Error inside advisory lock (nowait) for '%s'", lock_key)
+        raise ApexTransientError(detail=f"Unexpected error in locked section: {exc}") from exc

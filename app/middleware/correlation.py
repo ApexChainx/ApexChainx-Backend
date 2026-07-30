@@ -4,6 +4,7 @@ from fastapi import Request
 
 from app.utils.correlation_ctx import get_or_generate_correlation_id, set_correlation_id
 from app.utils.logging import get_structured_logger
+from app.core.exceptions import ApexException
 
 logger = get_structured_logger("access")
 
@@ -65,8 +66,8 @@ class CorrelationMiddleware:
                         uid = str(getattr(request.state.user, "id", ""))
                         if uid:
                             user_id_hash = _hash_value(uid)
-                except Exception:
-                    pass
+                except (AttributeError, TypeError, ValueError):
+                    pass  # user object may not have expected shape; non-critical for logging
 
                 duration_ms = (time.time() - start_time) * 1000
 
@@ -85,6 +86,8 @@ class CorrelationMiddleware:
 
         try:
             await self.app(scope, receive, send_wrapper)
+        except ApexException:
+            raise  # already typed; let FastAPI exception handlers process it
         except Exception as exc:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(

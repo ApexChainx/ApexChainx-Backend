@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from sqlalchemy.orm import Session
@@ -11,6 +11,8 @@ from app.models.orm.sla import SLAResultORM
 from app.models.sla import SLACalculationResult, SLACalculationError
 from app.services.audit_log import audit_log
 from app.services.metrics import increment_counter
+
+logger = logging.getLogger(__name__)
 
 
 class SLAOrchestrator:
@@ -226,7 +228,10 @@ def compute_device_sla(
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result
 
+    except ApexTransientError:
+        raise  # already typed, let it propagate
     except Exception as e:
+        logger.exception("SLA computation failed for device %s", device_id)
         audit_log.log(
             event_type="sla_settlement_failed",
             details={"device_id": device_id, "period": period, "error": str(e)},
