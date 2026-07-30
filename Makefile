@@ -51,4 +51,19 @@ welcome: ## Codespaces onboarding: install dev deps, verify env, run tests
 	pytest --tb=short -q
 	@echo "🎉 Welcome to ApexChainx! Everything looks good."
 
+openapi-update: ## Regenerate docs/openapi.snapshot.json from the live app schema
+	python scripts/openapi_diff.py --update 2>/dev/null || true
+	python -c "\
+import os; \
+os.environ.setdefault('DATABASE_URL','postgresql://user:pass@localhost:5432/apexchainx'); \
+os.environ.setdefault('JWT_SECRET_KEY','openapi-drift-check-key'); \
+os.environ.setdefault('STELLAR_NETWORK','testnet'); \
+os.environ.setdefault('CONTRACT_EXECUTION_MODE','local_adapter'); \
+os.environ.setdefault('CELERY_TASK_ALWAYS_EAGER','true'); \
+os.environ.setdefault('API_V1_PREFIX','/api/v1'); \
+os.environ.setdefault('ALLOWED_ORIGINS','[\"http://localhost:3000\"]'); \
+from app.main import app; import json; \
+open('docs/openapi.snapshot.json','w').write(json.dumps(app.openapi(),indent=2,sort_keys=True)+'\n'); \
+print('Snapshot updated: docs/openapi.snapshot.json')"
+
 ci: lint format typecheck test ## Full CI pipeline

@@ -66,3 +66,16 @@ jobs:
       # ── OpenAPI contract test ────────────────────────────────────────────────
       - name: OpenAPI contract test
         run: pytest tests/test_openapi_contract.py -v
+
+      # ── OpenAPI drift check ──────────────────────────────────────────────────
+      - name: OpenAPI drift check
+        if: matrix.python-version == '3.11'
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/apexchainx
+          JWT_SECRET_KEY: openapi-drift-check-key
+          STELLAR_NETWORK: testnet
+          CONTRACT_EXECUTION_MODE: local_adapter
+          CELERY_TASK_ALWAYS_EAGER: "true"
+          API_V1_PREFIX: /api/v1
+          ALLOWED_ORIGINS: '["http://localhost:3000"]'
+        run: python scripts/openapi_diff.py

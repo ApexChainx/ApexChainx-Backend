@@ -18,6 +18,37 @@ ApexChainx is a 3-repo monorepo split across frontend, backend, and smart contra
 
 The frontend never calls contracts directly. The backend is the sole bridge between the UI and on-chain execution. All Soroban interactions are brokered exclusively through `apexchainx-be`.
 
+### System Diagram
+
+```mermaid
+graph TD
+    User([👤 User])
+    FE[apexchainx-fe\nFrontend UI]
+    BE[apexchainx-be\nBackend API]
+    DB[(PostgreSQL)]
+    Redis[(Redis)]
+    Celery[Celery Workers]
+    SorobanAdapter[Soroban Adapter]
+    Contract[apexchainx-contracts\nSoroban Smart Contracts]
+    Stellar[Stellar Network]
+
+    User -->|HTTP/S| FE
+    FE -->|REST API| BE
+    BE -->|SQLAlchemy ORM| DB
+    BE -->|Cache / Rate limit| Redis
+    BE -->|Enqueue tasks| Celery
+    Celery -->|Read/Write| DB
+    BE -->|SLA settlement| SorobanAdapter
+    SorobanAdapter -->|XDR invoke| Contract
+    Contract -->|On-chain tx| Stellar
+    Stellar -->|Tx result| SorobanAdapter
+    SorobanAdapter -->|Settlement result| BE
+    BE -->|Response| FE
+    FE -->|UI update| User
+```
+
+For detailed sub-diagrams (SLA compute flow, webhook delivery, auth token flow, middleware stack, component dependency map) see [docs/DIAGRAMS.md](docs/DIAGRAMS.md).
+
 ## Overview
 
 ApexChainx is a 3-repo
