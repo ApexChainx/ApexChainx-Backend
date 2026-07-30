@@ -52,6 +52,14 @@ Outage state can change through multiple code paths (patch, resolve, recompute) 
 ### Solution
 Implemented centralized status transition enforcement across all outage modification paths.
 
+**Evolutionary Path:**
+```
+Phase 1: Deploy dual-signing (v1 + v2)
+Phase 2: Monitor adoption of v2 via headers/metrics
+Phase 3: After 6+ months, announce v1 deprecation
+Phase 4: Remove v1 support in later release
+```
+
 ### Allowed Transitions
 ```
 open -> open (idempotent)
