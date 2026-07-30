@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
@@ -17,20 +18,36 @@ class SLAOrchestrator:
     def __init__(self, db: Session):
         self.db = db
 
+    _MONTHLY_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+    _QUARTERLY_RE = re.compile(r"^(\d{4})-Q([1-4])$")
+
     def parse_period(self, period: str) -> tuple[datetime, datetime]:
-        """Parse period string into start and end dates."""
-        if period.startswith("2024-") and len(period) == 7:  # Monthly format "2024-01"
-            year = int(period.split("-")[0])
-            month = int(period.split("-")[1])
+        """Parse period string into start and end dates.
+
+        Supported formats:
+        - Monthly:  "YYYY-MM"  (e.g. "2025-03")
+        - Quarterly: "YYYY-QN" (e.g. "2025-Q2")
+
+        Raises:
+            ApexValidationError: If the period string does not match either format.
+        """
+        from app.core.exceptions import ApexValidationError
+
+        m = self._MONTHLY_RE.match(period)
+        if m:
+            year = int(m.group(1))
+            month = int(m.group(2))
             start_date = datetime(year, month, 1)
             if month == 12:
                 end_date = datetime(year + 1, 1, 1)
             else:
                 end_date = datetime(year, month + 1, 1)
             return start_date, end_date
-        elif "Q" in period:  # Quarterly format "2024-Q1"
-            year = int(period.split("-")[0])
-            quarter = int(period.split("Q")[1])
+
+        m = self._QUARTERLY_RE.match(period)
+        if m:
+            year = int(m.group(1))
+            quarter = int(m.group(2))
             start_month = (quarter - 1) * 3 + 1
             start_date = datetime(year, start_month, 1)
             if start_month == 10:
@@ -38,8 +55,10 @@ class SLAOrchestrator:
             else:
                 end_date = datetime(year, start_month + 3, 1)
             return start_date, end_date
-        else:
-            raise ValueError(f"Unsupported period format: {period}")
+
+        raise ApexValidationError(
+            detail=f"Unsupported period format: '{period}'. Expected 'YYYY-MM' or 'YYYY-QN'.",
+        )
 
     def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> List[OutageORM]:
         """Get all outages for a device within the specified period."""
