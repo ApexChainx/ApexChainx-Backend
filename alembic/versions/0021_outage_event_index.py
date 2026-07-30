@@ -11,6 +11,10 @@ down_revision = "0020"
 branch_labels = None
 depends_on = None
 
+### Changes
+# **File: `/app/api/v1/endpoints/outages.py`**
+# - `GET /{outage_id}/timeline`: Added `current_user=Depends(require_engineer)`
+# - `POST /{outage_id}/recompute-sla`: Added `current_user=Depends(require_engineer)` + validation docstring
 
 def upgrade():
     op.create_index(
