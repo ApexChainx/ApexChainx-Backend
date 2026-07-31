@@ -205,7 +205,6 @@ async def apex_transient_error_handler(request: Request, exc: ApexTransientError
 def liveness():
     return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
-
 @app.get("/health/readiness")
 async def readiness():
     report = build_readiness_report(engine, settings.CELERY_BROKER_URL)
