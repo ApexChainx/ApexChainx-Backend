@@ -78,7 +78,7 @@ class RedisRateLimiter:
 
         encoded_key = self._key_namespace(key)
         now_ts = int(time())
-        member = f"{now_ts}-{random.random()}"
+        member = f"{now_ts}-{random.random()}"  # nosec B311 - unique sorted-set member, not security
         result = await self.client.eval(
             RATE_LIMITER_LUA,
             1,

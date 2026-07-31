@@ -73,9 +73,9 @@ def _apply_jitter(delay: float) -> float:
     if mode == "none":
         return delay
     if mode == "equal":
-        return delay * random.uniform(0.5, 1.5)
+        return delay * random.uniform(0.5, 1.5)  # nosec B311 - retry jitter, not security
     # "full" (default): random in [0, nominal*2], floor 1s
-    return max(1.0, random.uniform(0, delay * 2))
+    return max(1.0, random.uniform(0, delay * 2))  # nosec B311 - retry jitter, not security
 
 
 WEBHOOK_SCHEMA_VERSION = "1"

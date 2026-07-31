@@ -113,7 +113,7 @@ def erase_user_data(db: Session, user: UserORM) -> dict[str, Any]:
     # Pseudonymise personal fields
     user.email = f"erased-{user.id}@deleted.local"
     user.full_name = f"Erased User {user.id[:8]}"
-    user.hashed_password = ""
+    user.hashed_password = ""  # nosec B105 - erasing credential, not a hardcoded password
     user.stellar_wallet = None
     user.locked_until = datetime.now(UTC)
     db.commit()

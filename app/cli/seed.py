@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(message)s")
 
-    rng = random.Random(args.seed)
+    rng = random.Random(args.seed)  # nosec B311 - deterministic dev seed data
     logger.info(
         "Seeding dev DB with seed=%d  outages=%d  devices=%d  payments=%d  force=%s",
         args.seed,
