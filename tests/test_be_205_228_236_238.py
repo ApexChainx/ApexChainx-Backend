@@ -7,7 +7,6 @@ Tests for issues:
 """
 
 import unittest
-from datetime import UTC
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -19,26 +18,26 @@ from app.core.config import Settings, validate_critical_settings
 
 
 def _make_settings(**overrides):
-    defaults = {
-        "PROJECT_NAME": "ApexChainx API",
-        "VERSION": "1.0.0",
-        "DEBUG": False,
-        "DATABASE_URL": "postgresql://postgres:password@localhost:5432/apexchainx",
-        "API_V1_PREFIX": "/api/v1",
-        "ALLOWED_ORIGINS": ["http://localhost:3000"],
-        "CELERY_BROKER_URL": "redis://localhost:6379/0",
-        "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-        "CELERY_TASK_ALWAYS_EAGER": True,
-        "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
-        "STELLAR_NETWORK": "testnet",
-        "CONTRACT_EXECUTION_MODE": "local_adapter",
-        "PAYMENT_ASSET_CODE": "USDC",
-        "PAYMENT_FROM_ADDRESS": "POOL",
-        "PAYMENT_TO_ADDRESS": "SETTLEMENT",
-        "TRUSTED_PROXY_COUNT": 0,
-        "WEBHOOK_RETRY_BASE_DELAYS": "30,120,600",
-        "WEBHOOK_RETRY_MAX_DELAY_SECONDS": 3600,
-    }
+    defaults = dict(
+        PROJECT_NAME="ApexChainx API",
+        VERSION="1.0.0",
+        DEBUG=False,
+        DATABASE_URL="postgresql://postgres:password@localhost:5432/apexchainx",
+        API_V1_PREFIX="/api/v1",
+        ALLOWED_ORIGINS=["http://localhost:3000"],
+        CELERY_BROKER_URL="redis://localhost:6379/0",
+        CELERY_RESULT_BACKEND="redis://localhost:6379/0",
+        CELERY_TASK_ALWAYS_EAGER=True,
+        SLA_CONTRACT_ADDRESS="local-sla-calculator",
+        STELLAR_NETWORK="testnet",
+        CONTRACT_EXECUTION_MODE="local_adapter",
+        PAYMENT_ASSET_CODE="USDC",
+        PAYMENT_FROM_ADDRESS="POOL",
+        PAYMENT_TO_ADDRESS="SETTLEMENT",
+        TRUSTED_PROXY_COUNT=0,
+        WEBHOOK_RETRY_BASE_DELAYS="30,120,600",
+        WEBHOOK_RETRY_MAX_DELAY_SECONDS=3600,
+    )
     defaults.update(overrides)
     return Settings.model_construct(**defaults)
 
@@ -239,7 +238,7 @@ class TestWebhookRetryConfig(unittest.TestCase):
 
             mock_settings.WEBHOOK_RETRY_BASE_DELAYS = "9999,9999,9999"
             mock_settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS = 120
-            mock_dt.utcnow.return_value = real_dt(2026, 1, 1, tzinfo=UTC)
+            mock_dt.utcnow.return_value = real_dt(2026, 1, 1)
 
             def capture_timedelta(**kwargs):
                 captured_delay["seconds"] = kwargs.get("seconds", 0)

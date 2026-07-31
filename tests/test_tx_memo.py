@@ -4,7 +4,6 @@ import pytest
 
 from app.services.tx_memo import MEMO_MAX_BYTES, TxMemo
 
-
 # ── Round-trip golden payloads ──────────────────────────────────────────
 
 GOLDEN_PAYLOADS = [
@@ -28,6 +27,7 @@ def test_round_trip_golden(raw, expected):
 
 # ── build() determinism ─────────────────────────────────────────────────
 
+
 def test_build_deterministic():
     """Same inputs always produce the same TxMemo."""
     a = TxMemo.build("SLP", "OUT001", "hello-world")
@@ -45,6 +45,7 @@ def test_build_different_payload_different_hash():
 
 # ── Byte limit enforcement ──────────────────────────────────────────────
 
+
 def test_rejects_exceeds_28_bytes():
     """Memo longer than 28 bytes must raise ValueError with 422-friendly message."""
     too_long = "SLP:VERY_LONG_AGGREG:x12345678"  # 32+ bytes
@@ -61,6 +62,7 @@ def test_build_rejects_result_over_28_bytes():
 
 # ── Op code whitelist ───────────────────────────────────────────────────
 
+
 def test_rejects_unknown_op_code():
     """Unrecognized operation codes must be rejected."""
     with pytest.raises(ValueError, match="Unknown operation code"):
@@ -75,6 +77,7 @@ def test_op_code_case_insensitive():
 
 # ── Content hash validation ─────────────────────────────────────────────
 
+
 def test_rejects_non_hex_content_hash():
     """content_hash with non-hex chars must be rejected."""
     with pytest.raises(ValueError, match="content_hash"):
@@ -88,6 +91,7 @@ def test_rejects_wrong_length_hash():
 
 
 # ── Malformed format ────────────────────────────────────────────────────
+
 
 def test_rejects_missing_version_prefix():
     """Memo without 'v' prefix before hash must be rejected."""
@@ -109,6 +113,7 @@ def test_rejects_empty_string():
 
 # ── is_suspicious() audit helper ────────────────────────────────────────
 
+
 def test_is_suspicious_clean_memo():
     """Well-formed memos should not be flagged suspicious."""
     assert not TxMemo.is_suspicious("SLP:OUT001:va3f2c1b9")
@@ -126,6 +131,7 @@ def test_is_suspicious_empty():
 
 # ── byte_length() ───────────────────────────────────────────────────────
 
+
 def test_byte_length_matches_encoded():
     """byte_length() should match len(encode().encode('utf-8'))."""
     memo = TxMemo.parse("SLP:OUT001:va3f2c1b9")
@@ -134,6 +140,7 @@ def test_byte_length_matches_encoded():
 
 
 # ── All golden payloads within byte limit ───────────────────────────────
+
 
 def test_all_goldens_within_byte_limit():
     """Every golden payload must fit within the Stellar 28-byte limit."""

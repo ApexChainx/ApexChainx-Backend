@@ -8,10 +8,10 @@ Revision ID: 0018_webhook_secret_grace
 Revises: 0016_webhook_signature_versioning
 Create Date: 2026-07-28
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
+from alembic import op
 
 revision = "0018_webhook_secret_grace"
 down_revision = "0016_webhook_signature_versioning"

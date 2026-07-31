@@ -31,7 +31,7 @@ VALID_OP_CODES: frozenset[str] = frozenset(
 )
 
 MEMO_MAX_BYTES = 28
-MEMO_PATTERN = re.compile(r"^([A-Z]{2,3}):([A-Za-z0-9_-]{1,16}):v([a-f0-9]{8})$")
+MEMO_PATTERN = re.compile(r"^([A-Za-z]{2,3}):([A-Za-z0-9_-]{1,16}):v([a-f0-9]{8})$")
 
 
 class TxMemo(BaseModel):
@@ -83,8 +83,7 @@ class TxMemo(BaseModel):
         match = MEMO_PATTERN.match(raw)
         if not match:
             raise ValueError(
-                f"Invalid memo format '{raw}'. Expected: <OP>:<agg>:v<hash8> "
-                f"(e.g. SLP:OUT001:va3f2c1b9)"
+                f"Invalid memo format '{raw}'. Expected: <OP>:<agg>:v<hash8> " f"(e.g. SLP:OUT001:va3f2c1b9)"
             )
 
         op, agg, content_hash = match.groups()
@@ -122,8 +121,7 @@ class TxMemo(BaseModel):
 
         if memo.byte_length() > MEMO_MAX_BYTES:
             raise ValueError(
-                f"Encoded memo '{memo.encode()}' is {memo.byte_length()} bytes, "
-                f"exceeds {MEMO_MAX_BYTES} byte limit"
+                f"Encoded memo '{memo.encode()}' is {memo.byte_length()} bytes, " f"exceeds {MEMO_MAX_BYTES} byte limit"
             )
 
         return memo

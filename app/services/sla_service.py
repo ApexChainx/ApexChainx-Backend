@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import logging
+import re
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ApexTransientError
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
+from app.models.sla import SLACalculationResult
+from app.services.audit_log import audit_log
+from app.services.metrics import increment_counter
+
+logger = logging.getLogger(__name__)
 
 
 class SLAOrchestrator:
@@ -14,29 +23,47 @@ class SLAOrchestrator:
     def __init__(self, db: Session):
         self.db = db
 
+    _MONTHLY_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+    _QUARTERLY_RE = re.compile(r"^(\d{4})-Q([1-4])$")
+
     def parse_period(self, period: str) -> tuple[datetime, datetime]:
-        """Parse period string into start and end dates."""
-        if period.startswith("2024-") and len(period) == 7:  # Monthly format "2024-01"
-            year = int(period.split("-")[0])
-            month = int(period.split("-")[1])
-            start_date = datetime(year, month, 1, tzinfo=UTC)
+        """Parse period string into start and end dates.
+
+        Supported formats:
+        - Monthly:  "YYYY-MM"  (e.g. "2025-03")
+        - Quarterly: "YYYY-QN" (e.g. "2025-Q2")
+
+        Raises:
+            ApexValidationError: If the period string does not match either format.
+        """
+        from app.core.exceptions import ApexValidationError
+
+        m = self._MONTHLY_RE.match(period)
+        if m:
+            year = int(m.group(1))
+            month = int(m.group(2))
+            start_date = datetime(year, month, 1)
             if month == 12:
-                end_date = datetime(year + 1, 1, 1, tzinfo=UTC)
+                end_date = datetime(year + 1, 1, 1)
             else:
-                end_date = datetime(year, month + 1, 1, tzinfo=UTC)
+                end_date = datetime(year, month + 1, 1)
             return start_date, end_date
-        elif "Q" in period:  # Quarterly format "2024-Q1"
-            year = int(period.split("-")[0])
-            quarter = int(period.split("Q")[1])
+
+        m = self._QUARTERLY_RE.match(period)
+        if m:
+            year = int(m.group(1))
+            quarter = int(m.group(2))
             start_month = (quarter - 1) * 3 + 1
-            start_date = datetime(year, start_month, 1, tzinfo=UTC)
+            start_date = datetime(year, start_month, 1)
             if start_month == 10:
-                end_date = datetime(year + 1, 1, 1, tzinfo=UTC)
+                end_date = datetime(year + 1, 1, 1)
             else:
-                end_date = datetime(year, start_month + 3, 1, tzinfo=UTC)
+                end_date = datetime(year, start_month + 3, 1)
             return start_date, end_date
-        else:
-            raise ValueError(f"Unsupported period format: {period}")
+
+        raise ApexValidationError(
+            detail=f"Unsupported period format: '{period}'. Expected 'YYYY-MM' or 'YYYY-QN'.",
+        )
 
     def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> list[OutageORM]:
         """Get all outages for a device within the specified period."""
@@ -97,7 +124,7 @@ class SLAOrchestrator:
 
 def compute_device_sla(
     db: Session, device_id: str, period: str, sla_thresholds: dict[str, float] | None = None
-) -> dict:
+) -> SLACalculationResult:
     """
     Compute SLA metrics for a device with real domain orchestration.
 
@@ -106,8 +133,13 @@ def compute_device_sla(
     - Real MTTR and availability calculations
     - SLA violation detection with configurable thresholds
     - Structured results aligned with routed API concepts
+
+    Returns a SLACalculationResult Pydantic model rather than a loose dict
+    so consumers get compile-time guarantees and OpenAPI can reflect the
+    exact shape.  (#94)
     """
     orchestrator = SLAOrchestrator(db)
+    increment_counter("sla_recomputation_total", tags={"device_id": device_id, "period": period})
 
     # Default SLA thresholds if not provided
     if sla_thresholds is None:
@@ -124,19 +156,22 @@ def compute_device_sla(
         outages = orchestrator.get_outages_for_device(device_id, start_date, end_date)
 
         if not outages:
-            return {
-                "device_id": device_id,
-                "period": period,
-                "period_start": start_date.isoformat(),
-                "period_end": end_date.isoformat(),
-                "total_outages": 0,
-                "violated_outages": 0,
-                "avg_mttr_minutes": 0.0,
-                "availability_percentage": 100.0,
-                "is_violated": False,
-                "sla_thresholds": sla_thresholds,
-                "violation_reasons": [],
-            }
+            result = SLACalculationResult(
+                device_id=device_id,
+                period=period,
+                period_start=start_date.isoformat(),
+                period_end=end_date.isoformat(),
+                total_outages=0,
+                violated_outages=0,
+                avg_mttr_minutes=0.0,
+                availability_percentage=100.0,
+                is_violated=False,
+                sla_thresholds=sla_thresholds,
+                violation_reasons=[],
+            )
+            record_sla_settlement_audit_events(device_id, period, result, status="initiated")
+            record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+            return result
 
         # Calculate metrics
         mttr = orchestrator.calculate_mttr(outages)
@@ -144,6 +179,8 @@ def compute_device_sla(
         is_violated = orchestrator.check_sla_violations(availability, mttr, sla_thresholds)
 
         # Determine violation reasons
+        if is_violated:
+            increment_counter("sla_violation_total", tags={"device_id": device_id, "period": period})
         violation_reasons = []
         if availability < sla_thresholds["availability"]:
             violation_reasons.append(f"Availability {availability}% below threshold {sla_thresholds['availability']}%")
@@ -163,21 +200,21 @@ def compute_device_sla(
             for row in rows:
                 latest_results.setdefault(row.outage_id, row)
 
-        violated_outages = sum(1 for result in latest_results.values() if result and result.status == "violated")
+        violated_outages = sum(1 for r in latest_results.values() if r and r.status == "violated")
 
-        return {
-            "device_id": device_id,
-            "period": period,
-            "period_start": start_date.isoformat(),
-            "period_end": end_date.isoformat(),
-            "total_outages": len(outages),
-            "violated_outages": violated_outages,
-            "avg_mttr_minutes": mttr,
-            "availability_percentage": availability,
-            "is_violated": is_violated,
-            "sla_thresholds": sla_thresholds,
-            "violation_reasons": violation_reasons,
-            "outage_details": [
+        result = SLACalculationResult(
+            device_id=device_id,
+            period=period,
+            period_start=start_date.isoformat(),
+            period_end=end_date.isoformat(),
+            total_outages=len(outages),
+            violated_outages=violated_outages,
+            avg_mttr_minutes=mttr,
+            availability_percentage=availability,
+            is_violated=is_violated,
+            sla_thresholds=sla_thresholds,
+            violation_reasons=violation_reasons,
+            outage_details=[
                 {
                     "id": outage.id,
                     "site_id": outage.site_id,
@@ -188,14 +225,36 @@ def compute_device_sla(
                 }
                 for outage in outages
             ],
-        }
+        )
+        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
+        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+        return result
 
+    except ApexTransientError:
+        raise  # already typed, let it propagate
     except Exception as e:
-        # Return error structure that aligns with API expectations
-        return {
-            "device_id": device_id,
-            "period": period,
-            "error": str(e),
-            "is_violated": False,
-            "error_type": "computation_failed",
-        }
+        logger.exception("SLA computation failed for device %s", device_id)
+        audit_log.log(
+            event_type="sla_settlement_failed",
+            details={"device_id": device_id, "period": period, "error": str(e)},
+        )
+        raise ApexTransientError(detail=f"SLA computation failed for device {device_id}: {e}") from e
+
+
+def record_sla_settlement_audit_events(
+    device_id: str,
+    period: str,
+    sla_result: SLACalculationResult | dict[str, Any],
+    *,
+    status: str = "initiated",
+    error: str | None = None,
+) -> None:
+    event_type = f"sla_settlement_{status}"
+    details = {
+        "device_id": device_id,
+        "period": period,
+        "sla_result": sla_result,
+    }
+    if error:
+        details["error"] = error
+    audit_log.log(event_type=event_type, details=details)

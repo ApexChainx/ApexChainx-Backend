@@ -15,8 +15,7 @@ from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
-from app.tasks.webhook_tasks import dispatch_webhook_event
-from app.utils.correlation import get_correlation_id
+from app.utils.correlation_ctx import get_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
@@ -429,7 +428,7 @@ def retry_job(
 
     # Increment retry count and update status
     job.retry_count += 1
-    job.last_retried_at = datetime.now(tz=UTC)
+    job.last_retried_at = datetime.now(UTC)
     job.error = None  # Clear previous error
     job.status = JobStatus.PENDING
     job.progress = 0.0
@@ -456,7 +455,9 @@ def retry_job(
             )
         elif job.job_type == JobType.WEBHOOK_DISPATCH:
             # For webhook jobs, re-dispatch with the original payload
-            task_result = dispatch_webhook_event.delay(payload)
+            from app.tasks.webhook_tasks import dispatch_webhook_delivery
+
+            task_result = dispatch_webhook_delivery.delay(payload)
             job.celery_task_id = task_result.id
             db.commit()
             db.refresh(job)
@@ -499,9 +500,18 @@ def retry_job(
             message=f"Job retry #{job.retry_count} initiated successfully",
         )
 
+    except (ValueError, KeyError, TypeError) as e:
+        db.rollback()
+        logger.error(
+            "Failed to retry job due to data issue", job_id=str(job.id), error=str(e), correlation_id=correlation_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to retry job due to invalid payload: {e!s}",
+        )
     except Exception as e:
         db.rollback()
-        logger.error("Failed to retry job", job_id=str(job.id), error=str(e), correlation_id=correlation_id)
+        logger.exception("Unexpected error retrying job", job_id=str(job.id), correlation_id=correlation_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry job: {e!s}",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -36,14 +36,14 @@ class SLARecomputedDetail(BaseModel):
     status: str  # "met" | "violated"
 
 
-OutageEventDetail = (
-    OutageCreatedDetail
-    | OutageUpdatedDetail
-    | OutagePatchedDetail
-    | OutageResolvedDetail
-    | SLAComputedDetail
-    | SLARecomputedDetail
-)
+OutageEventDetail = Union[
+    OutageCreatedDetail,
+    OutageUpdatedDetail,
+    OutagePatchedDetail,
+    OutageResolvedDetail,
+    SLAComputedDetail,
+    SLARecomputedDetail,
+]
 
 _DETAIL_MAP: dict[str, type] = {
     "created": OutageCreatedDetail,

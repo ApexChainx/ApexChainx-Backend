@@ -28,7 +28,7 @@ class TokenFamilyRepository:
         family = self.get_family(family_id)
         if family:
             family.current_sequence += 1
-            family.updated_at = datetime.now(tz=UTC)
+            family.updated_at = datetime.now(UTC)
             self.db.commit()
             self.db.refresh(family)
         return family
@@ -37,7 +37,7 @@ class TokenFamilyRepository:
         family = self.get_family(family_id)
         if family:
             family.compromised = True
-            family.updated_at = datetime.now(tz=UTC)
+            family.updated_at = datetime.now(UTC)
             self.db.commit()
             self.db.refresh(family)
         return family

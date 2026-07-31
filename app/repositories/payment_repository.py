@@ -1,6 +1,5 @@
 import builtins
 from datetime import UTC, datetime
-from typing import ClassVar
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -170,7 +169,7 @@ class PaymentRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    HISTORY_EVENT_TYPES: ClassVar[set[str]] = {"payment_reconciled", "payment_retried"}
+    HISTORY_EVENT_TYPES = {"payment_reconciled", "payment_retried"}
 
     def get_payment_history(self, transaction_id: str) -> builtins.list[dict]:
         """Return audit log entries for reconcile/retry actions on a payment."""

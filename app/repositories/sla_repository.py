@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
@@ -37,7 +39,7 @@ class SLARepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def find_by_compute_hash(self, outage_id: str, compute_hash: str) -> Optional[SLAResultORM]:
+    def find_by_compute_hash(self, outage_id: str, compute_hash: str) -> SLAResultORM | None:
         """Look up an existing SLA result by outage_id and compute_hash (#35)."""
         return (
             self.db.query(SLAResultORM)
@@ -253,7 +255,7 @@ class SLARepository:
             raise ValueError(f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
 
         try:
-            ZoneInfo(tz)
+            _ = ZoneInfo(tz)
         except ZoneInfoNotFoundError:
             raise ValueError(f"Unknown timezone: '{tz}'")
 

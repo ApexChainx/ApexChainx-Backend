@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.sla_dispute import DisputeStatus
 
@@ -32,8 +32,7 @@ class DisputeResponse(BaseModel):
     resolution_notes: str | None = None
     resolved_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DisputeAuditLogResponse(BaseModel):
@@ -44,8 +43,7 @@ class DisputeAuditLogResponse(BaseModel):
     notes: str | None = None
     recorded_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CreateProposedSLARequest(BaseModel):

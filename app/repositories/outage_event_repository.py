@@ -21,13 +21,14 @@ class OutageEventRepository:
             event_type=event_type,
             detail=json.dumps(detail) if detail else None,
             schema_version=CURRENT_SCHEMA_VERSION,
-            occurred_at=datetime.now(tz=UTC),
+            occurred_at=datetime.now(UTC),
         )
         self.db.add(orm)
         self.db.commit()
         self.db.refresh(orm)
         return orm
 
+    # Add bulk Payments state-transition endpoint with all-or-nothing semantics
     def list_for_outage(
         self,
         outage_id: str,

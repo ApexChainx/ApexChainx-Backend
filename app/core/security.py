@@ -1,5 +1,9 @@
+import base64
 import hashlib
+import hmac
+import json
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -7,6 +11,7 @@ from fastapi import Depends, Header, HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from app.core.config import settings as app_settings
 from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
@@ -59,11 +64,67 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
+def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
+    """Verify a short-lived impersonation JWT.
+
+    Returns the decoded payload if valid, or None if invalid/expired.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+
+        header_b64, payload_b64, sig_b64 = parts
+
+        # Pad for base64
+        header_b64 += "=" * (4 - len(header_b64) % 4) if len(header_b64) % 4 else ""
+        payload_b64 += "=" * (4 - len(payload_b64) % 4) if len(payload_b64) % 4 else ""
+        sig_b64 += "=" * (4 - len(sig_b64) % 4) if len(sig_b64) % 4 else ""
+
+        # Verify signature
+        secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
+        expected_sig = hmac.new(
+            secret,
+            f"{header_b64}.{payload_b64}".encode(),
+            hashlib.sha256,
+        ).digest()
+        actual_sig = base64.urlsafe_b64decode(sig_b64)
+        if not hmac.compare_digest(expected_sig, actual_sig):
+            return None
+
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+
+        # Check expiry
+        now = int(time.time())
+        if payload.get("exp", 0) < now:
+            return None
+
+        # Must have impersonation scope
+        if payload.get("scope") != "impersonate":
+            return None
+
+        return payload
+    except Exception:
+        return None
+
+
 def get_current_user(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthUser:
+    from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
     from app.services.auth_store import AuthStore
     from app.services.token_revocation import is_revoked
 
     token = _extract_bearer_token(authorization)
+
+    # Check for impersonation token first
+    imp_payload = _verify_impersonation_token(token)
+    if imp_payload:
+        user_id = imp_payload.get("sub")
+        if user_id:
+            repo = UserRepository(db)
+            user_orm = repo.get_by_id(user_id)
+            if user_orm:
+                return user_orm_to_pydantic(user_orm)
+
     if is_revoked(hash_token(token)):
         raise HTTPException(status_code=401, detail="Token revoked")
     user = AuthStore.get_user_for_token(token, db=db)

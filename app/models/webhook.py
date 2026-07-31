@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
@@ -22,6 +22,7 @@ class WebhookDeliveryStatus(str, enum.Enum):
     FAILED = "failed"
     RETRYING = "retrying"
     DEAD_LETTER = "dead_letter"  # BE-086: Dead-letter status for permanently failed deliveries
+    BREAKER_OPEN = "breaker_open"  # Circuit breaker open, delivery deferred
 
 
 class Webhook(Base):
@@ -35,8 +36,8 @@ class Webhook(Base):
     events = Column(Text, nullable=False)  # JSON-encoded list of WebhookEvent values
     resolved_ips = Column(Text, nullable=True)  # JSON-encoded list of resolved IPs for SSRF validation
     max_retries = Column(Integer, default=3, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
 
     # BE-034: Secret lifecycle metadata
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
@@ -64,7 +65,7 @@ class WebhookDelivery(Base):
     delivered_at = Column(DateTime, nullable=True)
     dead_lettered_at = Column(DateTime, nullable=True)  # BE-086: When delivery was marked as dead-letter
     signature_version = Column(Integer, default=1, nullable=False)  # BE-087: Explicit signature algorithm version
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
 
     webhook = relationship("Webhook", back_populates="deliveries")

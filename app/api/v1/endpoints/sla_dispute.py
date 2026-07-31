@@ -15,6 +15,10 @@ from app.schemas.sla_dispute import (
     DisputeResolveRequest,
     DisputeResponse,
 )
+from app.services.metrics import (
+    SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL,
+    increment_counter,
+)
 from app.services.sla.sla_calculator import SLACalculator
 
 router = APIRouter()
@@ -200,7 +204,7 @@ def resolve_dispute(
     dispute.status = payload.status
     dispute.resolved_by = payload.resolved_by
     dispute.resolution_notes = payload.resolution_notes
-    dispute.resolved_at = datetime.now(tz=UTC)
+    dispute.resolved_at = datetime.now(UTC)
 
     # If resolving and apply_proposed is true, mark the proposed SLA as latest
     if payload.status == DisputeStatus.RESOLVED and payload.apply_proposed:
@@ -237,6 +241,8 @@ def resolve_dispute(
     )
     db.commit()
     db.refresh(dispute)
+
+    increment_counter(SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL, tags={"status": payload.status.value})
     return dispute
 
 

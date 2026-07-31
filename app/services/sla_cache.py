@@ -1,9 +1,7 @@
 """Redis caching layer for SLA calculation results (#25)."""
 
-import hashlib
 import json
-import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from redis import Redis
 
@@ -18,7 +16,7 @@ class SLACache:
     def _key(self, device_id: str, period: str) -> str:
         return f"sla:{device_id}:{period}"
 
-    def get(self, device_id: str, period: str) -> Optional[dict]:
+    def get(self, device_id: str, period: str) -> dict | None:
         raw = self._redis.get(self._key(device_id, period))
         if raw:
             return json.loads(raw)

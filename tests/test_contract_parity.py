@@ -17,14 +17,13 @@ from __future__ import annotations
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from app.models.sla import SLAResult
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.sla import SLACalculator
 from tests.properties.sla_scenarios import (
     SEVERITIES,
-    sla_scenario,
     scenario_with_policy_bump,
     scenario_with_repeated_mttr,
+    sla_scenario,
 )
 
 # ── Config ──────────────────────────────────────────────────────────────
@@ -35,6 +34,7 @@ SCENARIOS_PER_TEST = 60
 
 
 # ── Property: local ↔ contract adapter bit-exact equality ───────────────
+
 
 @given(scenario=sla_scenario())
 @settings(
@@ -73,12 +73,12 @@ def test_local_and_contract_adapter_produce_equal_results(scenario: dict):
     contract = translate_contract_result(raw_contract)
 
     # Assert bit-exact equality on all fields that survive translation
-    assert local.outage_id == contract.outage_id, (
-        f"outage_id mismatch: local={local.outage_id} vs contract={contract.outage_id}"
-    )
-    assert local.status == contract.status, (
-        f"status mismatch for {scenario['outage_id']}: local={local.status} vs contract={contract.status}"
-    )
+    assert (
+        local.outage_id == contract.outage_id
+    ), f"outage_id mismatch: local={local.outage_id} vs contract={contract.outage_id}"
+    assert (
+        local.status == contract.status
+    ), f"status mismatch for {scenario['outage_id']}: local={local.status} vs contract={contract.status}"
     assert local.mttr_minutes == contract.mttr_minutes
     assert local.threshold_minutes == contract.threshold_minutes
     assert local.amount == contract.amount
@@ -87,6 +87,7 @@ def test_local_and_contract_adapter_produce_equal_results(scenario: dict):
 
 
 # ── Property: idempotency / determinism ─────────────────────────────────
+
 
 @given(scenario_and_mttr=scenario_with_repeated_mttr())
 @settings(
@@ -121,12 +122,13 @@ def test_sla_calculation_is_deterministic(scenario_and_mttr: tuple[dict, int]):
         resolved_at=scenario["resolved_at"],
     )
 
-    assert result1.model_dump() == result2.model_dump(), (
-        f"Non-deterministic SLA calculation:\n  Result 1: {result1.model_dump_json()}\n  Result 2: {result2.model_dump_json()}"
-    )
+    assert (
+        result1.model_dump() == result2.model_dump()
+    ), f"Non-deterministic SLA calculation:\n  Result 1: {result1.model_dump_json()}\n  Result 2: {result2.model_dump_json()}"
 
 
 # ── Property: MTTR boundary at threshold ────────────────────────────────
+
 
 @pytest.mark.parametrize("severity", SEVERITIES)
 def test_mttr_boundary_penalty_vs_reward(severity: str):
@@ -149,9 +151,9 @@ def test_mttr_boundary_penalty_vs_reward(severity: str):
         started_at="2024-01-01T00:00:00+00:00",
         resolved_at=f"2024-01-01T00:{threshold:02d}:00+00:00",
     )
-    assert result.status == "met", (
-        f"MTTR == threshold ({threshold}) should be 'met' for {severity}, got '{result.status}'"
-    )
+    assert (
+        result.status == "met"
+    ), f"MTTR == threshold ({threshold}) should be 'met' for {severity}, got '{result.status}'"
     assert result.payment_type == "reward"
 
 
@@ -172,13 +174,14 @@ def test_mttr_just_over_threshold_penalty(severity: str):
         started_at="2024-01-01T00:00:00+00:00",
         resolved_at=f"2024-01-01T00:{threshold + 1:02d}:00+00:00",
     )
-    assert result.status == "violated", (
-        f"MTTR > threshold ({threshold + 1}) should be 'violated' for {severity}, got '{result.status}'"
-    )
+    assert (
+        result.status == "violated"
+    ), f"MTTR > threshold ({threshold + 1}) should be 'violated' for {severity}, got '{result.status}'"
     assert result.payment_type == "penalty"
 
 
 # ── Property: policy version bump produces different compute_hash ───────
+
 
 @given(scenario_and_bump=scenario_with_policy_bump())
 @settings(
@@ -225,6 +228,7 @@ def test_policy_version_bump_changes_compute_hash(scenario_and_bump: tuple[dict,
 
 # ── Property: zero-duration outage ──────────────────────────────────────
 
+
 @pytest.mark.parametrize("severity", SEVERITIES)
 def test_zero_duration_outage_met(severity: str):
     """Zero-duration outage (MTTR=0) should always be met with exceptional rating."""
@@ -242,6 +246,7 @@ def test_zero_duration_outage_met(severity: str):
 
 
 # ── Property: compute_hash is deterministic ─────────────────────────────
+
 
 @given(scenario=sla_scenario())
 @settings(

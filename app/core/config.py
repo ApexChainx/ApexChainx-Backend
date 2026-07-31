@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
+    SECRET_KEY: str = "apexchainx-dev-secret"
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
     DATABASE_AUDIT_URL: str | None = None
     API_V1_PREFIX: str = "/api/v1"
@@ -83,6 +84,11 @@ class Settings(BaseSettings):
     # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
     SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
 
+    # Circuit breaker settings for webhook delivery (#33)
+    WEBHOOK_BREAKER_FAIL_THRESHOLD: int = 10
+    WEBHOOK_BREAKER_WINDOW_SECONDS: int = 300
+    WEBHOOK_BREAKER_RESET_SECONDS: int = 600
+
     # Webhook retry backoff policy (#236)
     # Comma-separated base delay seconds for each retry attempt.
     # e.g. "30,120,600" means 30 s on first retry, 2 min on second, 10 min on third.
@@ -91,6 +97,9 @@ class Settings(BaseSettings):
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
     # Jitter mode for webhook retry backoff: "none", "equal", or "full"
     WEBHOOK_RETRY_JITTER: str = "full"
+    # Concurrency caps for webhook dispatch attempts.
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
@@ -178,6 +187,12 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_RETRY_MAX_DELAY_SECONDS <= 0:
         errors.append("WEBHOOK_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES <= 0:
+        errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES must be > 0.")
+
+    if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
+        errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))

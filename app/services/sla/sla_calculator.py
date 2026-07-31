@@ -1,7 +1,9 @@
 import hashlib
+import time
 
 from app.models import SLAResult
 
+from ..metrics import record_histogram
 from .config import SLA_CONFIG, get_config_for_severity
 
 
@@ -22,6 +24,7 @@ class SLACalculator:
         started_at: str = "",
         resolved_at: str = "",
     ) -> SLAResult:
+        _start = time.perf_counter()
         severity = severity.lower()
 
         if severity not in SLA_CONFIG:
@@ -80,6 +83,9 @@ class SLACalculator:
             reason_code = "met_good"
 
         reward = (config.reward_base * multiplier) // 100
+
+        _latency = (time.perf_counter() - _start) * 1000
+        record_histogram("sla_calc_latency_milliseconds", _latency, tags={"severity": severity})
 
         return SLAResult(
             outage_id=outage_id,

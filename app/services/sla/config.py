@@ -1,12 +1,12 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import secrets
 from copy import deepcopy
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from app.models.sla import SLAConfigHistoryEntry, SLAConfigUpdateRequest, SLAPolicyContent, SLASeverityConfig
-
 
 SLA_CONFIG: dict[str, dict[str, int]] = {
     "critical": {
@@ -121,9 +121,7 @@ def get_config_with_hash(severity: str) -> SLAPolicyContent:
     )
 
 
-def update_config_for_severity(
-    severity: str, payload: SLAConfigUpdateRequest
-) -> SLASeverityConfig:
+def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest) -> SLASeverityConfig:
     """Update config (backward-compatible). Does NOT bump version or check tokens."""
     normalized = severity.lower()
     if normalized not in SLA_CONFIG:
@@ -136,8 +134,8 @@ def update_config_for_severity(
 def publish_config_for_severity(
     severity: str,
     payload: SLAConfigUpdateRequest,
-    expected_token: Optional[str] = None,
-    published_by: Optional[str] = None,
+    expected_token: str | None = None,
+    published_by: str | None = None,
 ) -> tuple[SLAPolicyContent, str, SLAConfigHistoryEntry]:
     """Atomically publish a new policy version with optimistic concurrency (#37).
 
@@ -162,8 +160,7 @@ def publish_config_for_severity(
     # Optimistic concurrency: reject if token doesn't match
     if expected_token is not None and expected_token != _publish_tokens[normalized]:
         raise ConcurrencyError(
-            f"Config for '{severity}' was modified by another request. "
-            f"Re-fetch the current config and retry."
+            f"Config for '{severity}' was modified by another request. " f"Re-fetch the current config and retry."
         )
 
     # Bump version and write config atomically
@@ -180,7 +177,7 @@ def publish_config_for_severity(
     content_hash = _compute_content_hash(normalized, new_config, new_version)
 
     # Build history entry
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     history = SLAConfigHistoryEntry(
         severity=normalized,
         policy_version=new_version,
@@ -206,4 +203,3 @@ def publish_config_for_severity(
 
 class ConcurrencyError(Exception):
     """Raised when an optimistic concurrency check fails (→ 409)."""
-    pass

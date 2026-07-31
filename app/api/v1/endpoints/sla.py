@@ -11,9 +11,7 @@ from app.models.sla import (
     SLAConfigUpdateRequest,
     SLADashboardKPI,
     SLAPerformanceAggregation,
-    SLAPolicyContent,
     SLAPreviewRequest,
-    SLASeverityConfig,
     SLATrendPoint,
 )
 from app.repositories.sla_repository import VALID_BUCKETS, SLARepository
@@ -28,8 +26,6 @@ from app.services.sla.config import (
     publish_config_for_severity,
     update_config_for_severity,
 )
-from app.models import SLAResult
-from app.utils.cache import TTLCache
 from app.utils.analytics_exporter import (
     export_analytics_summary,
     export_dashboard_kpi,
@@ -87,7 +83,9 @@ def preview_sla(payload: SLAPreviewRequest, current_user=Depends(require_enginee
 
 @router.get("/config")
 def get_sla_config(
-    include_hashes: bool = Query(default=False, description="Include policy version + content hash for integrity (#37)"),
+    include_hashes: bool = Query(
+        default=False, description="Include policy version + content hash for integrity (#37)"
+    ),
     current_user=Depends(require_engineer),
 ):
     """Get all SLA configuration by severity (BE-009).
@@ -136,7 +134,8 @@ def update_sla_config(
     try:
         if expected_token is not None:
             policy, new_token, _history = publish_config_for_severity(
-                severity, payload,
+                severity,
+                payload,
                 expected_token=expected_token,
                 published_by=getattr(current_user, "username", None),
             )

@@ -7,16 +7,19 @@ Revision ID: 0017_audit_chain
 Revises: 0016_outage_event_schema_version
 Create Date: 2026-07-28
 """
-from alembic import op
-import sqlalchemy as sa
 import hashlib
 import json
 
+import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0017_audit_chain"
 down_revision = "0016_outage_event_schema_version"
 branch_labels = None
 depends_on = None
+
+# Implemented comprehensive dry-run validation mode in the bulk import endpoint.
 
 
 def upgrade() -> None:

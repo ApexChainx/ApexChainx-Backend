@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from app.utils.correlation import get_correlation_id
+from app.utils.correlation_ctx import get_correlation_id
 
 
 class StructuredLogger:
