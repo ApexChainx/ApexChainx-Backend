@@ -1,13 +1,30 @@
+import hashlib
+import time
+
 from app.models import SLAResult
 
+from ..metrics import record_histogram
 from .config import SLA_CONFIG, get_config_for_severity
+
+
+def _compute_hash(outage_id: str, started_at: str, resolved_at: str, policy_version: str) -> str:
+    """Compute deterministic SHA-256 hash of recompute inputs for idempotency (#35)."""
+    raw = f"{outage_id}||{started_at}||{resolved_at}||{policy_version}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class SLACalculator:
     @staticmethod
     def calculate(
-        outage_id: str, severity: str, mttr_minutes: int, policy_version: str = "1.0", threshold_source: str = "config"
+        outage_id: str,
+        severity: str,
+        mttr_minutes: int,
+        policy_version: str = "1.0",
+        threshold_source: str = "config",
+        started_at: str = "",
+        resolved_at: str = "",
     ) -> SLAResult:
+        _start = time.perf_counter()
         severity = severity.lower()
 
         if severity not in SLA_CONFIG:
@@ -21,6 +38,11 @@ class SLACalculator:
             config = SLA_CONFIG[severity]
 
         threshold = config.threshold_minutes
+
+        # Compute idempotency hash when all inputs are available (#35)
+        compute_hash = None
+        if started_at and resolved_at:
+            compute_hash = _compute_hash(outage_id, started_at, resolved_at, policy_version)
 
         # Case 1: SLA violated → penalty
         # Deterministic boundary handling: use >= for violation check to handle exact threshold edges
@@ -40,6 +62,7 @@ class SLACalculator:
                 threshold_source=threshold_source,
                 reason_code="mttr_exceeded",
                 decision_trace=f"MTTR {mttr_minutes} > threshold {threshold} (overtime {overtime} minutes)",
+                compute_hash=compute_hash,
             )
 
         # Case 2: SLA met → reward
@@ -61,6 +84,9 @@ class SLACalculator:
 
         reward = (config.reward_base * multiplier) // 100
 
+        _latency = (time.perf_counter() - _start) * 1000
+        record_histogram("sla_calc_latency_milliseconds", _latency, tags={"severity": severity})
+
         return SLAResult(
             outage_id=outage_id,
             status="met",
@@ -73,4 +99,5 @@ class SLACalculator:
             threshold_source=threshold_source,
             reason_code=reason_code,
             decision_trace=f"MTTR {mttr_minutes} <= threshold {threshold}, performance ratio {performance_ratio}%, rating {rating}",
+            compute_hash=compute_hash,
         )

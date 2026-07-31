@@ -1,5 +1,5 @@
 import itertools
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.api.v1.endpoints.webhooks import WebhookCreate
@@ -48,7 +48,7 @@ def make_outage(
         "site_id": "site-123",
         "severity": Severity.high,
         "status": OutageStatus.open,
-        "detected_at": datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        "detected_at": datetime(2026, 1, 1, 0, 0),
         "description": "Example outage description",
         "affected_services": ["core-api"],
         "affected_subscribers": 42,
@@ -70,7 +70,7 @@ def make_outage_create(
         "site_id": "site-123",
         "severity": Severity.high,
         "status": OutageStatus.open,
-        "detected_at": datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        "detected_at": datetime(2026, 1, 1, 0, 0),
         "description": "Example outage description",
         "affected_services": ["core-api"],
         "affected_subscribers": 42,
@@ -97,8 +97,8 @@ def make_payment_transaction(
         "status": "confirmed",
         "outage_id": f"outage-{_next_id()}",
         "sla_result_id": 1,
-        "created_at": datetime.now(tz=UTC),
-        "confirmed_at": datetime.now(tz=UTC),
+        "created_at": datetime.now(timezone.utc),
+        "confirmed_at": datetime.now(timezone.utc),
         "retry_count": 0,
         "last_retried_at": None,
     }

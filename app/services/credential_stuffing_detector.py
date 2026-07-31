@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from time import time
 
 from redis import Redis
@@ -6,7 +8,7 @@ from app.core.config import settings
 
 
 class CredentialStuffingDetector:
-    def __init__(self, redis_client: Redis | None = None):
+    def __init__(self, redis_client: Redis | None = None) -> None:
         self.redis = redis_client or Redis.from_url(settings.CELERY_BROKER_URL)
 
     def _prefix_key(self, ip: str) -> str:
@@ -31,7 +33,7 @@ class CredentialStuffingDetector:
         key = self._prefix_key(ip)
         self.redis.zremrangebyscore(key, "-inf", now - window)
         unique = self.redis.zrangebyscore(key, now - window, "+inf")
-        return len({u.decode() if isinstance(u, bytes) else u for u in unique})
+        return len(set(u.decode() if isinstance(u, bytes) else u for u in unique))
 
 
 credential_stuffing_detector = CredentialStuffingDetector()

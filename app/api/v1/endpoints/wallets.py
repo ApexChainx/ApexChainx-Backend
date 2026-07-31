@@ -1,6 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+"""Wallet API endpoints (refactored for Postgres-backed persistence — issue #49).
 
+All handlers now pass a request-scoped database session to WalletRegistry.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import ApexConflictError
 from app.core.security import require_engineer
+from app.db.session import get_db
 from app.models.wallet import (
     Wallet,
     WalletBalanceResponse,
@@ -17,30 +25,38 @@ router = APIRouter()
 
 
 @router.post("/create", response_model=WalletCreateResponse, status_code=status.HTTP_201_CREATED)
-def create_wallet(payload: WalletCreateRequest, current_user=Depends(require_engineer)):
-    return WalletRegistry.create_wallet(payload)
+def create_wallet(
+    payload: WalletCreateRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_engineer),
+) -> WalletCreateResponse:
+    return WalletRegistry.create_wallet(db, payload)
 
 
 @router.post("/link", response_model=Wallet)
-def link_wallet(payload: WalletLinkRequest, current_user=Depends(require_engineer)):
+def link_wallet(
+    payload: WalletLinkRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_engineer),
+) -> Wallet:
     try:
-        return WalletRegistry.link_wallet(payload)
-    except ValueError as exc:
+        return WalletRegistry.link_wallet(db, payload)
+    except ApexConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
 
 @router.get("/ping")
-def wallets_ping():
+def wallets_ping() -> dict[str, str]:
     return {"message": "wallets ok"}
 
 
 @router.get("/{user_id}", response_model=Wallet)
 def get_wallet(
     user_id: str,
-    refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),
+    db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
-):
-    wallet = WalletRegistry.get_wallet(user_id, refresh=refresh)
+) -> Wallet:
+    wallet = WalletRegistry.get_wallet(db, user_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
     return wallet
@@ -49,10 +65,10 @@ def get_wallet(
 @router.get("/{user_id}/status", response_model=WalletStatusResponse)
 def get_wallet_status(
     user_id: str,
-    refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),
+    db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
-):
-    wallet_status = WalletRegistry.get_status(user_id, refresh=refresh)
+) -> WalletStatusResponse:
+    wallet_status = WalletRegistry.get_status(db, user_id)
     if not wallet_status:
         raise HTTPException(status_code=404, detail="Wallet not found")
     return wallet_status
@@ -63,10 +79,10 @@ def get_wallet_status(
 )
 def get_wallet_trustline(
     user_id: str,
-    refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),
+    db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
-):
-    result = WalletRegistry.get_trustline(user_id, refresh=refresh)
+) -> WalletTrustlineResponse:
+    result = WalletRegistry.get_trustline(db, user_id)
     if not result:
         raise HTTPException(status_code=404, detail="Wallet not found")
     return result
@@ -79,22 +95,22 @@ def get_wallet_trustline(
 )
 def get_wallet_funding_state(
     user_id: str,
-    refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),
+    db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
-):
-    result = WalletRegistry.get_funding_state(user_id, refresh=refresh)
+) -> WalletFundingStateResponse:
+    result = WalletRegistry.get_funding_state(db, user_id)
     if not result:
         raise HTTPException(status_code=404, detail="Wallet not found")
     return result
 
 
-@router.get("/{address}/balance", response_model=WalletBalanceResponse)
+@router.get("/address/{address}/balance", response_model=WalletBalanceResponse)
 def get_wallet_balance(
     address: str,
-    refresh: bool = Query(False, description="Force a live re-fetch instead of returning cached data"),
+    db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
-):
-    balance = WalletRegistry.get_balance(address, refresh=refresh)
+) -> WalletBalanceResponse:
+    balance = WalletRegistry.get_balance(db, address)
     if not balance:
         raise HTTPException(status_code=404, detail="Wallet not found")
     return balance

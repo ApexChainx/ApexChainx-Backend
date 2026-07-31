@@ -1,5 +1,4 @@
 import hashlib
-import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,8 +8,16 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import AuditSessionLocal, SessionLocal
 from app.models.orm.audit_log import AuditLogORM
+from app.services.formatters import canonical_json
 from app.services.scrubber import scrub_details
-from app.utils.correlation import get_correlation_id
+from app.utils.correlation_ctx import get_correlation_id
+
+# --- SLA Settlement Audit Event Types ---
+SLA_SETTLEMENT_INITIATED = "sla_settlement_initiated"
+SLA_SETTLEMENT_SUCCEEDED = "sla_settlement_succeeded"
+SLA_SETTLEMENT_FAILED = "sla_settlement_failed"
+SLA_DISPUTE_FILED = "sla_dispute_filed"
+SLA_DISPUTE_RESOLVED = "sla_dispute_resolved"
 
 
 class AuditLogService:
@@ -33,7 +40,7 @@ class AuditLogService:
             "correlation_id": correlation_id,
             "created_at": created_at.isoformat() if created_at else None,
         }
-        raw = json.dumps(data, sort_keys=True, default=str)
+        raw = canonical_json(data)
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def log_event(

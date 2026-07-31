@@ -9,9 +9,12 @@ from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import require_admin
+from app.core.security import hash_token, require_admin
 from app.db.session import get_db
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+
+from app.services.audit_log import audit_log
+from app.services.formatters import canonical_json
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.utils.network_validation import validate_webhook_url
 
@@ -235,10 +238,10 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         name=payload.name,
         url=url,
         secret=payload.secret,
-        events=json.dumps([e.value for e in payload.events]),
+        events=canonical_json([e.value for e in payload.events]),
         max_retries=payload.max_retries,
         is_active=payload.is_active,
-        resolved_ips=json.dumps(resolved_ips),
+        resolved_ips=canonical_json(resolved_ips),
     )
     db.add(webhook)
     db.commit()
@@ -282,11 +285,11 @@ def update_webhook(
         url = str(payload.url)
         resolved_ips = validate_webhook_url(url)
         webhook.url = url
-        webhook.resolved_ips = json.dumps(resolved_ips)
+        webhook.resolved_ips = canonical_json(resolved_ips)
     if payload.secret is not None:
         webhook.secret = payload.secret
     if payload.events is not None:
-        webhook.events = json.dumps([e.value for e in payload.events])
+        webhook.events = canonical_json([e.value for e in payload.events])
     if payload.max_retries is not None:
         webhook.max_retries = payload.max_retries
     if payload.is_active is not None:
@@ -368,8 +371,6 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     from datetime import datetime
 
     from app.core.config import settings
-    from app.core.security import hash_token
-    from app.services.audit_log import audit_log
 
     webhook = _get_webhook_or_404(db, webhook_id)
 
@@ -394,7 +395,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     new_secret = secrets.token_hex(32)
     webhook.secret = new_secret
     webhook.secret_version = old_secret_version + 1
-    webhook.last_secret_rotation_at = datetime.now(tz=UTC)
+    webhook.last_secret_rotation_at = datetime.now(UTC)
 
     db.commit()
 

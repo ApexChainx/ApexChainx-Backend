@@ -29,7 +29,10 @@ def authorize(provider: str, redirect_uri: str = Query(...), code_challenge: str
 
 @router.get("/{provider}/callback")
 def callback(
-    provider: str, state: str = Query(...), code: str | None = Query(None), code_verifier: str | None = Query(None)
+    provider: str,
+    state: str = Query(...),
+    code: str | None = Query(None),
+    code_verifier: str | None = Query(None),
 ):
     if provider not in PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")

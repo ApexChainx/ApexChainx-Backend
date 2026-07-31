@@ -5,3 +5,33 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy app/
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: bandit
+        name: bandit
+        entry: bandit -r app/ -c pyproject.toml
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pytest-fast
+        name: pytest-fast
+        entry: pytest -m "not slow" -q
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: migration-lint
+        name: migration-lint
+        entry: python scripts/lint_migrations.py
+        language: system
+        types: [python]
+        pass_filenames: false

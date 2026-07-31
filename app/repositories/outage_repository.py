@@ -8,6 +8,7 @@ from app.models.enums import OutageStatus, Severity
 from app.models.orm.outage import OutageORM
 from app.models.outage import Location, Outage, SLAStatus
 from app.models.outage_dto import OutageCreate, OutageSortDirection, OutageSortField, OutageUpdate
+from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
 
 
 def _orm_to_pydantic(orm: OutageORM) -> Outage:
@@ -96,6 +97,83 @@ class OutageRepository:
             "sort_by": sort_by.value,
             "sort_direction": sort_direction.value,
         }
+
+    def list_cursor(
+        self,
+        severity: Severity | None = None,
+        status: OutageStatus | None = None,
+        search: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        cursor: str | None = None,
+        limit: int = 20,
+        sort_by: OutageSortField = OutageSortField.detected_at,
+        sort_direction: OutageSortDirection = OutageSortDirection.desc,
+    ) -> CursorPage:
+        """Cursor-based pagination for outages.
+
+        Returns a CursorPage with items, next_cursor, and has_more.
+        O(1) per page — stable under concurrent writes.
+        """
+        query = self.db.query(OutageORM)
+
+        if severity:
+            query = query.filter(OutageORM.severity == severity.value)
+        if status:
+            query = query.filter(OutageORM.status == status.value)
+
+        if search:
+            search_filter = or_(
+                OutageORM.id.ilike(f"%{search}%"),
+                OutageORM.site_id.ilike(f"%{search}%"),
+                OutageORM.site_name.ilike(f"%{search}%"),
+            )
+            query = query.filter(search_filter)
+
+        if start_date:
+            query = query.filter(OutageORM.detected_at >= start_date)
+        if end_date:
+            query = query.filter(OutageORM.detected_at <= end_date)
+
+        sort_column = getattr(OutageORM, sort_by.value)
+        direction_fn = asc if sort_direction == OutageSortDirection.asc else desc
+
+        # Apply cursor filter if provided
+        decoded = decode_cursor(cursor)
+        if decoded is not None:
+            cursor_id, cursor_value = decoded
+            # Use the sort column and id for stable cursor-based filtering
+            sort_attr = getattr(OutageORM, sort_by.value)
+            if sort_direction == OutageSortDirection.desc:
+                cursor_filter = or_(
+                    sort_attr < cursor_value,
+                    and_(sort_attr == cursor_value, OutageORM.id < cursor_id),
+                )
+            else:
+                cursor_filter = or_(
+                    sort_attr > cursor_value,
+                    and_(sort_attr == cursor_value, OutageORM.id > cursor_id),
+                )
+            query = query.filter(cursor_filter)
+
+        query = query.order_by(direction_fn(sort_column), OutageORM.id.asc())
+
+        # Fetch limit+1 to determine has_more
+        items = query.limit(limit + 1).all()
+        has_more = len(items) > limit
+        items = items[:limit]
+
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            sort_value = str(getattr(last, sort_by.value))
+            next_cursor = encode_cursor(last.id, sort_value)
+
+        return CursorPage(
+            items=[_orm_to_pydantic(o) for o in items],
+            next_cursor=next_cursor,
+            has_more=has_more,
+        )
 
     def list_all(self) -> builtins.list[Outage]:
         rows = self.db.query(OutageORM).all()

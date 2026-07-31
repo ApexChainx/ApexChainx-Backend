@@ -29,7 +29,9 @@ class PaymentTransitionError(ValueError):
         self.current = current
         self.next_status = next_status
         self.allowed = allowed
-        super().__init__(f"Transition from '{current}' to '{next_status}' is not allowed. Allowed: {allowed or 'none'}")
+        super().__init__(
+            f"Transition from '{current}' to '{next_status}' is not allowed. " f"Allowed: {allowed or 'none'}"
+        )
 
 
 def validate_transition(current: str, next_status: str) -> None:

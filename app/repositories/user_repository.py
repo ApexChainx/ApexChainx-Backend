@@ -64,7 +64,7 @@ class UserRepository:
             return False
         if user.locked_until is None:
             return False
-        return user.locked_until > datetime.now(tz=UTC)
+        return user.locked_until > datetime.now(UTC)
 
     def update_profile(
         self, user_id: str, full_name: str | None = None, stellar_wallet: str | None = None

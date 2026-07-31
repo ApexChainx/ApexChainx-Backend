@@ -37,7 +37,7 @@ class AuthStore:
 
         if not validate_password_policy(payload.password):
             raise ValueError(
-                "Password does not meet policy requirements (min 8 chars, uppercase, lowercase, digit, special char)"
+                "Password does not meet policy requirements (min 8 chars, " "uppercase, lowercase, digit, special char)"
             )
 
         hashed_password = get_password_hash(payload.password)

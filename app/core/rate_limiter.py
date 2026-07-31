@@ -59,7 +59,7 @@ class SimpleRateLimiter:
 
 class RedisRateLimiter:
     def __init__(self) -> None:
-        self.fallback = SimpleRateLimiter()
+        self.fallback = _shared_fallback
         self.disabled_until: float | None = None
         self.client = redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
@@ -124,6 +124,10 @@ class RedisRateLimiter:
             self._trip_circuit()
             return self.fallback.is_allowed(key)
 
+
+# Shared fallback for RedisRateLimiter instances so that in-memory rate-limiting
+# state is consistent across all instances when Redis is unavailable.
+_shared_fallback = SimpleRateLimiter()
 
 rate_limiter = (
     RedisRateLimiter()

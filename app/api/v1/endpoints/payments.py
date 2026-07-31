@@ -58,10 +58,16 @@ class ReconciliationHistoryResponse(BaseModel):
     history: list[ReconciliationHistoryEntry]
 
 
-@router.get("/", response_model=PaginatedPayments)
+@router.get("/")
 def list_payments(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page: int = Query(
+        default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
+    ),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    cursor: str | None = Query(
+        default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
+    ),
+    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
     status: str | None = None,
     type: str | None = None,
     outage_id: str | None = None,
@@ -70,9 +76,26 @@ def list_payments(
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
+    """List payments with filtering and pagination.
+
+    Supports both offset-based (page/page_size) and cursor-based (cursor/limit) pagination.
+    When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
+    """
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="date_from cannot be after date_to")
     repo = PaymentRepository(db)
+
+    if cursor is not None:
+        return repo.list_cursor(
+            cursor=cursor,
+            limit=limit,
+            status=status,
+            outage_id=outage_id,
+            type=type,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
     items, total = repo.list(
         page=page,
         page_size=page_size,

@@ -7,9 +7,9 @@ Create Date: 2026-04-29
 Adds actor_id and correlation_id columns to audit_logs table to enable
 cross-cutting correlation and consistent actor context in audit events.
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = '0015_audit_correlation'

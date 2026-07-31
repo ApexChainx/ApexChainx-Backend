@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal
@@ -29,6 +31,7 @@ def _orm_to_pydantic(orm: SLAResultORM) -> SLAResult:
         threshold_source=orm.threshold_source,
         reason_code=orm.reason_code,
         decision_trace=orm.decision_trace,
+        compute_hash=orm.compute_hash,
     )
 
 
@@ -36,11 +39,31 @@ class SLARepository:
     def __init__(self, db: Session):
         self.db = db
 
+    def find_by_compute_hash(self, outage_id: str, compute_hash: str) -> SLAResultORM | None:
+        """Look up an existing SLA result by outage_id and compute_hash (#35)."""
+        return (
+            self.db.query(SLAResultORM)
+            .filter(
+                SLAResultORM.outage_id == outage_id,
+                SLAResultORM.compute_hash == compute_hash,
+            )
+            .first()
+        )
+
     def create(self, sla_data: SLAResult | Mapping[str, object]) -> SLAResult:
         if isinstance(sla_data, SLAResult):
             payload = sla_data.model_dump()
         else:
             payload = dict(sla_data)
+
+        compute_hash_val = payload.get("compute_hash")
+
+        # Idempotency check: if compute_hash is present, check for existing row (#35)
+        if compute_hash_val:
+            existing = self.find_by_compute_hash(payload["outage_id"], compute_hash_val)
+            if existing:
+                self.db.refresh(existing)
+                return _orm_to_pydantic(existing)
 
         # Use row-level locking to prevent race conditions when updating latest flag
         # First, lock any existing latest row for this outage
@@ -73,6 +96,7 @@ class SLARepository:
             is_latest=True,
             reason_code=payload.get("reason_code"),
             decision_trace=payload.get("decision_trace"),
+            compute_hash=compute_hash_val,
         )
         self.db.add(orm)
         self.db.commit()
@@ -84,6 +108,14 @@ class SLARepository:
             payload = sla_data.model_dump()
         else:
             payload = dict(sla_data)
+
+        # Idempotency via compute_hash first (#35)
+        compute_hash_val = payload.get("compute_hash")
+        if compute_hash_val:
+            existing = self.find_by_compute_hash(payload["outage_id"], compute_hash_val)
+            if existing:
+                self.db.refresh(existing)
+                return _orm_to_pydantic(existing)
 
         latest = self.get_by_outage(payload["outage_id"])
         if latest and latest.model_dump() == payload:
@@ -223,7 +255,7 @@ class SLARepository:
             raise ValueError(f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}")
 
         try:
-            ZoneInfo(tz)
+            _ = ZoneInfo(tz)
         except ZoneInfoNotFoundError:
             raise ValueError(f"Unknown timezone: '{tz}'")
 

@@ -5,6 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.v1.endpoints.sla import _invalidate_analytics_cache
@@ -14,7 +15,7 @@ from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models import BulkOutageCreate, Outage, OutageCreate, OutageUpdate
 from app.models.enums import OutageStatus, Severity
-from app.models.outage import PaginatedOutages, ResolveOutageRequest
+from app.models.outage import ResolveOutageRequest
 from app.models.outage_dto import (
     ImportConsistency,
     ImportFieldError,
@@ -75,15 +76,21 @@ def list_violations(current_user=Depends(require_engineer), db: Session = Depend
     return repo.list_violations()
 
 
-@router.get("/", response_model=PaginatedOutages)
+@router.get("/")
 def list_outages(
     severity: Severity | None = None,
     status: OutageStatus | None = None,
     search: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(
+        default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
+    ),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    cursor: str | None = Query(
+        default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
+    ),
+    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
     sort_by: OutageSortField = Query(
         default=OutageSortField.detected_at,
         description="Sort field (enum). Supported: detected_at, site_name, severity, status, id. Invalid values rejected with 422.",
@@ -95,7 +102,15 @@ def list_outages(
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """List outages with optional filtering, search, and sorting.
+    """List outages with optional filtering, search, sorting, and pagination.
+
+    Supports both offset-based (page/page_size) and cursor-based (cursor/limit) pagination.
+    When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
+
+    **Cursor Pagination (BE-039)**
+    - Pass ``cursor`` from the previous response's ``next_cursor`` field.
+    - O(1) per page — stable under concurrent writes.
+    - Returns ``{items, next_cursor, has_more}``.
 
     **Search (BE-011)**
     - `search`: case-insensitive substring match across `id`, `site_id`, and `site_name`
@@ -114,6 +129,20 @@ def list_outages(
     - Invalid sort values: rejected with 422 validation error
     """
     repo = OutageRepository(db)
+
+    if cursor is not None:
+        return repo.list_cursor(
+            severity=severity,
+            status=status,
+            search=search,
+            start_date=start_date,
+            end_date=end_date,
+            cursor=cursor,
+            limit=limit,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
+
     return repo.list(
         severity=severity,
         status=status,
@@ -220,8 +249,10 @@ async def import_outages(
     elif filename.endswith(".csv"):
         try:
             rows = list(csv.DictReader(io.StringIO(content.decode("utf-8"))))
-        except Exception as exc:
+        except (csv.Error, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
     else:
         raise HTTPException(status_code=400, detail="Unsupported file format. Use .json or .csv")
 
@@ -261,7 +292,7 @@ async def import_outages(
                             duplicate=False,
                         )
                     )
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 row_outcomes.append(_row_error(i, row, exc))
     elif consistency == ImportConsistency.atomic:
         parsed: list[OutageCreate] = []
@@ -269,7 +300,7 @@ async def import_outages(
             try:
                 parsed.append(OutageCreate(**row))
                 row_outcomes.append(ImportRowResult(row=i, id=row.get("id"), status="ok"))
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 row_outcomes.append(_row_error(i, row, exc))
 
         if any(r.status == "error" for r in row_outcomes):
@@ -286,9 +317,12 @@ async def import_outages(
                     row_outcomes[i].duplicate = True
                     row_outcomes[i].existing_id = created.id
             db.commit()
-        except Exception as exc:
+        except (IntegrityError, SQLAlchemyError) as exc:
             db.rollback()
             raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}") from exc
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Unexpected import error: {exc}") from exc
     else:
         for i, row in enumerate(rows):
             try:
@@ -307,7 +341,7 @@ async def import_outages(
                 )
                 if persisted:
                     persisted_count += 1
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 db.rollback()
                 row_outcomes.append(_row_error(i, row, exc))
 
@@ -433,12 +467,17 @@ def resolve_outage(
             audit_log.log("outage_resolved", {"id": outage.id, "mttr": payload.mttr_minutes})
             OutageEventRepository(db).record(outage_id, "resolved", {"mttr_minutes": payload.mttr_minutes})
 
+            # Pass timestamps for compute_hash idempotency (#35)
+            started_at = outage.detected_at.isoformat() if outage.detected_at else ""
+            resolved_at = outage.resolved_at.isoformat() if outage.resolved_at else ""
             raw_contract_result = SLAContractAdapter.calculate_sla(
                 outage_id=outage.id,
                 severity=outage.severity,
                 mttr_minutes=payload.mttr_minutes,
                 policy_version="1.0",
                 threshold_source="config",
+                started_at=started_at,
+                resolved_at=resolved_at,
             )
             sla = translate_contract_result(raw_contract_result)
 
@@ -464,6 +503,9 @@ def resolve_outage(
 def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     """Recompute SLA for a resolved outage (BE-013, BE-009).
 
+    Idempotent: uses compute_hash to detect duplicate recomputes (#35).
+    Re-running with unchanged inputs returns the prior row.
+
     Status validation:
     - Only 'resolved' outages can have SLA recomputed
     - Returns 400 if outage not resolved
@@ -486,12 +528,19 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
     try:
         with advisory_lock_nowait(db, f"recompute:{outage_id}"):
             orm = repo.get_orm_locked(outage_id)
+
+            # Build compute_hash inputs from outage timestamps for idempotency (#35)
+            started_at = orm.detected_at.isoformat() if orm.detected_at else ""
+            resolved_at = orm.resolved_at.isoformat() if orm.resolved_at else ""
+
             raw_contract_result = SLAContractAdapter.calculate_sla(
                 outage_id=outage.id,
                 severity=outage.severity,
                 mttr_minutes=orm.mttr_minutes,
                 policy_version="1.0",
                 threshold_source="config",
+                started_at=started_at,
+                resolved_at=resolved_at,
             )
             sla = translate_contract_result(raw_contract_result)
 

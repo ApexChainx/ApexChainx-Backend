@@ -12,12 +12,20 @@ from app.models.sla import (
     SLADashboardKPI,
     SLAPerformanceAggregation,
     SLAPreviewRequest,
-    SLASeverityConfig,
     SLATrendPoint,
 )
 from app.repositories.sla_repository import VALID_BUCKETS, SLARepository
 from app.services.sla import SLACalculator
-from app.services.sla.config import get_all_config, get_config_for_severity, update_config_for_severity
+from app.services.sla.config import (
+    ConcurrencyError,
+    get_all_config,
+    get_all_config_with_hashes,
+    get_config_for_severity,
+    get_config_with_hash,
+    get_current_token,
+    publish_config_for_severity,
+    update_config_for_severity,
+)
 from app.utils.analytics_exporter import (
     export_analytics_summary,
     export_dashboard_kpi,
@@ -73,25 +81,77 @@ def preview_sla(payload: SLAPreviewRequest, current_user=Depends(require_enginee
     return result
 
 
-@router.get("/config", response_model=dict[str, SLASeverityConfig])
-def get_sla_config(current_user=Depends(require_engineer)):
-    """Get all SLA configuration by severity (BE-009)."""
+@router.get("/config")
+def get_sla_config(
+    include_hashes: bool = Query(
+        default=False, description="Include policy version + content hash for integrity (#37)"
+    ),
+    current_user=Depends(require_engineer),
+):
+    """Get all SLA configuration by severity (BE-009).
+
+    Set `include_hashes=true` to get policy_version, content_hash, and severity metadata (#37).
+    """
+    if include_hashes:
+        return get_all_config_with_hashes()
     return get_all_config()
 
 
-@router.get("/config/{severity}", response_model=SLASeverityConfig)
-def get_sla_config_by_severity(severity: str, current_user=Depends(require_engineer)):
-    """Get SLA configuration for a specific severity (BE-009)."""
+@router.get("/config/{severity}")
+def get_sla_config_by_severity(
+    severity: str,
+    include_hash: bool = Query(default=False, description="Include policy version + content hash (#37)"),
+    current_user=Depends(require_engineer),
+):
+    """Get SLA configuration for a specific severity (BE-009).
+
+    Set `include_hash=true` to get policy_version, content_hash, and severity (#37).
+    """
     try:
+        if include_hash:
+            return get_config_with_hash(severity)
         return get_config_for_severity(severity)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.put("/config/{severity}", response_model=SLASeverityConfig)
-def update_sla_config(severity: str, payload: SLAConfigUpdateRequest, current_user=Depends(require_admin)):
+@router.put("/config/{severity}")
+def update_sla_config(
+    severity: str,
+    payload: SLAConfigUpdateRequest,
+    expected_token: str | None = Query(default=None, description="Optimistic concurrency token (#37). Mismatch → 409."),
+    current_user=Depends(require_admin),
+):
+    """Update SLA config for a severity with optional optimistic concurrency (#37).
+
+    When `expected_token` is provided:
+    - The update is atomic: policy_version is bumped, content_hash is computed,
+      history is recorded.
+    - If another concurrent update has already occurred, returns 409 Conflict.
+
+    Without `expected_token`, the update is backward-compatible (no version bump).
+    """
     try:
+        if expected_token is not None:
+            policy, new_token, _history = publish_config_for_severity(
+                severity,
+                payload,
+                expected_token=expected_token,
+                published_by=getattr(current_user, "username", None),
+            )
+            return policy
         return update_config_for_severity(severity, payload)
+    except ConcurrencyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/config/{severity}/token")
+def get_config_publish_token(severity: str, current_user=Depends(require_admin)):
+    """Get the current publish token for optimistic concurrency control (#37)."""
+    try:
+        return {"severity": severity, "token": get_current_token(severity)}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

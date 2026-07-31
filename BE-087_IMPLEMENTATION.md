@@ -29,10 +29,7 @@ X-Webhook-Signature-Version: 1
 - **Immutability:** Same across all retry attempts and signature versions
 - **Location:** Top-level `timestamp` field in JSON payload
 
-**Three Usage Patterns:**
-1. **Idempotency:** Store `(webhook_id, timestamp)` to deduplicate retried deliveries
-2. **Freshness Validation** (optional): Reject timestamps > 1 hour old
-3. **Audit Trails:** Correlate event occurrence vs delivery/processing times
+
 
 ### 3. Future Signing Changes - Safe & Backward Compatible
 
@@ -43,13 +40,7 @@ X-Webhook-Signature-Version: 1
 - Old receivers work unchanged (ignore headers they don't understand)
 - New receivers upgrade incrementally
 
-**Evolutionary Path:**
-```
-Phase 1: Deploy dual-signing (v1 + v2)
-Phase 2: Monitor adoption of v2 via headers/metrics
-Phase 3: After 6+ months, announce v1 deprecation
-Phase 4: Remove v1 support in later release
-```
+
 
 ---
 

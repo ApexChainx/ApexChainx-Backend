@@ -1,8 +1,43 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import Severity
+
+
+class SLACalculationError(BaseModel):
+    """Error branch for SLA computation failures.
+
+    Returned when compute_device_sla encounters a recoverable error
+    instead of raising an exception.  Consumers can pattern-match on
+    the discriminated type to avoid try/except in hot paths.
+    """
+
+    device_id: str
+    period: str
+    error_code: str
+    detail: str
+
+
+class SLACalculationResult(BaseModel):
+    """Structured result of compute_device_sla.
+
+    Replaces the loose dict previously returned so consumers get
+    compile-time guarantees and OpenAPI can reflect the exact shape.
+    """
+
+    device_id: str
+    period: str
+    period_start: str
+    period_end: str
+    total_outages: int = Field(ge=0)
+    violated_outages: int = Field(ge=0)
+    avg_mttr_minutes: float = Field(ge=0.0)
+    availability_percentage: float = Field(ge=0.0, le=100.0)
+    is_violated: bool
+    sla_thresholds: dict[str, float]
+    violation_reasons: list[str] = Field(default_factory=list)
+    outage_details: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SLAPreviewRequest(BaseModel):
@@ -24,6 +59,7 @@ class SLAResult(BaseModel):
                 "rating": "excellent",
                 "reason_code": "met_excellent",
                 "decision_trace": "MTTR 30 < 60 threshold, performance ratio 50%",
+                "compute_hash": "abc123def456",
             }
         }
     )
@@ -40,6 +76,7 @@ class SLAResult(BaseModel):
     threshold_source: str = Field(..., description="Source of threshold values (e.g., 'config', 'contract')")
     reason_code: str | None = Field(None, description="Machine-readable reason code for the decision")
     decision_trace: str | None = Field(None, description="Machine-readable decision trace for audit")
+    compute_hash: str | None = Field(None, description="SHA-256 hash of inputs for idempotent recompute (#35)")
 
 
 class SLASeverityConfig(BaseModel):
@@ -50,6 +87,19 @@ class SLASeverityConfig(BaseModel):
 
 class SLAConfigUpdateRequest(SLASeverityConfig):
     pass
+
+
+class SLAConfigHistoryEntry(BaseModel):
+    """Entry in the SLA config history audit log (#37)."""
+
+    severity: str
+    policy_version: int
+    threshold_minutes: int
+    penalty_per_minute: int
+    reward_base: int
+    content_hash: str
+    published_at: str
+    published_by: str | None = None
 
 
 class SLAPerformanceAggregation(BaseModel):
@@ -73,6 +123,14 @@ class SLATrendPoint(BaseModel):
     violations: int = Field(ge=0)
     rewards: float = Field(ge=0.0)
     penalties: float = Field(ge=0.0)
+
+
+class SLAPolicyContent(SLASeverityConfig):
+    """Full SLA policy config with content hash for integrity verification (#37)."""
+
+    severity: str
+    policy_version: int
+    content_hash: str
 
 
 class SLAAnalyticsSnapshot(BaseModel):
