@@ -2,9 +2,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-
 from app.utils.correlation_ctx import get_or_generate_correlation_id
-
 
 ALLOWED_CONTENT_TYPES = frozenset(
     {

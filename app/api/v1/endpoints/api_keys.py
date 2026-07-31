@@ -1,12 +1,11 @@
 from datetime import datetime
-from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import require_admin
 from app.db.session import get_db
-from app.core.security import require_admin
 from app.models.auth import AuthUser
 from app.services.api_key_store import create_api_key, list_api_keys, revoke_key
 from app.services.audit_log import audit_log

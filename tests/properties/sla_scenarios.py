@@ -9,11 +9,10 @@ Generates 60+ scenarios per severity/policy covering:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
-
 
 # ── Severity and policy version generators ──────────────────────────────
 
@@ -86,10 +85,10 @@ def edge_datetime_pair(draw: st.DrawFn) -> tuple[datetime, datetime]:  # type: i
     - Year boundary
     """
     edge_dates = [
-        datetime(2024, 2, 29, 10, 0, 0, tzinfo=timezone.utc),  # leap day
-        datetime(2024, 12, 31, 23, 59, 0, tzinfo=timezone.utc),  # year boundary
-        datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),  # year start
-        datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc),  # normal mid-year
+        datetime(2024, 2, 29, 10, 0, 0, tzinfo=UTC),  # leap day
+        datetime(2024, 12, 31, 23, 59, 0, tzinfo=UTC),  # year boundary
+        datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),  # year start
+        datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC),  # normal mid-year
     ]
 
     started = draw(st.sampled_from(edge_dates))

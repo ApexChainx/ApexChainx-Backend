@@ -34,7 +34,7 @@ jobs:
       #   p/owasp-top-ten   – OWASP Top 10 coverage
       - name: Run Semgrep
         run: |
-          semgrep ci \
+          semgrep scan \
             --config p/security-audit \
             --config p/python \
             --config p/owasp-top-ten \

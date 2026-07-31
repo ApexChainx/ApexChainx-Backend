@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
@@ -26,13 +26,13 @@ from app.services.sla.config import (
     publish_config_for_severity,
     update_config_for_severity,
 )
-from app.utils.cache import TTLCache
 from app.utils.analytics_exporter import (
     export_analytics_summary,
     export_dashboard_kpi,
     export_performance_aggregation,
     export_trends,
 )
+from app.utils.cache import TTLCache
 
 router = APIRouter()
 
@@ -220,9 +220,9 @@ def aggregate_sla_performance(
     """Get SLA performance aggregation with optional date range filtering (BE-009)."""
     resolved_site = site_id or site
     if start_date and start_date.tzinfo is not None:
-        start_date = start_date.astimezone(timezone.utc).replace(tzinfo=None)
+        start_date = start_date.astimezone(UTC).replace(tzinfo=None)
     if end_date and end_date.tzinfo is not None:
-        end_date = end_date.astimezone(timezone.utc).replace(tzinfo=None)
+        end_date = end_date.astimezone(UTC).replace(tzinfo=None)
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
@@ -384,9 +384,9 @@ def export_performance_aggregation_endpoint(
     """Export performance aggregation data in JSON or CSV format."""
     resolved_site = site_id or site
     if start_date and start_date.tzinfo is not None:
-        start_date = start_date.astimezone(timezone.utc).replace(tzinfo=None)
+        start_date = start_date.astimezone(UTC).replace(tzinfo=None)
     if end_date and end_date.tzinfo is not None:
-        end_date = end_date.astimezone(timezone.utc).replace(tzinfo=None)
+        end_date = end_date.astimezone(UTC).replace(tzinfo=None)
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date cannot be after end_date")

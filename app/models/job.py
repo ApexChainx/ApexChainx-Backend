@@ -1,7 +1,9 @@
 import enum
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum as SAEnum, Float, JSON
+from datetime import UTC, datetime
+
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.db.base_class import Base
@@ -41,5 +43,5 @@ class Job(Base):
     last_retried_at = Column(DateTime, nullable=True)  # When the job was last retried
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)

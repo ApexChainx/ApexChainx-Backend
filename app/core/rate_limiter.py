@@ -11,7 +11,7 @@ import logging
 import random
 from collections import defaultdict
 from time import time
-from typing import Dict, List
+from typing import ClassVar
 
 import redis.asyncio as redis
 from redis.exceptions import RedisError
@@ -39,7 +39,7 @@ return 1
 
 
 class SimpleRateLimiter:
-    _shared: Dict[str, List[float]] = defaultdict(list)
+    _shared: ClassVar[dict[str, list[float]]] = defaultdict(list)
 
     def __init__(self) -> None:
         self.requests = SimpleRateLimiter._shared
@@ -78,7 +78,7 @@ class RedisRateLimiter:
 
         encoded_key = self._key_namespace(key)
         now_ts = int(time())
-        member = f"{now_ts}-{random.random()}"
+        member = f"{now_ts}-{random.random()}"  # nosec B311 - unique sorted-set member, not security
         result = await self.client.eval(
             RATE_LIMITER_LUA,
             1,

@@ -1,27 +1,16 @@
-issue/114-117-webhook-concurrency-canonical-json
-from datetime import datetime, timezone
+import hashlib
+from datetime import UTC, datetime
 from typing import Any
-import hashlib
-from sqlalchemy.orm import Session
-import hashlib
-import json
-from datetime import datetime, timezone
-from typing import Any, Optional
 
-main
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.utils.correlation_ctx import get_correlation_id
-issue/114-117-webhook-concurrency-canonical-json
-from app.services.formatters import canonical_json
-
+from app.db.session import AuditSessionLocal, SessionLocal
 from app.models.orm.audit_log import AuditLogORM
-main
+from app.services.formatters import canonical_json
 from app.services.scrubber import scrub_details
-
-from app.db.session import SessionLocal, AuditSessionLocal
+from app.utils.correlation_ctx import get_correlation_id
 
 # --- SLA Settlement Audit Event Types ---
 SLA_SETTLEMENT_INITIATED = "sla_settlement_initiated"
@@ -68,7 +57,7 @@ class AuditLogService:
         if correlation_id is None:
             correlation_id = get_correlation_id()
 
-        created_at = datetime.now(timezone.utc)
+        created_at = datetime.now(UTC)
         last_entry = db.query(AuditLogORM).order_by(desc(AuditLogORM.id)).first()
         prev_hash = last_entry.entry_hash if last_entry else None
         entry_hash = self._compute_entry_hash(prev_hash, event_type, safe_details, correlation_id, created_at)

@@ -5,16 +5,14 @@ Run: pytest tests/benchmarks/ --benchmark-only
 Acceptance: <30s nightly, >1.2x median fails (regression alert).
 """
 
-from datetime import datetime, timezone
-
 import pytest
 
 from app.services.metrics import MetricsRegistry
-from app.services.sla.sla_calculator import SLACalculator
 from app.services.sla.config import SLA_CONFIG
-
+from app.services.sla.sla_calculator import SLACalculator
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def metrics_registry() -> MetricsRegistry:
@@ -35,6 +33,7 @@ def sla_calculator() -> SLACalculator:
 
 
 # ── Benchmark 1: SLA calculator (hottest path) ──────────────────────────────
+
 
 def test_benchmark_sla_calculator_violated(benchmark, sla_calculator):
     """Benchmark SLA calculation for a violated SLA (critical severity)."""
@@ -77,6 +76,7 @@ def test_benchmark_sla_calculator_exceptional(benchmark, sla_calculator):
 
 # ── Benchmark 2: Metrics registry (hot path for observability) ──────────────
 
+
 def test_benchmark_increment_counter(benchmark, metrics_registry):
     """Benchmark counter increment (frequent hot-path operation)."""
     benchmark(metrics_registry.increment_counter, "requests_total", tags={"method": "GET"})
@@ -108,6 +108,7 @@ def test_benchmark_metrics_summary(benchmark, metrics_registry):
 
 # ── Benchmark 3: SLA config hash computation ─────────────────────────────────
 
+
 def test_benchmark_sla_config_hash(benchmark):
     """Benchmark SLA config content hash computation (integrity verification)."""
     from app.services.sla.config import _compute_content_hash
@@ -123,10 +124,12 @@ def test_benchmark_sla_config_hash(benchmark):
 
 # ── Benchmark 4: Webhook header building ─────────────────────────────────────
 
+
 def test_benchmark_webhook_header_building(benchmark):
     """Benchmark webhook header generation (includes SHA-256 signing)."""
-    from app.services.webhook_service import _build_headers
     from unittest.mock import MagicMock
+
+    from app.services.webhook_service import _build_headers
 
     webhook = MagicMock()
     webhook.secret = "test-secret-key-for-benchmarking"
@@ -141,10 +144,12 @@ def test_benchmark_webhook_header_building(benchmark):
 
 # ── Benchmark 5: Period parsing ──────────────────────────────────────────────
 
+
 def test_benchmark_period_parsing_monthly(benchmark):
     """Benchmark period parsing for monthly SLA computation."""
-    from app.services.sla_service import SLAOrchestrator
     from unittest.mock import MagicMock
+
+    from app.services.sla_service import SLAOrchestrator
 
     orchestrator = SLAOrchestrator(MagicMock())
     start, end = benchmark(orchestrator.parse_period, "2024-06")
@@ -154,8 +159,9 @@ def test_benchmark_period_parsing_monthly(benchmark):
 
 def test_benchmark_period_parsing_quarterly(benchmark):
     """Benchmark period parsing for quarterly SLA computation."""
-    from app.services.sla_service import SLAOrchestrator
     from unittest.mock import MagicMock
+
+    from app.services.sla_service import SLAOrchestrator
 
     orchestrator = SLAOrchestrator(MagicMock())
     start, end = benchmark(orchestrator.parse_period, "2024-Q3")

@@ -1,11 +1,10 @@
-from typing import Optional
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthUser
 from app.models.enums import Role
 from app.models.orm.user import UserORM
-
 
 
 def user_orm_to_pydantic(orm: UserORM) -> AuthUser:
@@ -65,11 +64,11 @@ class UserRepository:
             return False
         if user.locked_until is None:
             return False
-        return user.locked_until > datetime.now(timezone.utc)
+        return user.locked_until > datetime.now(UTC)
 
     def update_profile(
-        self, user_id: str, full_name: Optional[str] = None, stellar_wallet: Optional[str] = None
-    ) -> Optional[UserORM]:
+        self, user_id: str, full_name: str | None = None, stellar_wallet: str | None = None
+    ) -> UserORM | None:
         """Update mutable profile fields. Returns updated ORM or None if not found."""
         user = self.get_by_id(user_id)
         if not user:

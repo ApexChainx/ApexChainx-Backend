@@ -4,8 +4,8 @@ BE-042: Provides job retention and cleanup policies to prevent unbounded growth
 of job records and maintain database performance.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
@@ -43,8 +43,8 @@ class JobCleanupService:
         successful_retention_days = successful_retention_days or self.SUCCESSFUL_JOB_RETENTION_DAYS
         failed_retention_days = failed_retention_days or self.FAILED_JOB_RETENTION_DAYS
 
-        cutoff_success = datetime.now(timezone.utc) - timedelta(days=successful_retention_days)
-        cutoff_failed = datetime.now(timezone.utc) - timedelta(days=failed_retention_days)
+        cutoff_success = datetime.now(UTC) - timedelta(days=successful_retention_days)
+        cutoff_failed = datetime.now(UTC) - timedelta(days=failed_retention_days)
 
         total_deleted = 0
         stats = {
@@ -139,7 +139,7 @@ class JobCleanupService:
 
     def get_retention_stats(self) -> dict:
         """Get current job retention statistics without deleting anything."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Count jobs by status and age
         stats = {

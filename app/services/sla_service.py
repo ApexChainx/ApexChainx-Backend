@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+import re
+from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ApexTransientError
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
-from app.models.sla import SLACalculationResult, SLACalculationError
+from app.models.sla import SLACalculationResult
 from app.services.audit_log import audit_log
 from app.services.metrics import increment_counter
 
@@ -63,7 +65,7 @@ class SLAOrchestrator:
             detail=f"Unsupported period format: '{period}'. Expected 'YYYY-MM' or 'YYYY-QN'.",
         )
 
-    def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> List[OutageORM]:
+    def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> list[OutageORM]:
         """Get all outages for a device within the specified period."""
         return (
             self.db.query(OutageORM)
@@ -73,7 +75,7 @@ class SLAOrchestrator:
             .all()
         )
 
-    def calculate_mttr(self, outages: List[OutageORM]) -> float:
+    def calculate_mttr(self, outages: list[OutageORM]) -> float:
         """Calculate Mean Time To Resolution for outages."""
         if not outages:
             return 0.0
@@ -86,13 +88,13 @@ class SLAOrchestrator:
                 mttr_values.append(mttr_minutes)
             elif outage.started_at:
                 # For unresolved outages, calculate time since start
-                duration = datetime.now(timezone.utc) - outage.started_at
+                duration = datetime.now(UTC) - outage.started_at
                 mttr_minutes = duration.total_seconds() / 60
                 mttr_values.append(mttr_minutes)
 
         return round(sum(mttr_values) / len(mttr_values), 2) if mttr_values else 0.0
 
-    def calculate_availability(self, outages: List[OutageORM], period_days: int) -> float:
+    def calculate_availability(self, outages: list[OutageORM], period_days: int) -> float:
         """Calculate availability percentage for the period."""
         if not outages:
             return 100.0
@@ -106,13 +108,13 @@ class SLAOrchestrator:
                 downtime_minutes += downtime.total_seconds() / 60
             elif outage.started_at:
                 # For unresolved outages, calculate downtime since start
-                downtime = datetime.now(timezone.utc) - outage.started_at
+                downtime = datetime.now(UTC) - outage.started_at
                 downtime_minutes += downtime.total_seconds() / 60
 
         availability = max(0.0, (total_minutes - downtime_minutes) / total_minutes * 100)
         return round(availability, 2)
 
-    def check_sla_violations(self, availability: float, mttr: float, sla_thresholds: Dict[str, float]) -> bool:
+    def check_sla_violations(self, availability: float, mttr: float, sla_thresholds: dict[str, float]) -> bool:
         """Check if SLA thresholds are violated."""
         availability_threshold = sla_thresholds.get("availability", 99.9)
         mttr_threshold = sla_thresholds.get("mttr", 60.0)  # minutes
@@ -121,7 +123,7 @@ class SLAOrchestrator:
 
 
 def compute_device_sla(
-    db: Session, device_id: str, period: str, sla_thresholds: Optional[Dict[str, float]] = None
+    db: Session, device_id: str, period: str, sla_thresholds: dict[str, float] | None = None
 ) -> SLACalculationResult:
     """
     Compute SLA metrics for a device with real domain orchestration.
@@ -138,7 +140,7 @@ def compute_device_sla(
     """
     orchestrator = SLAOrchestrator(db)
     increment_counter("sla_recomputation_total", tags={"device_id": device_id, "period": period})
-    
+
     # Default SLA thresholds if not provided
     if sla_thresholds is None:
         sla_thresholds = {
@@ -242,7 +244,7 @@ def compute_device_sla(
 def record_sla_settlement_audit_events(
     device_id: str,
     period: str,
-    sla_result: Union[SLACalculationResult, dict[str, Any]],
+    sla_result: SLACalculationResult | dict[str, Any],
     *,
     status: str = "initiated",
     error: str | None = None,

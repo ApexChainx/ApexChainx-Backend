@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.utils.correlation_ctx import get_correlation_id, get_or_generate_correlation_id
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 
 
 class ProblemDetail(BaseModel):
@@ -73,9 +73,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     )
 
 
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Handle Pydantic validation errors with field-level ``errors[].pointer``."""
     errors = []
     for e in exc.errors():

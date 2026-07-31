@@ -1,23 +1,20 @@
 import json
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
-from sqlalchemy import cast, or_, String
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import hash_token, require_admin
 from app.db.session import get_db
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
-issue/114-117-webhook-concurrency-canonical-json
-from app.services.formatters import canonical_json
 
 from app.services.audit_log import audit_log
-main
+from app.services.formatters import canonical_json
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.utils.network_validation import validate_webhook_url
 
@@ -313,15 +310,13 @@ def delete_webhook(webhook_id: UUID, current_user=Depends(require_admin), db: Se
 @router.get("/{webhook_id}/deliveries", response_model=PaginatedWebhookDeliveries)
 def list_webhook_deliveries(
     webhook_id: UUID,
-    status: Optional[WebhookDeliveryStatus] = Query(None, description="Filter by delivery status."),
-    event: Optional[WebhookEvent] = Query(None, description="Filter by delivery event type."),
-    search: Optional[str] = Query(None, description="Search delivery id, error message, or response status code."),
-    created_after: Optional[datetime] = Query(None, description="Return deliveries created after this timestamp."),
-    created_before: Optional[datetime] = Query(None, description="Return deliveries created before this timestamp."),
-    delivered_after: Optional[datetime] = Query(None, description="Return deliveries delivered after this timestamp."),
-    delivered_before: Optional[datetime] = Query(
-        None, description="Return deliveries delivered before this timestamp."
-    ),
+    status: WebhookDeliveryStatus | None = Query(None, description="Filter by delivery status."),
+    event: WebhookEvent | None = Query(None, description="Filter by delivery event type."),
+    search: str | None = Query(None, description="Search delivery id, error message, or response status code."),
+    created_after: datetime | None = Query(None, description="Return deliveries created after this timestamp."),
+    created_before: datetime | None = Query(None, description="Return deliveries created before this timestamp."),
+    delivered_after: datetime | None = Query(None, description="Return deliveries delivered after this timestamp."),
+    delivered_before: datetime | None = Query(None, description="Return deliveries delivered before this timestamp."),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, description="Number of records to skip"),  # BE-083
     db: Session = Depends(get_db),
@@ -385,7 +380,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
 
     # Store old secret in previous_secrets with expiry
     if webhook.secret:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(hours=settings.WEBHOOK_SECRET_GRACE_HOURS)
         previous_entry = {
             "hashed_secret": hash_token(webhook.secret),
@@ -400,7 +395,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     new_secret = secrets.token_hex(32)
     webhook.secret = new_secret
     webhook.secret_version = old_secret_version + 1
-    webhook.last_secret_rotation_at = datetime.now(timezone.utc)
+    webhook.last_secret_rotation_at = datetime.now(UTC)
 
     db.commit()
 
@@ -454,7 +449,7 @@ def retry_delivery(webhook_id: UUID, delivery_id: UUID, db: Session = Depends(ge
 # BE-086: Dead-letter handling endpoints
 
 
-@router.get("/{webhook_id}/dead-letter-deliveries", response_model=List[WebhookDeliveryResponse])
+@router.get("/{webhook_id}/dead-letter-deliveries", response_model=list[WebhookDeliveryResponse])
 def list_dead_letter_deliveries(
     webhook_id: UUID,
     limit: int = Query(50, ge=1, le=200),

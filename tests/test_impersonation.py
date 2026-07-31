@@ -3,9 +3,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.db.session import SessionLocal
-from app.models.auth import RegisterRequest, LoginRequest
+from app.main import app
+from app.models.auth import LoginRequest, RegisterRequest
 from app.models.orm.user import UserORM
 from app.services.auth_store import AuthStore
 

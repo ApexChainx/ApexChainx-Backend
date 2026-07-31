@@ -9,13 +9,10 @@ from app.core.config import settings
 from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
 from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
-from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.audit_log import audit_log
-from app.db.session import SessionLocal
-from app.core.config import settings
 
 TOKEN_TTL_SECONDS = 3600
 

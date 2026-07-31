@@ -13,7 +13,7 @@ import argparse
 import logging
 import random
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def _seed_devices(db, count: int, rng: random.Random) -> int:
                 description="Synthetic outage for dev seeding",
                 severity=rng.choice(severities),
                 status="resolved",
-                detected_at=datetime.now(timezone.utc) - timedelta(days=rng.randint(0, 90)),
+                detected_at=datetime.now(UTC) - timedelta(days=rng.randint(0, 90)),
             )
             repo.create_or_get_existing(payload)
             created += 1
@@ -93,7 +93,7 @@ def _seed_outages(db, count: int, rng: random.Random, device_ids: list[str]) -> 
     for _ in range(count):
         device_id = rng.choice(device_ids) if device_ids else f"site-{rng.randint(0, 9999):04d}"
         site_name = device_id.replace("site-", "dev-site-")
-        detected_at = datetime.now(timezone.utc) - timedelta(days=rng.randint(0, 365))
+        detected_at = datetime.now(UTC) - timedelta(days=rng.randint(0, 365))
         resolved_at = detected_at + timedelta(minutes=rng.randint(5, 480))
         try:
             payload = OutageCreate(
@@ -151,6 +151,7 @@ def _seed_payments(db, count: int, rng: random.Random, device_ids: list[str]) ->
 def _clear_existing(db) -> dict[str, int]:
     """Remove existing data for idempotent --force runs. Returns counts cleared."""
     from sqlalchemy import func
+
     from app.models.orm.outage import OutageORM
 
     counts: dict[str, int] = {}
@@ -170,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(message)s")
 
-    rng = random.Random(args.seed)
+    rng = random.Random(args.seed)  # nosec B311 - deterministic dev seed data
     logger.info(
         "Seeding dev DB with seed=%d  outages=%d  devices=%d  payments=%d  force=%s",
         args.seed,

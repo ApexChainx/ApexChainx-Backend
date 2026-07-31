@@ -4,11 +4,9 @@ import hashlib
 import json
 import secrets
 from copy import deepcopy
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from app.models.sla import SLAConfigHistoryEntry, SLAConfigUpdateRequest, SLAPolicyContent, SLASeverityConfig
-
 
 SLA_CONFIG: dict[str, dict[str, int]] = {
     "critical": {
@@ -136,8 +134,8 @@ def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest) -
 def publish_config_for_severity(
     severity: str,
     payload: SLAConfigUpdateRequest,
-    expected_token: Optional[str] = None,
-    published_by: Optional[str] = None,
+    expected_token: str | None = None,
+    published_by: str | None = None,
 ) -> tuple[SLAPolicyContent, str, SLAConfigHistoryEntry]:
     """Atomically publish a new policy version with optimistic concurrency (#37).
 
@@ -179,7 +177,7 @@ def publish_config_for_severity(
     content_hash = _compute_content_hash(normalized, new_config, new_version)
 
     # Build history entry
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     history = SLAConfigHistoryEntry(
         severity=normalized,
         policy_version=new_version,
@@ -205,5 +203,3 @@ def publish_config_for_severity(
 
 class ConcurrencyError(Exception):
     """Raised when an optimistic concurrency check fails (→ 409)."""
-
-    pass

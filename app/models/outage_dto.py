@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -85,8 +84,8 @@ class OutageCreate(BaseModel):
         if v.tzinfo is None:
             raise ValidationError("detected_at must be timezone-aware")
         # Normalize to UTC
-        if v.tzinfo != timezone.utc:
-            v = v.astimezone(timezone.utc)
+        if v.tzinfo != UTC:
+            v = v.astimezone(UTC)
         return v
 
 
@@ -147,8 +146,8 @@ class BulkOutageCreate(BaseModel):
 class ImportFieldError(BaseModel):
     """A single field-level validation error within an import row."""
 
-    field: Optional[str] = None
-    type: Optional[str] = None
+    field: str | None = None
+    type: str | None = None
     message: str
 
 

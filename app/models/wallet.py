@@ -3,7 +3,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-
 _STELLAR_PUBLIC_KEY_RE = re.compile(r"^G[A-Z2-7]{55}$")
 
 

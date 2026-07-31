@@ -1,19 +1,15 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from fastapi import FastAPI, Request
-issue/114-117-webhook-concurrency-canonical-json
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from fastapi.responses import JSONResponse, RedirectResponse
-main
+from pydantic import ValidationError
 from redis import ConnectionError, Redis, TimeoutError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from pydantic import ValidationError
-from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
-from starlette.types import ASGIApp, Receive, Scope, Send
-
-from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import ALL_METHODS, SAFELISTED_HEADERS, CORSMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.exception_handlers import (
     general_exception_handler,
@@ -26,20 +22,20 @@ from app.core.exceptions import (
     ApexException,
     ApexNotFoundError,
     ApexTransientError,
+    integrity_error_handler,
+    pydantic_validation_handler,
 )
-from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
+from app.core.logging_config import configure_logging
 from app.core.tracing import init_tracing, instrument_app
-from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
 from app.db.session import engine
-from app.services.health_report import build_readiness_report
+from app.middleware.api_version import ApiVersionMiddleware
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
-from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
-from app.middleware.api_version import ApiVersionMiddleware
-
+from app.services.health_report import build_readiness_report
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 
 configure_logging()
 validate_critical_settings(settings)
@@ -148,9 +144,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(ApiVersionMiddleware)
 
 
-from app.utils.correlation_ctx import get_or_generate_correlation_id
-
-
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
     correlation_id = get_or_generate_correlation_id()
@@ -210,13 +203,13 @@ async def apex_transient_error_handler(request: Request, exc: ApexTransientError
 # Health checks
 @app.get("/health/liveness")
 def liveness():
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
 
 @app.get("/health/readiness")
 async def readiness():
     report = build_readiness_report(engine, settings.CELERY_BROKER_URL)
-    report["timestamp"] = datetime.now(timezone.utc).isoformat()
+    report["timestamp"] = datetime.now(UTC).isoformat()
     return report
 
 
@@ -228,6 +221,7 @@ def health_check():
         status_code=308,
         headers={"Deprecation": "true"},
     )
+
 
 # Register RFC 7807 exception handlers
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

@@ -1,6 +1,7 @@
 """Scheduled task to expire old webhook secrets after the grace period."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from app.db.session import SessionLocal
 from app.models.webhook import Webhook
 

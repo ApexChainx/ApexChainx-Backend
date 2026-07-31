@@ -1,17 +1,16 @@
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from celery import Task
 
-from app.tasks.celery_app import celery_app
-
+from app.core.exceptions import ApexTransientError
 from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent
 from app.services.audit_log import audit_log
-from app.core.exceptions import ApexTransientError
+from app.tasks.celery_app import celery_app
 from app.utils.correlation_ctx import set_correlation_id
 from app.utils.logging import get_structured_logger
 
@@ -35,7 +34,7 @@ class DatabaseTask(Task):
         job = self._get_job(db, celery_task_id)
         if job:
             job.status = JobStatus.STARTED
-            job.started_at = datetime.now(timezone.utc)
+            job.started_at = datetime.now(UTC)
             db.commit()
 
     def _mark_success(self, db, celery_task_id: str, result: Any):
@@ -44,7 +43,7 @@ class DatabaseTask(Task):
             job.status = JobStatus.SUCCESS
             job.result = json.dumps(result)
             job.progress = 100.0
-            job.finished_at = datetime.now(timezone.utc)
+            job.finished_at = datetime.now(UTC)
             db.commit()
 
     def _mark_failure(self, db, celery_task_id: str, error: str):
@@ -52,7 +51,7 @@ class DatabaseTask(Task):
         if job:
             job.status = JobStatus.FAILURE
             job.error = error
-            job.finished_at = datetime.now(timezone.utc)
+            job.finished_at = datetime.now(UTC)
             db.commit()
 
     def _update_progress(self, db, celery_task_id: str, progress: float, details: dict[str, Any] | None = None):
@@ -107,8 +106,8 @@ class DatabaseTask(Task):
     default_retry_delay=30,
 )
 def compute_sla_for_device(
-    self: DatabaseTask, device_id: str, period: str, correlation_id: Optional[str] = None
-) -> Dict[str, Any]:
+    self: DatabaseTask, device_id: str, period: str, correlation_id: str | None = None
+) -> dict[str, Any]:
     """
     Compute SLA metrics for a single device over a given period.
     Triggers SLA violation webhooks if thresholds are breached.

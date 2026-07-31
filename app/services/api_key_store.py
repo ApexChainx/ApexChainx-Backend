@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -12,7 +11,7 @@ from app.models.orm.api_key import ApiKeyORM
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _generate_id() -> str:
@@ -49,7 +48,7 @@ def create_api_key(
     return orm, raw_key
 
 
-def get_key_by_hash(db: Session, hashed_key: str) -> Optional[ApiKeyORM]:
+def get_key_by_hash(db: Session, hashed_key: str) -> ApiKeyORM | None:
     return db.query(ApiKeyORM).filter(ApiKeyORM.hashed_key == hashed_key).first()
 
 

@@ -1,10 +1,11 @@
 import logging
-from typing import Any, Dict
+from typing import Any
 from uuid import UUID
 
+from app.core.exceptions import ApexTransientError
 from app.db.session import SessionLocal
 from app.services.audit_log import audit_log
-from app.core.exceptions import ApexTransientError
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def retry_pending_webhook_deliveries() -> dict[str, Any]:
     max_retries=3,
     default_retry_delay=15,
 )
-def trigger_sla_violation_async(self, sla_data: Dict[str, Any], event: str = "sla.violation") -> Dict[str, Any]:
+def trigger_sla_violation_async(self, sla_data: dict[str, Any], event: str = "sla.violation") -> dict[str, Any]:
     """
     Async task wrapper around webhook_service.trigger_sla_violation_webhooks.
     Called from SLA computation tasks to avoid blocking.

@@ -1,6 +1,5 @@
 import json
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 from uuid import UUID
 
 from celery.result import AsyncResult
@@ -15,7 +14,7 @@ from app.services.audit_log import audit_log
 from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
-from app.tasks.sla_tasks import enqueue_sla_computation, enqueue_bulk_sla_computation
+from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
 from app.utils.correlation_ctx import get_correlation_id
 from app.utils.logging import get_structured_logger
 
@@ -74,8 +73,8 @@ class JobRetentionStatsResponse(BaseModel):
 class JobCleanupRequest(BaseModel):
     """Request parameters for job cleanup."""
 
-    successful_retention_days: Optional[int] = None
-    failed_retention_days: Optional[int] = None
+    successful_retention_days: int | None = None
+    failed_retention_days: int | None = None
     dry_run: bool = False
 
 
@@ -429,7 +428,7 @@ def retry_job(
 
     # Increment retry count and update status
     job.retry_count += 1
-    job.last_retried_at = datetime.now(timezone.utc)
+    job.last_retried_at = datetime.now(UTC)
     job.error = None  # Clear previous error
     job.status = JobStatus.PENDING
     job.progress = 0.0
@@ -503,10 +502,12 @@ def retry_job(
 
     except (ValueError, KeyError, TypeError) as e:
         db.rollback()
-        logger.error("Failed to retry job due to data issue", job_id=str(job.id), error=str(e), correlation_id=correlation_id)
+        logger.error(
+            "Failed to retry job due to data issue", job_id=str(job.id), error=str(e), correlation_id=correlation_id
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to retry job due to invalid payload: {str(e)}",
+            detail=f"Failed to retry job due to invalid payload: {e!s}",
         )
     except Exception as e:
         db.rollback()

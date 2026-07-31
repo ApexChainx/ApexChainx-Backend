@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
-from typing import Literal, Optional
+from datetime import UTC, datetime
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import case, func, select, update
@@ -39,7 +39,7 @@ class SLARepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def find_by_compute_hash(self, outage_id: str, compute_hash: str) -> Optional[SLAResultORM]:
+    def find_by_compute_hash(self, outage_id: str, compute_hash: str) -> SLAResultORM | None:
         """Look up an existing SLA result by outage_id and compute_hash (#35)."""
         return (
             self.db.query(SLAResultORM)
@@ -322,7 +322,7 @@ class SLARepository:
             total_penalties=kpis.total_penalties,
             net_payout=kpis.net_payout,
             avg_mttr=perf.avg_mttr,
-            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            created_at=datetime.now(UTC).replace(tzinfo=None),
             checksum="",  # Temporary value, will be computed
         )
         orm.checksum = orm.compute_checksum()
@@ -388,7 +388,7 @@ class SLARepository:
             total_penalties=kpis.total_penalties,
             net_payout=kpis.net_payout,
             avg_mttr=perf.avg_mttr,
-            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            created_at=datetime.now(UTC).replace(tzinfo=None),
             checksum="",
         )
         orm.checksum = orm.compute_checksum()

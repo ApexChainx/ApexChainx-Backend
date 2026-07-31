@@ -4,18 +4,17 @@ import hmac
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
+from app.core.config import settings as app_settings
 from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
-from app.core.config import settings as app_settings
-from app.db.session import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -110,9 +109,9 @@ def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
 
 
 def get_current_user(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthUser:
+    from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
     from app.services.auth_store import AuthStore
     from app.services.token_revocation import is_revoked
-    from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 
     token = _extract_bearer_token(authorization)
 
@@ -170,9 +169,7 @@ def get_current_user_or_service(
             raise HTTPException(status_code=401, detail="Invalid API key")
         if key.revoked_at is not None:
             raise HTTPException(status_code=401, detail="API key has been revoked")
-        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(timezone.utc).replace(
-            tzinfo=None
-        ):
+        if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(UTC).replace(tzinfo=None):
             raise HTTPException(status_code=401, detail="API key has expired")
         return {
             "actor_type": "service",

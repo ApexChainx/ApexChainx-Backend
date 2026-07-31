@@ -1,10 +1,11 @@
 import hashlib
 import time
+
 from fastapi import Request
 
+from app.core.exceptions import ApexException
 from app.utils.correlation_ctx import get_or_generate_correlation_id, set_correlation_id
 from app.utils.logging import get_structured_logger
-from app.core.exceptions import ApexException
 
 logger = get_structured_logger("access")
 
@@ -13,6 +14,7 @@ def _hash_value(value: str | None) -> str | None:
     if value is None:
         return None
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
 
 # Add per-user API rate limits using Redis sliding-window counter
 class CorrelationMiddleware:

@@ -4,7 +4,7 @@ Maps to the ``wallets`` table defined by migration ``0010_wallet_persistence``.
 Uses the same Column-based declarative style as the rest of the codebase.
 """
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 

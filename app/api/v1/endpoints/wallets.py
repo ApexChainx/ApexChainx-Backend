@@ -3,9 +3,11 @@
 All handlers now pass a request-scoped database session to WalletRegistry.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ApexConflictError
+from app.core.security import require_engineer
 from app.db.session import get_db
 from app.models.wallet import (
     Wallet,
@@ -17,8 +19,6 @@ from app.models.wallet import (
     WalletStatusResponse,
     WalletTrustlineResponse,
 )
-from app.core.exceptions import ApexConflictError
-from app.core.security import require_engineer
 from app.services.wallet_registry import WalletRegistry
 
 router = APIRouter()

@@ -6,7 +6,7 @@ Adds a streaming JSON import path for POST /outages/import.
 from __future__ import annotations
 
 import json
-from typing import Any, List
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,7 @@ def stream_import_outages(
     Falls back to standard json.loads for small payloads.
     """
     try:
-        rows: List[dict] = json.loads(raw_body)
+        rows: list[dict] = json.loads(raw_body)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return {"imported": 0, "failed_rows": [], "error": "invalid json"}
 
@@ -32,7 +32,7 @@ def stream_import_outages(
     if len(rows) > max_rows:
         rows = rows[:max_rows]
 
-    failed: List[dict] = []
+    failed: list[dict] = []
     imported = 0
 
     for i in range(0, len(rows), chunk_size):

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Header, HTTPException, status, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
 from app.db.session import get_db
@@ -17,7 +18,6 @@ from app.models.auth import (
     SessionInventoryResponse,
 )
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
-from app.core.config import settings
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
 from app.services.token_revocation import revoke
@@ -385,17 +385,15 @@ def impersonate_user(
 
 def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
     """Generate a short-lived impersonation access token."""
-    import time
-    import hmac
-    import hashlib
     import base64
+    import hashlib
+    import hmac
     import json
+    import time
 
     from app.core.config import settings as app_settings
 
-    header = base64.urlsafe_b64encode(
-        json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
-    ).rstrip(b"=").decode()
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
 
     now = int(time.time())
     payload_dict = {
@@ -406,9 +404,7 @@ def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
         "exp": now + 900,  # 15 minutes
         "scope": "impersonate",
     }
-    payload = base64.urlsafe_b64encode(
-        json.dumps(payload_dict).encode()
-    ).rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(json.dumps(payload_dict).encode()).rstrip(b"=").decode()
 
     signing_key = (app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
     signature = hmac.new(

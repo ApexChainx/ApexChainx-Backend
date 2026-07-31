@@ -1,7 +1,9 @@
-from datetime import datetime, timezone
-from fastapi import APIRouter, Response, Depends
-from app.services.metrics import metrics, _DEFAULT_LATENCY_BUCKETS
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, Response
+
 from app.core.security import require_engineer
+from app.services.metrics import _DEFAULT_LATENCY_BUCKETS, metrics
 
 router = APIRouter(prefix="/metrics", tags=["Metrics"])
 
@@ -91,12 +93,8 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
             cumulative = 0
             for bucket_bound in sorted(buckets.keys()):
                 cumulative += buckets[bucket_bound]
-                prometheus_lines.append(
-                    f'{metric_name}_bucket{{{base_labels}le="{bucket_bound}"}} {cumulative}'
-                )
-        prometheus_lines.append(
-            f'{metric_name}_bucket{{{base_labels}le="+Inf"}} {stats["count"]}'
-        )
+                prometheus_lines.append(f'{metric_name}_bucket{{{base_labels}le="{bucket_bound}"}} {cumulative}')
+        prometheus_lines.append(f'{metric_name}_bucket{{{base_labels}le="+Inf"}} {stats["count"]}')
 
     # ── Timers (exported as histograms with percentile estimation) ───────
     for key, stats in metrics_data["timers"].items():
@@ -128,18 +126,14 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
             else:
                 count = stats["count"]
 
-            prometheus_lines.append(
-                f'{metric_name}_seconds_bucket{{{base_labels}le="{bucket}"}} {count}'
-            )
+            prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="{bucket}"}} {count}')
 
-        prometheus_lines.append(
-            f'{metric_name}_seconds_bucket{{{base_labels}le="+Inf"}} {stats["count"]}'
-        )
+        prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="+Inf"}} {stats["count"]}')
 
     # ── Process metadata ──────────────────────────────────────────────────
     prometheus_lines.append("# HELP app_metrics_timestamp Timestamp of metrics collection")
     prometheus_lines.append("# TYPE app_metrics_timestamp gauge")
-    prometheus_lines.append(f"app_metrics_timestamp {datetime.now(timezone.utc).timestamp()}")
+    prometheus_lines.append(f"app_metrics_timestamp {datetime.now(UTC).timestamp()}")
 
     return Response(
         content="\n".join(prometheus_lines) + "\n",

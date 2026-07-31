@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from redis import Redis
 from time import time
 
 from redis import Redis

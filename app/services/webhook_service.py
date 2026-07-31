@@ -2,28 +2,25 @@ import json
 import logging
 import os
 import random
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Lock, Semaphore
-from typing import Any, Iterator
+from typing import Any
 from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.formatters import canonical_json
+from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
 )
-from app.services.webhook_breaker import breaker
-from app.core.config import settings
-issue/114-117-webhook-concurrency-canonical-json
-
-from app.core.tracing import get_current_traceparent, traced
-main
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import validate_webhook_url
 
@@ -76,9 +73,9 @@ def _apply_jitter(delay: float) -> float:
     if mode == "none":
         return delay
     if mode == "equal":
-        return delay * random.uniform(0.5, 1.5)
+        return delay * random.uniform(0.5, 1.5)  # nosec B311 - retry jitter, not security
     # "full" (default): random in [0, nominal*2], floor 1s
-    return max(1.0, random.uniform(0, delay * 2))
+    return max(1.0, random.uniform(0, delay * 2))  # nosec B311 - retry jitter, not security
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
@@ -112,7 +109,7 @@ def _build_headers(
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.now(timezone.utc).isoformat(),
+        "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
     }
 
     # Inject OTel trace context (traceparent) for distributed tracing
@@ -236,17 +233,18 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
         delivery.error_message = "Circuit breaker open, delivery deferred"
         delivery.next_retry_at = None
-        delivery.updated_at = datetime.now(timezone.utc)
+        delivery.updated_at = datetime.now(UTC)
         db.commit()
         logger.warning(
             "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
-            delivery.id, webhook.id,
+            delivery.id,
+            webhook.id,
         )
         return
 
     delivery.attempt_count += 1
     delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.now(timezone.utc)
+    delivery.updated_at = datetime.now(UTC)
     db.commit()
 
     with dispatch_limiter.acquire(str(webhook.id)):
@@ -254,7 +252,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS
-        delivery.delivered_at = datetime.now(timezone.utc)
+        delivery.delivered_at = datetime.now(UTC)
         delivery.next_retry_at = None
         logger.info(
             "Webhook delivery %s succeeded on attempt %d for webhook %s.",
@@ -275,7 +273,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             delay = _apply_jitter(raw_delay)
             # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
             delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
-            delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            delivery.next_retry_at = datetime.now(UTC) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(
                 "Webhook delivery %s failed (attempt %d). Retrying in %ds.",
@@ -285,7 +283,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             )
         else:
             delivery.status = WebhookDeliveryStatus.DEAD_LETTER
-            delivery.dead_lettered_at = datetime.now(timezone.utc)
+            delivery.dead_lettered_at = datetime.now(UTC)
             delivery.next_retry_at = None
             logger.error(
                 "Webhook delivery %s permanently failed after %d attempts. Marked as dead-letter.",
@@ -293,7 +291,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
                 delivery.attempt_count,
             )
 
-    delivery.updated_at = datetime.now(timezone.utc)
+    delivery.updated_at = datetime.now(UTC)
     db.commit()
 
 
@@ -324,7 +322,7 @@ def trigger_sla_violation_webhooks(
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
-    event_timestamp = datetime.now(timezone.utc).isoformat()
+    event_timestamp = datetime.now(UTC).isoformat()
 
     payload = {
         "schema_version": WEBHOOK_SCHEMA_VERSION,
@@ -356,7 +354,7 @@ def trigger_sla_violation_webhooks(
 
 
 def retry_pending_deliveries(db: Session) -> int:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
@@ -374,9 +372,7 @@ def retry_pending_deliveries(db: Session) -> int:
     return count
 
 
-def get_dead_letter_deliveries(
-    db: Session, webhook_id: UUID | None = None, limit: int = 100
-) -> list[WebhookDelivery]:
+def get_dead_letter_deliveries(db: Session, webhook_id: UUID | None = None, limit: int = 100) -> list[WebhookDelivery]:
     """Get dead-lettered deliveries for auditing and remediation."""
     query = (
         db.query(WebhookDelivery)
@@ -410,7 +406,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
     delivery.response_status_code = None
     delivery.response_body = None
     delivery.delivered_at = None
-    delivery.updated_at = datetime.now(timezone.utc)
+    delivery.updated_at = datetime.now(UTC)
 
     db.commit()
 
@@ -441,9 +437,7 @@ def replay_deliveries_by_event_context(
                 payload = json.loads(delivery.payload)
                 data = payload.get("data", {})
 
-                if device_id and data.get("device_id") == device_id:
-                    matching_deliveries.append(delivery)
-                elif outage_id and data.get("outage_id") == outage_id:
+                if device_id and data.get("device_id") == device_id or outage_id and data.get("outage_id") == outage_id:
                     matching_deliveries.append(delivery)
             except (json.JSONDecodeError, TypeError):
                 continue

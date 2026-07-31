@@ -7,8 +7,7 @@ Provides durable wallet identity with uniqueness enforcement:
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -53,11 +52,11 @@ class WalletRepository:
 
     # ── Read ──────────────────────────────────────────────────────────────
 
-    def get_by_user_id(self, user_id: str) -> Optional[WalletORM]:
+    def get_by_user_id(self, user_id: str) -> WalletORM | None:
         """Look up a wallet by user_id."""
         return self.db.query(WalletORM).filter(WalletORM.user_id == user_id).first()
 
-    def get_by_public_key(self, public_key: str) -> Optional[WalletORM]:
+    def get_by_public_key(self, public_key: str) -> WalletORM | None:
         """Look up a wallet by Stellar public key."""
         return self.db.query(WalletORM).filter(WalletORM.public_key == public_key).first()
 
@@ -67,9 +66,9 @@ class WalletRepository:
         self,
         wallet: WalletORM,
         *,
-        funded: Optional[bool] = None,
-        trustline_ready: Optional[bool] = None,
-        active: Optional[bool] = None,
+        funded: bool | None = None,
+        trustline_ready: bool | None = None,
+        active: bool | None = None,
     ) -> WalletORM:
         """Update mutable fields and refresh cached_at."""
         now = datetime.now(UTC)

@@ -8,14 +8,13 @@ deployments.
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
-from typing import Optional
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.exceptions import ApexConflictError
+from app.models.orm.wallet import WalletORM
 from app.models.wallet import (
     AssetBalance,
     Wallet,
@@ -27,7 +26,6 @@ from app.models.wallet import (
     WalletStatusResponse,
     WalletTrustlineResponse,
 )
-from app.models.orm.wallet import WalletORM
 from app.repositories.wallet_repository import WalletRepository
 from app.services.wallet_cache import WalletCache
 
@@ -76,7 +74,7 @@ class WalletRegistry:
         cls,
         db: Session,
         payload: WalletCreateRequest,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletCreateResponse:
         repo = WalletRepository(db)
 
@@ -109,7 +107,7 @@ class WalletRegistry:
         cls,
         db: Session,
         payload: WalletLinkRequest,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet:
         """Link a wallet to a user with comprehensive conflict detection (BE-032).
 
@@ -173,7 +171,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch from cache or DB, update cache on miss."""
         repo = WalletRepository(db)
@@ -193,7 +191,7 @@ class WalletRegistry:
         cls,
         db: Session,
         address: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch by public key from cache or DB."""
         if cache:
@@ -220,7 +218,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet | None:
         return cls._fetch_wallet(db, user_id, cache=cache)
 
@@ -229,7 +227,7 @@ class WalletRegistry:
         cls,
         db: Session,
         address: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletBalanceResponse | None:
         wallet = cls._fetch_by_address(db, address, cache=cache)
         if not wallet:
@@ -260,7 +258,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletStatusResponse | None:
         wallet = cls.get_wallet(db, user_id, cache=cache)
         if not wallet:
@@ -283,7 +281,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletTrustlineResponse | None:
         wallet = cls.get_wallet(db, user_id, cache=cache)
         if not wallet:
@@ -303,7 +301,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletFundingStateResponse | None:
         wallet = cls.get_wallet(db, user_id, cache=cache)
         if not wallet:

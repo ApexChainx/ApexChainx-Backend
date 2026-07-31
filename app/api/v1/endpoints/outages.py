@@ -83,9 +83,13 @@ def list_outages(
     search: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    page: int = Query(default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."),
+    page: int = Query(
+        default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
+    ),
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
-    cursor: str | None = Query(default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."),
+    cursor: str | None = Query(
+        default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
+    ),
     limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
     sort_by: OutageSortField = Query(
         default=OutageSortField.detected_at,

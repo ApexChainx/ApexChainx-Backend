@@ -9,20 +9,19 @@ import io
 import json
 import tarfile
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.orm.user import UserORM
 from app.models.orm.audit_log import AuditLogORM
-from app.repositories.user_repository import UserRepository
+from app.models.orm.user import UserORM
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.services.audit_log import audit_log
 
 
-def _serialize_datetime(dt: Optional[datetime]) -> Optional[str]:
+def _serialize_datetime(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     return dt.isoformat()
@@ -46,9 +45,7 @@ def export_user_data(db: Session, user: UserORM) -> dict[str, Any]:
     # Collect audit log entries (limit to most recent 1 000 for performance)
     audit_entries = (
         db.query(AuditLogORM)
-        .filter(
-            (AuditLogORM.email == user.email) | (AuditLogORM.actor_id == user.id)
-        )
+        .filter((AuditLogORM.email == user.email) | (AuditLogORM.actor_id == user.id))
         .order_by(AuditLogORM.created_at.desc())
         .limit(1000)
         .all()
@@ -64,7 +61,7 @@ def export_user_data(db: Session, user: UserORM) -> dict[str, Any]:
     ]
 
     export_payload = {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "user": user_data,
         "audit_logs": audit_logs,
         "audit_log_count": len(audit_logs),
@@ -116,9 +113,9 @@ def erase_user_data(db: Session, user: UserORM) -> dict[str, Any]:
     # Pseudonymise personal fields
     user.email = f"erased-{user.id}@deleted.local"
     user.full_name = f"Erased User {user.id[:8]}"
-    user.hashed_password = ""
+    user.hashed_password = ""  # nosec B105 - erasing credential, not a hardcoded password
     user.stellar_wallet = None
-    user.locked_until = datetime.now(timezone.utc)
+    user.locked_until = datetime.now(UTC)
     db.commit()
 
     audit_log.log_event(

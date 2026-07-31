@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
+
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 
 
 class ApexException(Exception):
@@ -46,20 +48,18 @@ class ApexTransientError(ApexException):
 
 
 class ApexConflictError(ApexException):
-    def __init__(self, detail: str, fields: Optional[Dict[str, str]] = None):
+    def __init__(self, detail: str, fields: dict[str, str] | None = None):
         super().__init__(detail=detail, error_code="conflict", status_code=409)
         self.fields = fields or {}
-main
 
 
 class ApexValidationError(ApexException):
-    def __init__(self, detail: str, errors: Optional[List[Dict[str, Any]]] = None):
+    def __init__(self, detail: str, errors: list[dict[str, Any]] | None = None):
         super().__init__(detail=detail, error_code="validation_error", status_code=422)
         self.errors = errors or []
-main
 
 
-def _extract_integrity_fields(exc: IntegrityError) -> Dict[str, str]:
+def _extract_integrity_fields(exc: IntegrityError) -> dict[str, str]:
     # Use the first arg of exc.orig (the raw psycopg2/driver message) when available;
     # fall back to str(exc.orig) for other drivers.
     orig = exc.orig
@@ -67,7 +67,7 @@ def _extract_integrity_fields(exc: IntegrityError) -> Dict[str, str]:
         msg = str(orig.args[0])
     else:
         msg = str(orig)
-    fields: Dict[str, str] = {}
+    fields: dict[str, str] = {}
     if "Key (" in msg:
         for part in msg.split("Key ")[1:]:
             if " already exists" in part:
@@ -81,11 +81,11 @@ def _build_rfc7807(
     title: str,
     status: int,
     detail: str,
-    instance: Optional[str] = None,
+    instance: str | None = None,
     **extra: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     correlation_id = extra.pop("correlation_id", None) or get_or_generate_correlation_id()
-    body: Dict[str, Any] = {
+    body: dict[str, Any] = {
         "type": f"https://developer.apexchainx.io/errors/{status}",
         "title": title,
         "status": status,
@@ -122,11 +122,13 @@ async def pydantic_validation_handler(request: Request, exc: ValidationError) ->
     errors = []
     for err in raw:
         loc = " -> ".join(str(p) for p in err.get("loc", []))
-        errors.append({
-            "field": loc,
-            "message": err.get("msg", ""),
-            "code": err.get("type", ""),
-        })
+        errors.append(
+            {
+                "field": loc,
+                "message": err.get("msg", ""),
+                "code": err.get("type", ""),
+            }
+        )
     body = _build_rfc7807(
         title="Validation Error",
         status=422,

@@ -1,6 +1,6 @@
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -21,15 +21,14 @@ class OutageEventRepository:
             event_type=event_type,
             detail=json.dumps(detail) if detail else None,
             schema_version=CURRENT_SCHEMA_VERSION,
-            occurred_at=datetime.now(timezone.utc),
+            occurred_at=datetime.now(UTC),
         )
         self.db.add(orm)
         self.db.commit()
         self.db.refresh(orm)
         return orm
 
-
-# Add bulk Payments state-transition endpoint with all-or-nothing semantics
+    # Add bulk Payments state-transition endpoint with all-or-nothing semantics
     def list_for_outage(
         self,
         outage_id: str,
@@ -38,7 +37,7 @@ class OutageEventRepository:
         end_date: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         query = self.db.query(OutageEventORM).filter(OutageEventORM.outage_id == outage_id)
         if event_type:
             query = query.filter(OutageEventORM.event_type == event_type)

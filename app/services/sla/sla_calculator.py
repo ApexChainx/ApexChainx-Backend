@@ -2,6 +2,7 @@ import hashlib
 import time
 
 from app.models import SLAResult
+
 from ..metrics import record_histogram
 from .config import SLA_CONFIG, get_config_for_severity
 

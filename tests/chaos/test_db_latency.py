@@ -53,6 +53,7 @@ class TestDatabaseLatencyChaos:
         self._add_latency_toxic(50, 10)
         try:
             from app.db.session import engine
+
             start = time.time()
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
@@ -68,11 +69,13 @@ class TestDatabaseLatencyChaos:
             from tenacity import retry, stop_after_attempt, wait_fixed
 
             from app.db.session import engine
+
             @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
             def query():
                 with engine.connect() as conn:
                     conn.execute(text("SELECT 1"))
                     conn.commit()
+
             start = time.time()
             query()
             elapsed = (time.time() - start) * 1000
@@ -86,6 +89,7 @@ class TestDatabaseLatencyChaos:
             from sqlalchemy import exc as sa_exc
 
             from app.db.session import engine
+
             start = time.time()
             timeout = 5
             try:
@@ -108,6 +112,7 @@ class TestDatabaseLatencyChaos:
             from fastapi.testclient import TestClient
 
             from app.main import app
+
             client = TestClient(app)
             resp = client.get("/health/liveness")
             assert resp.status_code == 200

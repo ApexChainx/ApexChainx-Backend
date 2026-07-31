@@ -27,7 +27,7 @@ class SLAResultORM(Base):
         String(64), nullable=True
     )  # SHA-256 hash of (outage_id || started_at || resolved_at || policy_version) for idempotent recompute (#35)
 
-    disputes = relationship("SLADispute", back_populates="sla_result")
+    disputes = relationship("SLADispute", back_populates="sla_result", foreign_keys="SLADispute.sla_result_id")
 
     __table_args__ = (
         Index("ix_sla_results_outage_latest", "outage_id", "is_latest"),

@@ -4,11 +4,9 @@ Validates that compute_device_sla returns typed Pydantic models rather
 than loose dicts, and that OpenAPI can reflect the new shape.
 """
 
-from datetime import datetime
-
 import pytest
 
-from app.models.sla import SLACalculationResult, SLACalculationError
+from app.models.sla import SLACalculationError, SLACalculationResult
 
 
 class TestSLACalculationResult:

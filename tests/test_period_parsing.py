@@ -4,11 +4,12 @@ Validates that the strict regex supports any year for monthly and quarterly
 formats, and raises typed validation errors on bad input.
 """
 
-import pytest
 from datetime import datetime
 
-from app.services.sla_service import SLAOrchestrator
+import pytest
+
 from app.core.exceptions import ApexValidationError
+from app.services.sla_service import SLAOrchestrator
 
 
 def _make_orchestrator():

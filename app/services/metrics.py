@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import time
 import threading
+import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass
@@ -24,35 +24,35 @@ class MetricsRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._counters: Dict[str, float] = defaultdict(float)
-        self._gauges: Dict[str, float] = {}
-        self._histograms: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
-        self._histogram_buckets: Dict[str, Dict[float, int]] = defaultdict(lambda: defaultdict(int))
-        self._timers: Dict[str, List[float]] = defaultdict(list)
+        self._counters: dict[str, float] = defaultdict(float)
+        self._gauges: dict[str, float] = {}
+        self._histograms: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self._histogram_buckets: dict[str, dict[float, int]] = defaultdict(lambda: defaultdict(int))
+        self._timers: dict[str, list[float]] = defaultdict(list)
 
-    def increment_counter(self, name: str, value: float = 1.0, tags: Optional[Dict[str, str]] = None) -> None:
+    def increment_counter(self, name: str, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
         """Increment a counter metric."""
         with self._lock:
             key = self._make_key(name, tags)
             self._counters[key] += value
 
-    def set_gauge(self, name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
+    def set_gauge(self, name: str, value: float, tags: dict[str, str] | None = None) -> None:
         """Set a gauge metric value."""
         with self._lock:
             key = self._make_key(name, tags)
             self._gauges[key] = value
 
-    def record_histogram(self, name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
+    def record_histogram(self, name: str, value: float, tags: dict[str, str] | None = None) -> None:
         """Record a histogram value with automatic bucket tracking."""
         with self._lock:
             key = self._make_key(name, tags)
-            self._histograms[key].append(MetricPoint(datetime.now(timezone.utc), value, tags or {}))
+            self._histograms[key].append(MetricPoint(datetime.now(UTC), value, tags or {}))
             # Increment histogram buckets for Prometheus-compatible export
             for bucket_bound in _DEFAULT_LATENCY_BUCKETS:
                 if value <= bucket_bound:
                     self._histogram_buckets[key][bucket_bound] += 1
 
-    def record_timer(self, name: str, duration_ms: float, tags: Optional[Dict[str, str]] = None) -> None:
+    def record_timer(self, name: str, duration_ms: float, tags: dict[str, str] | None = None) -> None:
         """Record a timing measurement."""
         with self._lock:
             key = self._make_key(name, tags)
@@ -61,7 +61,7 @@ class MetricsRegistry:
             if len(self._timers[key]) > 1000:
                 self._timers[key] = self._timers[key][-1000:]
 
-    def _make_key(self, name: str, tags: Optional[Dict[str, str]] = None) -> str:
+    def _make_key(self, name: str, tags: dict[str, str] | None = None) -> str:
         """Create a unique key for a metric with optional tags."""
         if not tags:
             return name
@@ -72,7 +72,7 @@ class MetricsRegistry:
         """Get a summary of all metrics for exposure (JSON and Prometheus)."""
         with self._lock:
             summary: dict[str, Any] = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "counters": dict(self._counters),
                 "gauges": dict(self._gauges),
                 "histograms": {},
@@ -110,7 +110,7 @@ class MetricsRegistry:
 
             return summary
 
-    def _percentile(self, values: List[float], percentile: float) -> float:
+    def _percentile(self, values: list[float], percentile: float) -> float:
         """Calculate percentile of values."""
         if not values:
             return 0.0
@@ -126,7 +126,7 @@ metrics = MetricsRegistry()
 class TimerContext:
     """Context manager for timing operations."""
 
-    def __init__(self, name: str, tags: Optional[Dict[str, str]] = None) -> None:
+    def __init__(self, name: str, tags: dict[str, str] | None = None) -> None:
         self.name = name
         self.tags = tags
         self.start_time = None
@@ -141,22 +141,22 @@ class TimerContext:
             metrics.record_timer(self.name, duration_ms, self.tags)
 
 
-def timer(name: str, tags: Optional[Dict[str, str]] = None) -> TimerContext:
+def timer(name: str, tags: dict[str, str] | None = None) -> TimerContext:
     """Create a timer context manager."""
     return TimerContext(name, tags)
 
 
-def increment_counter(name: str, value: float = 1.0, tags: Optional[Dict[str, str]] = None) -> None:
+def increment_counter(name: str, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
     """Increment a counter metric."""
     metrics.increment_counter(name, value, tags)
 
 
-def set_gauge(name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
+def set_gauge(name: str, value: float, tags: dict[str, str] | None = None) -> None:
     """Set a gauge metric value."""
     metrics.set_gauge(name, value, tags)
 
 
-def record_histogram(name: str, value: float, tags: Optional[Dict[str, str]] = None) -> None:
+def record_histogram(name: str, value: float, tags: dict[str, str] | None = None) -> None:
     """Record a histogram value."""
     metrics.record_histogram(name, value, tags)
 

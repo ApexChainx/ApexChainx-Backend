@@ -1,10 +1,10 @@
 import itertools
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.api.v1.endpoints.webhooks import WebhookCreate
 from app.models.auth import LoginRequest, RegisterRequest
-from app.models.enums import Role, Severity, OutageStatus
+from app.models.enums import OutageStatus, Role, Severity
 from app.models.outage import Location, Outage
 from app.models.outage_dto import OutageCreate
 from app.models.payment import PaymentTransaction

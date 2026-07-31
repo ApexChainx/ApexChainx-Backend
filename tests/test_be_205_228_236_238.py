@@ -233,7 +233,8 @@ class TestWebhookRetryConfig(unittest.TestCase):
             patch("app.services.webhook_service.settings") as mock_settings,
             patch("app.services.webhook_service.datetime") as mock_dt,
         ):
-            from datetime import datetime as real_dt, timedelta
+            from datetime import datetime as real_dt
+            from datetime import timedelta
 
             mock_settings.WEBHOOK_RETRY_BASE_DELAYS = "9999,9999,9999"
             mock_settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS = 120

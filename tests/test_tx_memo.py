@@ -4,7 +4,6 @@ import pytest
 
 from app.services.tx_memo import MEMO_MAX_BYTES, TxMemo
 
-
 # ── Round-trip golden payloads ──────────────────────────────────────────
 
 GOLDEN_PAYLOADS = [

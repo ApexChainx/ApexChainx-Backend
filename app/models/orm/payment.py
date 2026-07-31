@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
 
@@ -20,7 +20,7 @@ class PaymentTransactionORM(Base):
     sla_result_id = Column(
         Integer, ForeignKey("sla_results.id", ondelete="SET NULL"), nullable=True, index=True, unique=True
     )
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
     retry_count = Column(Integer, nullable=False, default=0)
     last_retried_at = Column(DateTime(timezone=True), nullable=True)

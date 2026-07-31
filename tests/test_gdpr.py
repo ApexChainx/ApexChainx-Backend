@@ -7,8 +7,8 @@ import tarfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.db.session import SessionLocal
+from app.main import app
 from app.models.auth import RegisterRequest
 from app.services.auth_store import AuthStore
 

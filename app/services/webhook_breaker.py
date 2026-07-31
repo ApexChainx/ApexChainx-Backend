@@ -32,6 +32,7 @@ class CircuitBreaker:
 
     def _host_key(self, url: str) -> str:
         from urllib.parse import urlparse
+
         try:
             return urlparse(str(url)).hostname or str(url)
         except Exception:

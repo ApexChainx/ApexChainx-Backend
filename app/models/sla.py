@@ -1,4 +1,4 @@
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -74,9 +74,9 @@ class SLAResult(BaseModel):
     rating: Literal["exceptional", "excellent", "good", "poor"]
     policy_version: str = Field(..., description="Version of SLA policy used for this calculation")
     threshold_source: str = Field(..., description="Source of threshold values (e.g., 'config', 'contract')")
-    reason_code: Optional[str] = Field(None, description="Machine-readable reason code for the decision")
-    decision_trace: Optional[str] = Field(None, description="Machine-readable decision trace for audit")
-    compute_hash: Optional[str] = Field(None, description="SHA-256 hash of inputs for idempotent recompute (#35)")
+    reason_code: str | None = Field(None, description="Machine-readable reason code for the decision")
+    decision_trace: str | None = Field(None, description="Machine-readable decision trace for audit")
+    compute_hash: str | None = Field(None, description="SHA-256 hash of inputs for idempotent recompute (#35)")
 
 
 class SLASeverityConfig(BaseModel):
@@ -99,7 +99,7 @@ class SLAConfigHistoryEntry(BaseModel):
     reward_base: int
     content_hash: str
     published_at: str
-    published_by: Optional[str] = None
+    published_by: str | None = None
 
 
 class SLAPerformanceAggregation(BaseModel):

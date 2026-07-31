@@ -1,9 +1,7 @@
 import builtins
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -11,7 +9,6 @@ from app.models.orm.audit_log import AuditLogORM
 from app.models.orm.payment import PaymentTransactionORM
 from app.models.payment import PaymentTransaction, validate_transition
 from app.models.sla import SLAResult
-from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
 
 
 def _orm_to_pydantic(orm: PaymentTransactionORM) -> PaymentTransaction:
@@ -57,13 +54,13 @@ class PaymentRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def get(self, transaction_id: str) -> Optional[PaymentTransaction]:
+    def get(self, transaction_id: str) -> PaymentTransaction | None:
         orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
         return _orm_to_pydantic(orm)
 
-    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> Optional[PaymentTransaction]:
+    def get_by_sla_result(self, sla_result_id: int, for_update: bool = False) -> PaymentTransaction | None:
         query = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.sla_result_id == sla_result_id)
         if for_update:
             query = query.with_for_update()
@@ -104,11 +101,11 @@ class PaymentRepository:
         )
         return [_orm_to_pydantic(r) for r in rows], total
 
-    def list_by_outage(self, outage_id: str) -> List[PaymentTransaction]:
+    def list_by_outage(self, outage_id: str) -> builtins.list[PaymentTransaction]:
         rows = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).all()
         return [_orm_to_pydantic(r) for r in rows]
 
-    def update_status(self, transaction_id: str, status: str) -> Optional[PaymentTransaction]:
+    def update_status(self, transaction_id: str, status: str) -> PaymentTransaction | None:
         orm = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.id == transaction_id).first()
         if not orm:
             return None
@@ -137,7 +134,7 @@ class PaymentRepository:
             status="pending",
             outage_id=outage_id,
             sla_result_id=sla_result.id,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             confirmed_at=None,
         )
         return self.create(transaction)
@@ -152,7 +149,7 @@ class PaymentRepository:
         validate_transition(orm.status, new_status)
         orm.status = new_status
         if new_status == "confirmed":
-            orm.confirmed_at = datetime.now(timezone.utc)
+            orm.confirmed_at = datetime.now(UTC)
         self.db.commit()
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
@@ -166,7 +163,7 @@ class PaymentRepository:
             return None  # caller should raise 409
         validate_transition(orm.status, "pending")
         orm.retry_count += 1
-        orm.last_retried_at = datetime.now(timezone.utc)
+        orm.last_retried_at = datetime.now(UTC)
         orm.status = "pending"
         self.db.commit()
         self.db.refresh(orm)

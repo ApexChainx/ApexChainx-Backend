@@ -8,11 +8,10 @@ Validates:
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
 from app.repositories.wallet_repository import WalletRepository
-from app.models.orm.wallet import WalletORM
 
 
 @pytest.fixture(scope="function")

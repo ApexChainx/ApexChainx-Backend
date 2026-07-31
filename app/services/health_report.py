@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from redis import Redis
 
 
 @dataclass

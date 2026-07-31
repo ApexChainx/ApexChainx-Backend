@@ -1,8 +1,7 @@
 """Transient DB error retry policy using tenacity for issue #34."""
 
-from sqlalchemy.exc import OperationalError, DisconnectionError
+from sqlalchemy.exc import DisconnectionError, OperationalError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
 
 db_retry_policy = retry(
     retry=retry_if_exception_type((OperationalError, DisconnectionError)),

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from sqlalchemy import text

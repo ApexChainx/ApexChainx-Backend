@@ -12,19 +12,20 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Optional
+from typing import Any
 
 from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
-from opentelemetry.sdk.trace import TracerProvider, sampling
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.propagate import set_global_textmap
+from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
+from opentelemetry.sdk.trace import TracerProvider, sampling
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from app.core.config import settings
@@ -174,10 +175,14 @@ def _server_request_hook(span, scope):
 def _client_response_hook(span, request, response):
     """Enrich client spans with response metadata."""
     if response is not None:
-        span.set_attribute("http.status_code", response.status_code)
+        status_code = getattr(response, "status_code", None)
+        if status_code is None and isinstance(response, dict):
+            status_code = response.get("status")
+        if status_code is not None:
+            span.set_attribute("http.status_code", status_code)
 
 
-def get_current_traceparent() -> Optional[str]:
+def get_current_traceparent() -> str | None:
     """Get the current trace context as a traceparent header value.
 
     Returns:
@@ -194,7 +199,7 @@ def get_current_traceparent() -> Optional[str]:
     return f"00-{span_context.trace_id:032x}-{span_context.span_id:016x}-0{span_context.trace_flags:02x}"
 
 
-def traced(name: Optional[str] = None, attributes: Optional[dict[str, Any]] = None):
+def traced(name: str | None = None, attributes: dict[str, Any] | None = None):
     """Decorator to trace a function with a span.
 
     Usage:

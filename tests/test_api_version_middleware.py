@@ -12,9 +12,6 @@ class TestApiVersionMiddleware:
             resp = client.get("/health/liveness")
             assert resp.headers.get("X-API-Version") == settings.VERSION
 
-
-  # m
-
     def test_x_api_commit_header_default(self):
         with TestClient(app) as client:
             resp = client.get("/health/liveness")
@@ -35,13 +32,6 @@ class TestApiVersionMiddleware:
                 resp = client.get(path)
                 assert resp.headers.get("X-API-Version") is not None
                 assert resp.headers.get("X-API-Commit") is not None
-
-       def test_headers_on_error_responses(self):
-        with TestClient(app) as client:
-            resp = client.get("/nonexistent")
-            assert resp.status_code == 404
-            assert resp.headers.get("X-API-Version") is not None
-            assert resp.headers.get("X-API-Commit") is not None
 
     def test_headers_on_error_responses(self):
         with TestClient(app) as client:

@@ -21,9 +21,9 @@ from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.sla import SLACalculator
 from tests.properties.sla_scenarios import (
     SEVERITIES,
-    sla_scenario,
     scenario_with_policy_bump,
     scenario_with_repeated_mttr,
+    sla_scenario,
 )
 
 # ── Config ──────────────────────────────────────────────────────────────
