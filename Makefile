@@ -67,3 +67,16 @@ open('docs/openapi.snapshot.json','w').write(json.dumps(app.openapi(),indent=2,s
 print('Snapshot updated: docs/openapi.snapshot.json')"
 
 ci: lint format typecheck test ## Full CI pipeline
+
+# ── Load testing (#58) ─────────────────────────────────────────────────
+LOAD_TEST_BASE_URL ?= http://localhost:8000
+
+load-test: ## Run interactive locust load tests (see docs/PERFORMANCE.md)
+	locust -f locustfile.py --host $(LOAD_TEST_BASE_URL)
+
+load-test-ci: ## Headless load test (20 users, 60s) writing CSV artifacts
+	mkdir -p artifacts
+	locust -f locustfile.py --host $(LOAD_TEST_BASE_URL) --headless -u 20 -r 2 -t 60s --csv=artifacts/loadtest --only-summary
+
+load-test-check: load-test-ci ## Headless run + fail if p95 exceeds 2x baseline
+	python scripts/check_performance_regression.py --csv artifacts/loadtest_stats.csv

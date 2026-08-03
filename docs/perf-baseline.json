@@ -1,0 +1,9 @@
+{
+  "health/liveness": 20,
+  "health/readiness": 25,
+  "auth/login": 60,
+  "auth/me": 30,
+  "outages/list": 80,
+  "sla/config": 35,
+  "sla/analytics/dashboard": 90
+}
