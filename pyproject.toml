@@ -32,7 +32,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi==0.50b0",
     "opentelemetry-instrumentation-sqlalchemy==0.50b0",
     "opentelemetry-instrumentation-httpx==0.50b0",
-    "opentelemetry-instrumentation-redis==0.50b0",
+    "opentelemetry-instrumentation-redis==0.65b0",
 ]
 
 [project.optional-dependencies]
