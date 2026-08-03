@@ -41,8 +41,12 @@ jobs:
         run: mypy app/
 
       # ── Security scan ────────────────────────────────────────────────────────
+      # Issue #55: run bandit at -ll against a committed baseline so the
+      # scanner is on by default and NEW findings fail the build. The baseline
+      # (bandit-baseline.json) currently records zero issues and may only grow
+      # when a finding is reviewed and explicitly accepted with justification.
       - name: Bandit security scan
-        run: bandit -r app/ -c pyproject.toml
+        run: bandit -r app -ll -b bandit-baseline.json -c pyproject.toml
 
       # ── Tests + coverage ─────────────────────────────────────────────────────
       - name: Pytest with branch coverage
