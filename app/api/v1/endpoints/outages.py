@@ -99,6 +99,10 @@ def list_outages(
         default=OutageSortDirection.desc,
         description="Sort direction (enum). Supported: asc, desc. Invalid values rejected with 422. Default: desc.",
     ),
+    include_total: bool = Query(
+        default=True,
+        description="Include total count in response. Set to false for faster pagination when only page navigation is needed.",
+    ),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
@@ -153,6 +157,7 @@ def list_outages(
         page_size=page_size,
         sort_by=sort_by,
         sort_direction=sort_direction,
+        include_total=include_total,
     )
 
 
