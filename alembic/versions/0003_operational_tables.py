@@ -55,13 +55,6 @@ dispute_status_enum = sa.Enum(
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    job_status_enum.create(bind, checkfirst=True)
-    job_type_enum.create(bind, checkfirst=True)
-    webhook_event_enum.create(bind, checkfirst=True)
-    webhook_delivery_status_enum.create(bind, checkfirst=True)
-    dispute_status_enum.create(bind, checkfirst=True)
-
     op.create_table(
         "jobs",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),

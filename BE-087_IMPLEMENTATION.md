@@ -204,7 +204,7 @@ if existing:
 
 1. **Database Migration:**
    ```bash
-   alembic upgrade 0016_webhook_signature_versioning
+   alembic upgrade 0016_webhook_sig_versioning
    ```
 
 2. **Syntax Check:**

@@ -14,12 +14,15 @@ branch_labels = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_payment_tx_status_created
-        ON payment_transactions (status, created_at DESC)
-        """
-    )
+    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so run
+    # it inside an autocommit block instead.
+    with op.get_context().autocommit_block():
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_payment_tx_status_created
+            ON payment_transactions (status, created_at DESC)
+            """
+        )
 
 
 def downgrade() -> None:

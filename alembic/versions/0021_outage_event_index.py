@@ -1,13 +1,15 @@
 """Add composite index on (outage_events.outage_id, occurred_at DESC)
 
 Revision ID: 0021
-Revises: 0020
+Revises: 0020_audit_immutable
 Create Date: 2026-07-29
 """
+import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0021"
-down_revision = "0020"
+down_revision = "0020_audit_immutable"
 branch_labels = None
 depends_on = None
 
@@ -20,7 +22,7 @@ def upgrade():
     op.create_index(
         "ix_outage_events_outage_id_occurred_at",
         "outage_events",
-        ["outage_id", "occurred_at DESC"],
+        ["outage_id", sa.desc("occurred_at")],
         postgresql_using="btree",
         if_not_exists=True,
     )

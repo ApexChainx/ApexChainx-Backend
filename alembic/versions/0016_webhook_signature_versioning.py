@@ -5,7 +5,7 @@ Adds explicit signature version metadata to webhook deliveries:
 
 This enables safe evolution of signing algorithms without breaking existing consumers.
 
-Revision ID: 0016_webhook_signature_versioning
+Revision ID: 0016_webhook_sig_versioning
 Revises: 0015_audit_correlation
 Create Date: 2026-04-29
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0016_webhook_signature_versioning"
+revision = "0016_webhook_sig_versioning"
 down_revision = "0015_audit_correlation"
 branch_labels = None
 depends_on = None

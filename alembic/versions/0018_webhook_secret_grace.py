@@ -5,7 +5,7 @@ Adds tracking for previous secrets with expiry:
 - secret_grace_hours: Per-webhook grace period configuration
 
 Revision ID: 0018_webhook_secret_grace
-Revises: 0016_webhook_signature_versioning
+Revises: 0016_webhook_sig_versioning
 Create Date: 2026-07-28
 """
 import sqlalchemy as sa
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from alembic import op
 
 revision = "0018_webhook_secret_grace"
-down_revision = "0016_webhook_signature_versioning"
+down_revision = "0016_webhook_sig_versioning"
 branch_labels = None
 depends_on = None
 

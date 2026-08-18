@@ -5,14 +5,14 @@ Adds a BEFORE DELETE trigger that prevents row deletion from the
 audit_logs table, enforcing immutability of audit records.
 
 Revision ID: 0020_audit_immutable
-Revises: 0016_webhook_signature_versioning
+Revises: 0016_webhook_sig_versioning
 Depends on: 0016_outage_event_schema_version
 Create Date: 2026-07-28
 """
 from alembic import op
 
 revision = "0020_audit_immutable"
-down_revision = "0016_webhook_signature_versioning"
+down_revision = "0016_webhook_sig_versioning"
 depends_on = ("0016_outage_event_schema_version",)
 branch_labels = None
 
