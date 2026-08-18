@@ -169,8 +169,6 @@ def compute_device_sla(
                 sla_thresholds=sla_thresholds,
                 violation_reasons=[],
             )
-            record_sla_settlement_audit_events(device_id, period, result, status="initiated")
-            record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             return result
 
         # Calculate metrics
@@ -226,8 +224,6 @@ def compute_device_sla(
                 for outage in outages
             ],
         )
-        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
-        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result
 
     except ApexTransientError:
