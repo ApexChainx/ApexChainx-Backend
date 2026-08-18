@@ -12,7 +12,7 @@ from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.sla import SLACalculationResult
 from app.services.audit_log import audit_log
-from app.services.metrics import increment_counter
+from app.services.metrics import _SLA_LATENCY_BUCKETS, increment_counter, record_histogram
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,9 @@ def compute_device_sla(
     so consumers get compile-time guarantees and OpenAPI can reflect the
     exact shape.  (#94)
     """
+    import time
+
+    start_time = time.monotonic()
     orchestrator = SLAOrchestrator(db)
     increment_counter("sla_recomputation_total", tags={"device_id": device_id, "period": period})
 
@@ -169,6 +172,8 @@ def compute_device_sla(
                 sla_thresholds=sla_thresholds,
                 violation_reasons=[],
             )
+            latency = time.monotonic() - start_time
+            record_histogram("sla_computation_latency_seconds", latency, tags={"device_id": device_id}, buckets=_SLA_LATENCY_BUCKETS)
             record_sla_settlement_audit_events(device_id, period, result, status="initiated")
             record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             return result
@@ -226,6 +231,8 @@ def compute_device_sla(
                 for outage in outages
             ],
         )
+        latency = time.monotonic() - start_time
+        record_histogram("sla_computation_latency_seconds", latency, tags={"device_id": device_id}, buckets=_SLA_LATENCY_BUCKETS)
         record_sla_settlement_audit_events(device_id, period, result, status="initiated")
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result

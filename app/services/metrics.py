@@ -18,6 +18,9 @@ class MetricPoint:
 # Default Prometheus-style histogram buckets for common latency ranges (seconds)
 _DEFAULT_LATENCY_BUCKETS = [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]
 
+# SLA-specific histogram buckets (seconds)
+_SLA_LATENCY_BUCKETS = [0.01, 0.05, 0.1, 0.5, 1.0, 5.0]
+
 
 class MetricsRegistry:
     """Thread-safe metrics registry for collecting and exposing application metrics."""
@@ -42,13 +45,14 @@ class MetricsRegistry:
             key = self._make_key(name, tags)
             self._gauges[key] = value
 
-    def record_histogram(self, name: str, value: float, tags: dict[str, str] | None = None) -> None:
+    def record_histogram(self, name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None) -> None:
         """Record a histogram value with automatic bucket tracking."""
         with self._lock:
             key = self._make_key(name, tags)
             self._histograms[key].append(MetricPoint(datetime.now(UTC), value, tags or {}))
             # Increment histogram buckets for Prometheus-compatible export
-            for bucket_bound in _DEFAULT_LATENCY_BUCKETS:
+            bucket_list = buckets or _DEFAULT_LATENCY_BUCKETS
+            for bucket_bound in bucket_list:
                 if value <= bucket_bound:
                     self._histogram_buckets[key][bucket_bound] += 1
 
@@ -156,9 +160,9 @@ def set_gauge(name: str, value: float, tags: dict[str, str] | None = None) -> No
     metrics.set_gauge(name, value, tags)
 
 
-def record_histogram(name: str, value: float, tags: dict[str, str] | None = None) -> None:
+def record_histogram(name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None) -> None:
     """Record a histogram value."""
-    metrics.record_histogram(name, value, tags)
+    metrics.record_histogram(name, value, tags, buckets)
 
 
 # --- SLA Dispute Metrics ---
