@@ -1,7 +1,7 @@
 import builtins
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, asc, desc, or_
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.enums import OutageStatus, Severity
@@ -61,6 +61,7 @@ class OutageRepository:
         page_size: int = 20,
         sort_by: OutageSortField = OutageSortField.detected_at,
         sort_direction: OutageSortDirection = OutageSortDirection.desc,
+        include_total: bool = True,
     ) -> dict:
         query = self.db.query(OutageORM)
 
@@ -86,8 +87,16 @@ class OutageRepository:
         direction_fn = asc if sort_direction == OutageSortDirection.asc else desc
         query = query.order_by(direction_fn(sort_column), OutageORM.id.asc())
 
-        total = query.count()
-        items = query.offset((page - 1) * page_size).limit(page_size).all()
+        if include_total:
+            # Use COUNT(*) OVER() to get total in the same query as items.
+            # This avoids a separate COUNT(*) query which is expensive with ILIKE.
+            total_subq = query.with_entities(func.count().over()).subquery()
+            row = query.add_columns(func.count().over()).offset((page - 1) * page_size).limit(page_size).first()
+            total = row[1] if row else 0
+            items = query.offset((page - 1) * page_size).limit(page_size).all()
+        else:
+            total = None
+            items = query.offset((page - 1) * page_size).limit(page_size).all()
 
         return {
             "items": [_orm_to_pydantic(o) for o in items],

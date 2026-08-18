@@ -178,6 +178,11 @@ def compute_sla_for_device(
 
         self._mark_success(db, self.request.id, result)
         logger.info("SLA computation complete for device=%s", device_id)
+
+        from app.services.sla_service import record_sla_settlement_audit_events
+
+        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
+        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result
 
     except ApexTransientError:

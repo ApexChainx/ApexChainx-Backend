@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -213,6 +213,102 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
     if not payment:
         raise HTTPException(status_code=409, detail="Max retries reached")
     audit_log.log("payment_retried", {"id": transaction_id, "retry_count": payment.retry_count})
+    return payment
+
+
+# ---------------------------------------------------------------------------
+# Retry queue with backoff visibility (#240)
+# ---------------------------------------------------------------------------
+
+# Exponential backoff: base 30s, doubles each attempt, capped at 1 hour.
+_RETRY_BASE_SECONDS = 30
+_RETRY_MAX_SECONDS = 3600
+
+
+def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -> datetime | None:
+    """Return the datetime when the next retry should occur, or None if at max."""
+    if retry_count >= PaymentRepository.MAX_RETRIES:
+        return None
+    delay = min(_RETRY_BASE_SECONDS * (2 ** retry_count), _RETRY_MAX_SECONDS)
+    anchor = last_retried_at or datetime.now(UTC)
+    return anchor + timedelta(seconds=delay)
+
+
+class PaymentRetryQueueItem(BaseModel):
+    """A payment in the retry queue with backoff metadata."""
+
+    id: str
+    transaction_hash: str
+    type: str
+    amount: float
+    status: str
+    outage_id: str
+    attempt_count: int
+    next_retry_at: datetime | None
+    backoff_seconds: int
+    created_at: datetime
+    last_retried_at: datetime | None
+
+
+@router.get("/retry-queue", response_model=list[PaymentRetryQueueItem])
+def list_retry_queue(
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
+    """Return all payments eligible for retry with computed backoff metadata."""
+    repo = PaymentRepository(db)
+    items, _ = repo.list(status="failed")
+    result: list[PaymentRetryQueueItem] = []
+    for p in items:
+        next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
+        backoff = min(_RETRY_BASE_SECONDS * (2 ** p.retry_count), _RETRY_MAX_SECONDS)
+        result.append(
+            PaymentRetryQueueItem(
+                id=p.id,
+                transaction_hash=p.transaction_hash,
+                type=p.type,
+                amount=p.amount,
+                status=p.status,
+                outage_id=p.outage_id,
+                attempt_count=p.retry_count,
+                next_retry_at=next_at,
+                backoff_seconds=backoff,
+                created_at=p.created_at,
+                last_retried_at=p.last_retried_at,
+            )
+        )
+    return result
+
+
+@router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
+def retry_now(
+    transaction_id: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: trigger an immediate retry, bypassing exponential backoff."""
+    repo = PaymentRepository(db)
+    existing = repo.get(transaction_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    try:
+        payment = repo.retry(transaction_id)
+    except PaymentTransitionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "current_status": exc.current,
+                "requested_status": exc.next_status,
+                "allowed_transitions": list(exc.allowed),
+            },
+        )
+    if not payment:
+        raise HTTPException(status_code=409, detail="Max retries reached")
+    audit_log.log(
+        "payment_retry_now",
+        {"id": transaction_id, "retry_count": payment.retry_count, "actor": getattr(current_user, "username", None)},
+    )
     return payment
 
 

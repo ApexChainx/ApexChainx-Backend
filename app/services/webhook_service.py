@@ -226,6 +226,10 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         logger.error("WebhookDelivery %s not found.", delivery_id)
         return
 
+    if delivery.status in (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.DEAD_LETTER):
+        logger.info("WebhookDelivery %s already in terminal state %s, skipping.", delivery_id, delivery.status)
+        return
+
     webhook = delivery.webhook
 
     # If breaker is open, mark as breaker_open without consuming retry budget
@@ -331,6 +335,14 @@ def trigger_sla_violation_webhooks(
         "data": sla_data,
     }
 
+    celery_available = False
+    try:
+        from app.tasks.celery_app import celery_app as _celery
+
+        celery_available = not _celery.conf.task_always_eager
+    except (ImportError, AttributeError):
+        pass
+
     for webhook in webhooks:
         delivery = create_delivery(
             db,
@@ -347,8 +359,14 @@ def trigger_sla_violation_webhooks(
             event.value,
             signature_version,
         )
-        # Dispatch immediately (in production, offload to a background task/queue)
-        dispatch_delivery(db, delivery.id)
+
+        if celery_available:
+            from app.tasks.webhook_tasks import dispatch_webhook_delivery
+
+            dispatch_webhook_delivery.delay(str(delivery.id))
+            logger.info("Enqueued webhook delivery %s via Celery.", delivery.id)
+        else:
+            dispatch_delivery(db, delivery.id)
 
     return deliveries
 
