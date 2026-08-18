@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     AUTH_LOCKOUT_ENTROPY_THRESHOLD: int = 20  # Unique password prefixes before credential-stuffing alert
     AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES: int = 5  # Rolling window for stuffing detection
     AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
-    USE_REDIS_RATE_LIMITER: bool = False
+    USE_REDIS_RATE_LIMITER: bool = True
 
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
