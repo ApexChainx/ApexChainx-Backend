@@ -7,6 +7,7 @@ type CommandAction = {
   id: string;
   name: string;
   description?: string;
+  shortcut?: string;
   run: () => void;
 };
 
@@ -75,8 +76,9 @@ export default function CommandPalette() {
     if (currentOutageId) {
       list.unshift({
         id: "resolve-current",
-        name: `Resolve ${currentOutageId}`,
-        description: "Open the resolve workflow for the current outage",
+        name: "Resolve current outage",
+        description: `Resolve outage ${currentOutageId} from this page`,
+        shortcut: "R",
         run: () => {
           window.dispatchEvent(new CustomEvent("command-palette:resolve-outage"));
         },
@@ -130,6 +132,18 @@ export default function CommandPalette() {
         setSelectedIndex((current) =>
           current === 0 ? Math.max(filteredActions.length - 1, 0) : current - 1,
         );
+        return;
+      }
+
+      if (event.key.toLowerCase() === "r" && !event.metaKey && !event.ctrlKey && !event.altKey && query.trim() === "") {
+        // Ctrl+K → R: run the resolve action directly while the query is empty.
+        const resolveAction = filteredActions.find((action) => action.id === "resolve-current");
+        if (resolveAction) {
+          event.preventDefault();
+          setOpen(false);
+          setQuery("");
+          resolveAction.run();
+        }
         return;
       }
 
@@ -206,7 +220,15 @@ export default function CommandPalette() {
                         <span className="ml-2 text-xs text-slate-500 dark:text-slate-400">{action.description}</span>
                       ) : null}
                     </span>
-                    <span className="text-xs text-slate-400">↵</span>
+                    <span className="text-xs text-slate-400">
+                      {action.shortcut ? (
+                        <kbd className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] uppercase text-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          {action.shortcut}
+                        </kbd>
+                      ) : (
+                        "↵"
+                      )}
+                    </span>
                   </button>
                 ))
               )}
