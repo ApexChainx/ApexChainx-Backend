@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { OutagesPageClient } from "@/app/outages/components/outages-page-client";
+import OutagesPageClient from "@/app/outages/components/outages-page-client";
 import OutageDetailsPage from "@/app/outages/[id]/page";
 
 vi.mock("next/link", () => ({

@@ -11,7 +11,7 @@ const PUBLIC_PATHS = ["/login", "/register"];
 
 export default function RouteGuard({ children }: { children: React.ReactNode }) {
   const { state, user } = useSession();
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const router = useRouter();
 
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));

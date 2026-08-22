@@ -29,7 +29,7 @@ describe("useFilterPresets", () => {
     });
 
     expect(result.current.presets).toHaveLength(1);
-    expect(result.current.presets[0].name).toBe("Test");
+    expect(result.current.presets[0]?.name).toBe("Test");
   });
 
   it("deletes a preset", () => {
@@ -58,6 +58,6 @@ describe("useFilterPresets", () => {
     });
 
     expect(result.current.presets).toHaveLength(1);
-    expect(result.current.presets[0].severity).toBe("high");
+    expect(result.current.presets[0]?.severity).toBe("high");
   });
 });

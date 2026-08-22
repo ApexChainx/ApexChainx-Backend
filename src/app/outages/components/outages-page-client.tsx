@@ -17,7 +17,7 @@ type Outage = {
 };
 
 type Props = {
-  data: Outage[];
+  data?: Outage[];
 };
 
 // Bulk resolve modal component
@@ -220,7 +220,7 @@ function BulkAssignModal({
   );
 }
 
-export default function OutagesPageClient({ data }: Props) {
+export default function OutagesPageClient({ data = [] }: Props) {
   const queryClient = useQueryClient();
   // -----------------------------
   // State

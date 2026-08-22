@@ -175,7 +175,7 @@ export default function SLADashboardView() {
   }
 
   const metrics = primary.data;
-  const netBalance = useMemo(() => metrics.rewards.total - metrics.penalties.total, [metrics.rewards.total, metrics.penalties.total]);
+  const netBalance = metrics.rewards.total - metrics.penalties.total;
   const lastUpdated = primary.dataUpdatedAt
     ? new Date(primary.dataUpdatedAt).toLocaleString()
     : "Not synced yet";

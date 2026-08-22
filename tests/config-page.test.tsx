@@ -51,7 +51,7 @@ describe("SLA config page", () => {
     expect(mockGet).toHaveBeenCalledWith("/sla/config");
     expect(screen.getByText("critical")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
 
     const thresholdInput = screen.getByLabelText("Threshold (minutes)");
     const rewardInput = screen.getByLabelText("Reward Base");

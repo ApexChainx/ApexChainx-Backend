@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { PaymentDetailDrawer } from "@/components/payments/payment-detail-drawer";
+import type { TableDensity } from "@/components/data-table";
 import { RouteEmptyState, RouteErrorState, RouteLoadingState } from "@/components/ui/route-state";
 import { exportPayments, fetchPayments } from "@/services/paymentService";
 import { getPreferences, hydratePreferences, subscribeToPreferences, updatePreferences } from "@/lib/preferences";
@@ -35,7 +36,7 @@ export default function PaymentsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(
-    () => searchParams.get("paymentId")
+    () => searchParams?.get("paymentId") ?? null
   );
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);

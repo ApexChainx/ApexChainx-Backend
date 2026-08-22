@@ -65,13 +65,31 @@ interface RootLayoutProps {
   children: ReactNode;
 }
 
+// The backend may live on a different origin in development, so allow
+// `connect-src` to reach it while keeping everything else locked down.
+const apiOrigin = env.API_BASE_URL.startsWith("http")
+  ? new URL(env.API_BASE_URL).origin
+  : null;
+
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  `connect-src 'self'${apiOrigin ? ` ${apiOrigin}` : ""}`,
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en">
       <head>
         <meta
           httpEquiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+          content={contentSecurityPolicy}
         />
         <script
           dangerouslySetInnerHTML={{

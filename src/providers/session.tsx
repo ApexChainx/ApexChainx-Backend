@@ -44,7 +44,9 @@ export type SessionState =
   | "authenticated"
   | "unauthenticated";
 
-export type { SessionUser } from "@/types/session";
+import type { SessionUser } from "@/types/session";
+
+export type { SessionUser };
 
 interface SessionContextValue {
   state: SessionState;
