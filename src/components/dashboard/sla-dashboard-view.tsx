@@ -2,7 +2,7 @@
 /** ApexChain Network Operations Intelligence Platform */
 /** ApexChain Network Operations Intelligence Platform */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
@@ -39,6 +39,53 @@ function delta(a: number, b: number) {
 
 const SEVERITIES = ["", "low", "medium", "high", "critical"];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function toISODate(date: Date) {
+  return date.toISOString().split("T")[0];
+}
+
+/**
+ * Builds the filters for the comparison window.
+ *
+ * The comparison window mirrors the primary filter range and shifts it
+ * backward so it ends where the primary window starts:
+ * - Both date_from and date_to set → same length as the primary range, ending at date_from.
+ * - Only date_from set → mirrors the open-ended range [date_from, today].
+ * - Only date_to set → defaults to the 30 days before date_to.
+ * - No date range selected → {} (comparison is disabled).
+ */
+export function computeComparisonFilters(filters: DashboardFilters): DashboardFilters {
+  const { date_from, date_to, severity, site } = filters;
+  if (!date_from && !date_to) return {};
+
+  let end: Date;
+  let durationMs: number;
+
+  if (date_from && date_to) {
+    // Same length as the primary window, shifted backward to end at date_from.
+    end = new Date(date_from);
+    durationMs = Math.max(new Date(date_to).getTime() - end.getTime(), 0);
+  } else if (date_from) {
+    // Primary range is open-ended ([date_from, today]); mirror that duration.
+    end = new Date(date_from);
+    durationMs = Math.max(Date.now() - end.getTime(), 0);
+  } else {
+    // Only date_to set (guaranteed by the early return); fall back to a fixed 30-day window.
+    end = new Date(date_to!);
+    durationMs = 30 * DAY_MS;
+  }
+
+  const start = new Date(end.getTime() - durationMs);
+
+  return {
+    date_from: toISODate(start),
+    date_to: toISODate(end),
+    severity,
+    site,
+  };
+}
+
 export default function SLADashboardView() {
   const router = useRouter();
   const [compareMode, setCompareMode] = useState(false);
@@ -65,25 +112,26 @@ export default function SLADashboardView() {
     },
   });
 
-  const comparisonFilters = useMemo(() => {
-    if (!filters.date_from && !filters.date_to) return {};
-    const end = new Date(filters.date_from || Date.now());
-    const start = new Date(end);
-    start.setDate(start.getDate() - 30);
-    return {
-      date_from: start.toISOString().split("T")[0],
-      date_to: end.toISOString().split("T")[0],
-      severity: filters.severity,
-      site: filters.site,
-    };
-  }, [filters]);
+  const hasDateRange = useMemo(
+    () => Boolean(filters.date_from || filters.date_to),
+    [filters.date_from, filters.date_to],
+  );
+
+  const comparisonFilters = useMemo(() => computeComparisonFilters(filters), [filters]);
 
   const secondary = useQuery<DashboardMetrics>({
     queryKey: ["dashboard-metrics-compare", comparisonFilters],
     queryFn: () => fetchDashboardMetrics(comparisonFilters),
     staleTime: 30_000,
-    enabled: compareMode,
+    enabled: compareMode && hasDateRange,
   });
+
+  // Exit comparison mode if the primary date range is cleared.
+  useEffect(() => {
+    if (compareMode && !hasDateRange) {
+      setCompareMode(false);
+    }
+  }, [compareMode, hasDateRange]);
 
   const onTrendClick = useCallback((point: TrendPoint) => {
     const params = new URLSearchParams();
@@ -144,7 +192,9 @@ export default function SLADashboardView() {
           <span className="text-xs uppercase tracking-wide text-gray-400">Updated {lastUpdated}</span>
           <button
             onClick={() => setCompareMode((v) => !v)}
-            className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${compareMode ? "border-blue-400 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+            disabled={!hasDateRange}
+            title={hasDateRange ? undefined : "Select a date range to enable comparison"}
+            className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${compareMode ? "border-blue-400 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
           >
             {compareMode ? "Exit Compare" : "Compare"}
           </button>
