@@ -13,7 +13,9 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -226,6 +228,137 @@ function ColumnVisibilityControl<TData>({
   );
 }
 
+// ─── Keyboard Navigation ─────────────────────────────────────────────────────
+interface UseTableKeyboardNavigationOptions {
+  rowCount: number;
+  enabled?: boolean;
+  onSelect?: (index: number) => void;
+  onFocusRow?: (index: number) => void;
+}
+
+/**
+ * Roving-tabindex keyboard navigation for table rows (WCAG 2.1).
+ *
+ * Maintains `focusedIndex` state, moves focus with ArrowUp/ArrowDown/Home/End,
+ * and triggers selection on Enter/Space. Only the focused row is tabbable
+ * (roving tabindex), and the focused row gets a visible focus ring.
+ */
+export function useTableKeyboardNavigation({
+  rowCount,
+  enabled = true,
+  onSelect,
+  onFocusRow,
+}: UseTableKeyboardNavigationOptions) {
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  const focusedIndexRef = useRef<number | null>(null);
+
+  // Keep a ref in sync so the row ref callback can focus rows that mount
+  // after navigation (e.g. virtualized rows scrolled into view).
+  useEffect(() => {
+    focusedIndexRef.current = focusedIndex;
+  }, [focusedIndex]);
+
+  // Clamp the focused index when the row count shrinks (pagination/filtering).
+  useEffect(() => {
+    setFocusedIndex((current) => {
+      if (current == null || current < rowCount) return current;
+      return rowCount > 0 ? rowCount - 1 : null;
+    });
+  }, [rowCount]);
+
+  const focusRow = useCallback(
+    (index: number) => {
+      const el = rowRefs.current[index];
+      if (el) {
+        el.focus({ preventScroll: true });
+      } else {
+        // Row not mounted yet (virtualized) — ask the table to scroll it in.
+        onFocusRow?.(index);
+      }
+    },
+    [onFocusRow]
+  );
+
+  // Move real DOM focus whenever the focused index changes.
+  useEffect(() => {
+    if (focusedIndex == null) return;
+    focusRow(focusedIndex);
+  }, [focusedIndex, focusRow]);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (!enabled || rowCount === 0) return;
+
+      // Don't hijack keys when an interactive element inside a cell has focus.
+      const target = event.target as HTMLElement;
+      if (target.closest("button, input, select, textarea, a, [contenteditable='true']")) {
+        return;
+      }
+
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          setFocusedIndex((current) =>
+            current == null ? 0 : Math.min(current + 1, rowCount - 1)
+          );
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          setFocusedIndex((current) =>
+            current == null ? 0 : Math.max(current - 1, 0)
+          );
+          break;
+        case "Home":
+          event.preventDefault();
+          setFocusedIndex(0);
+          break;
+        case "End":
+          event.preventDefault();
+          setFocusedIndex(rowCount - 1);
+          break;
+        case "Enter":
+        case " ":
+          if (focusedIndex != null) {
+            event.preventDefault();
+            onSelect?.(focusedIndex);
+          }
+          break;
+        default:
+          break;
+      }
+    },
+    [enabled, rowCount, focusedIndex, onSelect]
+  );
+
+  const registerRow = useCallback(
+    (index: number) => (el: HTMLTableRowElement | null) => {
+      rowRefs.current[index] = el;
+      if (el && focusedIndexRef.current === index) {
+        el.focus({ preventScroll: true });
+      }
+    },
+    []
+  );
+
+  const getRowTabIndex = useCallback(
+    (index: number) => {
+      if (focusedIndex === index) return 0;
+      if (focusedIndex == null && index === 0) return 0;
+      return -1;
+    },
+    [focusedIndex]
+  );
+
+  return {
+    focusedIndex,
+    setFocusedIndex,
+    handleKeyDown,
+    registerRow,
+    getRowTabIndex,
+  };
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 /* ─── Virtualization Constants ─────────────────────────────────────────── */
 const VIRTUALIZATION_THRESHOLD = 100;
@@ -331,6 +464,35 @@ export function DataTable<TData, TValue>({
   const virtualRows = shouldVirtualize ? rowVirtualizer.getVirtualItems() : [];
   const totalSize = shouldVirtualize ? rowVirtualizer.getTotalSize() : 0;
 
+  /* ─── Keyboard Navigation ──────────────────────────────────────── */
+  const keyboardEnabled = !loading && rows.length > 0;
+  const rowIdPrefix = useId();
+
+  const keyboardNavOptions: UseTableKeyboardNavigationOptions = {
+    rowCount: rows.length,
+    enabled: keyboardEnabled,
+  };
+  if (enableRowSelection) {
+    keyboardNavOptions.onSelect = (index) => rows[index]?.toggleSelected();
+  }
+  if (shouldVirtualize) {
+    keyboardNavOptions.onFocusRow = (index) => rowVirtualizer.scrollToIndex(index);
+  }
+
+  const {
+    focusedIndex,
+    setFocusedIndex,
+    handleKeyDown,
+    registerRow,
+    getRowTabIndex,
+  } = useTableKeyboardNavigation(keyboardNavOptions);
+
+  const rowId = (index: number) => `${rowIdPrefix}-row-${index}`;
+  const keyboardNavProps = {
+    onKeyDown: handleKeyDown,
+    "aria-activedescendant": focusedIndex != null ? rowId(focusedIndex) : undefined,
+  } as const;
+
   return (
     <div className={`space-y-3 ${className ?? ""}`}>
       {/* Toolbar */}
@@ -393,21 +555,33 @@ export function DataTable<TData, TValue>({
                   </tr>
                 ))}
               </thead>
-              <tbody style={{ display: 'block', height: `${totalSize}px`, position: 'relative' }}>
+              <tbody 
+                style={{ display: 'block', height: `${totalSize}px`, position: 'relative' }}
+                onKeyDown={keyboardNavProps.onKeyDown}
+                aria-activedescendant={keyboardNavProps["aria-activedescendant"]}
+              >
                 {virtualRows.map((virtualRow) => {
                   const row = rows[virtualRow.index]!;
+                  const isFocused = focusedIndex === virtualRow.index;
                   return (
                     <tr 
                       key={row.id}
-                      className={`absolute left-0 right-0 w-full border-b border-slate-200 transition-colors ${
+                      ref={registerRow(virtualRow.index)}
+                      id={rowId(virtualRow.index)}
+                      tabIndex={getRowTabIndex(virtualRow.index)}
+                      onFocus={() => setFocusedIndex(virtualRow.index)}
+                      className={`absolute left-0 right-0 w-full border-b border-slate-200 transition-colors focus:outline-none ${
                         row.getIsSelected() ? "bg-blue-50" : "hover:bg-slate-50"
-                      } ${enableRowSelection ? "cursor-pointer" : ""}`}
+                      } ${enableRowSelection ? "cursor-pointer" : ""} ${
+                        isFocused ? "ring-2 ring-inset ring-blue-500 bg-blue-50" : ""
+                      }`}
                       style={{
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
                       onClick={enableRowSelection ? row.getToggleSelectedHandler() : undefined}
                       data-state={row.getIsSelected() ? "selected" : undefined}
+                      aria-selected={enableRowSelection ? row.getIsSelected() : undefined}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <td key={cell.id} className={`${config.padding} ${config.textSize} align-middle`} style={{ width: `${100 / colSpan}%` }}>
@@ -451,28 +625,41 @@ export function DataTable<TData, TValue>({
                   </TableRow>
                 ))}
               </TableHeader>
-              <TableBody>
+              <TableBody
+                onKeyDown={keyboardNavProps.onKeyDown}
+                aria-activedescendant={keyboardNavProps["aria-activedescendant"]}
+              >
                 {loading ? (
                   <TableSkeleton columns={colSpan} density={density} />
                 ) : rows.length === 0 ? (
                   <EmptyState colSpan={colSpan} message={emptyMessage} />
                 ) : (
-                  rows.map((row) => (
-                    <TableRow 
-                      key={row.id} 
-                      className={`transition-colors ${
-                        row.getIsSelected() ? "bg-blue-50 hover:bg-blue-50" : "hover:bg-slate-50"
-                      } ${enableRowSelection ? "cursor-pointer" : ""}`}
-                      onClick={enableRowSelection ? row.getToggleSelectedHandler() : undefined}
-                      data-state={row.getIsSelected() ? "selected" : undefined}
-                    >
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id} className={`${config.padding} ${config.textSize}`}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
+                  rows.map((row, index) => {
+                    const isFocused = focusedIndex === index;
+                    return (
+                      <TableRow 
+                        key={row.id} 
+                        ref={registerRow(index)}
+                        id={rowId(index)}
+                        tabIndex={getRowTabIndex(index)}
+                        onFocus={() => setFocusedIndex(index)}
+                        className={`transition-colors focus:outline-none ${
+                          row.getIsSelected() ? "bg-blue-50 hover:bg-blue-50" : "hover:bg-slate-50"
+                        } ${enableRowSelection ? "cursor-pointer" : ""} ${
+                          isFocused ? "ring-2 ring-inset ring-blue-500 bg-blue-50" : ""
+                        }`}
+                        onClick={enableRowSelection ? row.getToggleSelectedHandler() : undefined}
+                        data-state={row.getIsSelected() ? "selected" : undefined}
+                        aria-selected={enableRowSelection ? row.getIsSelected() : undefined}
+                      >
+                        {row.getVisibleCells().map((cell) => (
+                          <TableCell key={cell.id} className={`${config.padding} ${config.textSize}`}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
