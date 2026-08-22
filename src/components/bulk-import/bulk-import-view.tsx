@@ -22,6 +22,30 @@ const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const REQUIRED_FIELDS = ["service_id", "start_time", "end_time"] as const;
 
+// Optional columns the backend accepts for bulk outage import. Columns outside
+// this set (plus REQUIRED_FIELDS) are treated as unrecognized and surface a
+// non-blocking warning so the user can still proceed with the upload.
+const OPTIONAL_FIELDS = [
+  "severity",
+  "status",
+  "description",
+  "site_name",
+  "detected_at",
+  "resolved_at",
+  "affected_services",
+  "affected_subscribers",
+  "assigned_to",
+  "created_by",
+  "root_cause",
+  "resolution_notes",
+] as const;
+
+const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
+
+// Cap client-side row validation so it stays well under the 500ms budget for
+// files up to 1000 rows.
+const MAX_VALIDATED_ROWS = 1000;
+
 type AcceptedExtension = (typeof ACCEPTED_EXTENSIONS)[number];
 type AcceptedMimeType = (typeof ACCEPTED_TYPES)[number];
 
@@ -45,6 +69,7 @@ type UploadStatus = "idle" | "validating" | "uploading" | "success" | "error" | 
 interface ParsedCSV {
   headers: string[];
   rows: string[][];
+  allRows: string[][];
   totalRows: number;
 }
 
@@ -55,7 +80,7 @@ function parseCSV(text: string): ParsedCSV {
     .filter((line) => line.trim().length > 0);
   
   if (lines.length === 0) {
-    return { headers: [], rows: [], totalRows: 0 };
+    return { headers: [], rows: [], allRows: [], totalRows: 0 };
   }
 
   // Robust CSV parsing: handles quoted fields containing commas
@@ -93,13 +118,20 @@ function parseCSV(text: string): ParsedCSV {
   return {
     headers,
     rows: allRows.slice(0, MAX_PREVIEW_ROWS),
+    allRows,
     totalRows: allRows.length,
   };
 }
 
 // ─── Validation ──────────────────────────────────────────────────────────────
-function validateCSV(headers: string[], rows: string[][]): ImportValidationError[] {
+interface CSVValidationResult {
+  errors: ImportValidationError[];
+  warnings: ImportValidationError[];
+}
+
+function validateCSV(headers: string[], rows: string[][]): CSVValidationResult {
   const errors: ImportValidationError[] = [];
+  const warnings: ImportValidationError[] = [];
   
   const missing = REQUIRED_FIELDS.filter((f) => !headers.includes(f));
   if (missing.length > 0) {
@@ -109,7 +141,20 @@ function validateCSV(headers: string[], rows: string[][]): ImportValidationError
     });
   }
 
-  rows.forEach((row, i) => {
+  // Unrecognized columns are a non-blocking warning: the user can still
+  // proceed, but is told the columns will not be imported.
+  const unrecognized = headers.filter((h) => !KNOWN_FIELDS.has(h));
+  if (unrecognized.length > 0) {
+    warnings.push({
+      message: `Unrecognized column${unrecognized.length > 1 ? "s" : ""}: ${unrecognized.join(", ")}. These will be ignored during import.`,
+      field: unrecognized.join(", "),
+    });
+  }
+
+  // Validate the whole file (capped for the 500ms budget) so errors in later
+  // rows surface before the upload starts, not after.
+  const rowsToValidate = rows.slice(0, MAX_VALIDATED_ROWS);
+  rowsToValidate.forEach((row, i) => {
     if (row.length !== headers.length) {
       errors.push({
         row: i + 2,
@@ -130,7 +175,13 @@ function validateCSV(headers: string[], rows: string[][]): ImportValidationError
     });
   });
 
-  return errors;
+  if (rows.length > MAX_VALIDATED_ROWS) {
+    warnings.push({
+      message: `Validation covers the first ${MAX_VALIDATED_ROWS} rows. Remaining rows will be checked by the backend.`,
+    });
+  }
+
+  return { errors, warnings };
 }
 
 function validateJSON(text: string): { errors: ImportValidationError[]; parsed?: Record<string, unknown>[] } {
@@ -183,9 +234,9 @@ async function buildPreview(file: File): Promise<PreviewState> {
   const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase() as AcceptedExtension;
 
   if (ext === ".csv" || file.type === "text/csv") {
-    const { headers, rows, totalRows } = parseCSV(text);
-    const errors = validateCSV(headers, rows);
-    const warnings: ImportValidationError[] = [];
+    const { headers, rows, allRows, totalRows } = parseCSV(text);
+    const { errors, warnings: schemaWarnings } = validateCSV(headers, allRows);
+    const warnings: ImportValidationError[] = [...schemaWarnings];
     
     if (totalRows === 0 && errors.length === 0) {
       warnings.push({ message: "File has a header row but no data rows." });

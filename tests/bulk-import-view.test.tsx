@@ -31,7 +31,7 @@ describe("BulkImportView", () => {
     render(<BulkImportView />);
     const input = document.querySelector("input[type='file']") as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(["x"], "data.txt", { type: "text/plain" })] } });
-    expect(await screen.findByText("Only .csv and .json files are allowed.")).toBeInTheDocument();
+    expect(await screen.findByText(/Invalid file type/)).toBeInTheDocument();
   });
 
   it("shows blocking errors for CSV missing required columns", async () => {
@@ -39,6 +39,46 @@ describe("BulkImportView", () => {
     const input = document.querySelector("input[type='file']") as HTMLInputElement;
     fireEvent.change(input, { target: { files: [file("bad.csv", "name,value\nfoo,bar")] } });
     expect(await screen.findByText(/Missing required columns/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /upload file/i })).toBeDisabled();
+  });
+
+  it("warns about unrecognized columns but allows upload to proceed", async () => {
+    render(<BulkImportView />);
+    const input = document.querySelector("input[type='file']") as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [file("with-extra.csv", "service_id,start_time,end_time,mystery_col\ns1,2026-01-01,2026-01-02,x")],
+      },
+    });
+    expect(await screen.findByText(/Unrecognized column.*mystery_col/)).toBeInTheDocument();
+    // Warning is non-blocking — upload stays enabled
+    expect(screen.getByRole("button", { name: /upload file/i })).toBeEnabled();
+  });
+
+  it("recognizes optional known columns without warnings", async () => {
+    render(<BulkImportView />);
+    const input = document.querySelector("input[type='file']") as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [file("with-optional.csv", "service_id,start_time,end_time,severity,description\ns1,2026-01-01,2026-01-02,high,disk full")],
+      },
+    });
+    expect(await screen.findByText("with-optional.csv")).toBeInTheDocument();
+    expect(screen.queryByText(/Unrecognized column/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /upload file/i })).toBeEnabled();
+  });
+
+  it("catches row errors beyond the preview window across the whole file", async () => {
+    render(<BulkImportView />);
+    const input = document.querySelector("input[type='file']") as HTMLInputElement;
+    // 10 rows: only 5 are previewed, but row 10 is missing end_time
+    const rows = ["service_id,start_time,end_time"];
+    for (let i = 1; i <= 9; i++) rows.push(`s${i},2026-01-0${i},2026-01-0${i + 1}`);
+    rows.push("s10,2026-01-10,");
+    fireEvent.change(input, {
+      target: { files: [file("deep-error.csv", rows.join("\n"))] },
+    });
+    expect(await screen.findByText(/Required field "end_time" is empty/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /upload file/i })).toBeDisabled();
   });
 
