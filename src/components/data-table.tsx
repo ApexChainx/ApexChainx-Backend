@@ -446,6 +446,14 @@ export function DataTable<TData, TValue>({
   /* ─── Virtualizer ───────────────────────────────────────────────── */
   const shouldVirtualize = !!(virtualized && rows.length > VIRTUALIZATION_THRESHOLD && !loading);
 
+  /**
+   * Shared column template for the virtualized layout. Using one template
+   * for the header and every body row guarantees column alignment for any
+   * density; minmax(0, 1fr) prevents horizontal overflow when density
+   * changes the cell padding.
+   */
+  const gridTemplateColumns = `repeat(${colSpan}, minmax(0, 1fr))`;
+
   const rowVirtualizer = useVirtualizer({
     count: shouldVirtualize ? rows.length : 0,
     getScrollElement: () => {
@@ -520,62 +528,64 @@ export function DataTable<TData, TValue>({
         <div className="overflow-x-auto">
           {shouldVirtualize ? (
             /* ── Virtualized Table ──
-             * Uses table-layout:fixed with equal percentage column widths to keep
-             * header and body columns perfectly aligned. Rows are absolutely
-             * positioned inside the relative tbody for windowed rendering.
+             * Rendered as CSS grids that share one column template
+             * (repeat(N, minmax(0, 1fr))), so the header and every body row
+             * have identical column boundaries by construction — regardless
+             * of density, padding or content size. minmax(0, 1fr) keeps the
+             * columns inside the container so density switches never produce
+             * an unexpected horizontal scrollbar. Rows are absolutely
+             * positioned inside the relative body container for windowed
+             * rendering.
              */
-            <table className="w-full caption-bottom text-sm" style={{ tableLayout: 'fixed' }}>
-              <thead className="sticky top-0 z-10 bg-slate-50">
-                {headerGroups.map((hg) => (
-                  <tr key={hg.id}>
-                    {hg.headers.map((h) => {
-                      const canSort = h.column.getCanSort();
-                      const sortDir = h.column.getIsSorted();
-                      
-                      return (
-                        <th 
-                          key={h.id} 
-                          className={`${config.padding} ${config.textSize} font-semibold text-slate-700 whitespace-nowrap text-left ${
-                            canSort ? "cursor-pointer select-none group" : ""
-                          }`}
-                          style={{ width: `${100 / colSpan}%` }}
-                          onClick={canSort ? h.column.getToggleSortingHandler() : undefined}
-                          aria-sort={
-                            sortDir === "asc" ? "ascending" : 
-                            sortDir === "desc" ? "descending" : "none"
-                          }
-                        >
-                          <div className="flex items-center gap-1.5">
-                            {flexRender(h.column.columnDef.header, h.getContext())}
-                            {canSort && <SortIcon direction={sortDir} />}
-                          </div>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </thead>
-              <tbody 
-                style={{ display: 'block', height: `${totalSize}px`, position: 'relative' }}
-                onKeyDown={keyboardNavProps.onKeyDown}
-                aria-activedescendant={keyboardNavProps["aria-activedescendant"]}
+            <div role="table" aria-rowcount={rows.length}>
+              {/* Sticky header — shares the exact grid template with body rows */}
+              <div
+                role="row"
+                className="sticky top-0 z-10 grid bg-slate-50"
+                style={{ gridTemplateColumns: gridTemplateColumns }}
               >
+                {headerGroups.flatMap((hg) =>
+                  hg.headers.map((h) => {
+                    const canSort = h.column.getCanSort();
+                    const sortDir = h.column.getIsSorted();
+
+                    return (
+                      <div
+                        key={h.id}
+                        role="columnheader"
+                        className={`${config.padding} ${config.textSize} flex items-center gap-1.5 whitespace-nowrap overflow-hidden font-semibold text-slate-700 text-left ${
+                          canSort ? "cursor-pointer select-none group" : ""
+                        }`}
+                        onClick={canSort ? h.column.getToggleSortingHandler() : undefined}
+                        aria-sort={
+                          sortDir === "asc" ? "ascending" :
+                          sortDir === "desc" ? "descending" : "none"
+                        }
+                      >
+                        {flexRender(h.column.columnDef.header, h.getContext())}
+                        {canSort && <SortIcon direction={sortDir} />}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Windowed body */}
+              <div style={{ height: `${totalSize}px`, position: "relative" }}>
                 {virtualRows.map((virtualRow) => {
                   const row = rows[virtualRow.index]!;
                   const isFocused = focusedIndex === virtualRow.index;
                   return (
-                    <tr 
+                    <div
                       key={row.id}
-                      ref={registerRow(virtualRow.index)}
-                      id={rowId(virtualRow.index)}
-                      tabIndex={getRowTabIndex(virtualRow.index)}
-                      onFocus={() => setFocusedIndex(virtualRow.index)}
-                      className={`absolute left-0 right-0 w-full border-b border-slate-200 transition-colors focus:outline-none ${
+                      role="row"
+                      className={`absolute left-0 right-0 w-full grid overflow-hidden border-b border-slate-200 transition-colors ${
                         row.getIsSelected() ? "bg-blue-50" : "hover:bg-slate-50"
                       } ${enableRowSelection ? "cursor-pointer" : ""} ${
                         isFocused ? "ring-2 ring-inset ring-blue-500 bg-blue-50" : ""
                       }`}
                       style={{
+                        gridTemplateColumns: gridTemplateColumns,
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
@@ -584,15 +594,19 @@ export function DataTable<TData, TValue>({
                       aria-selected={enableRowSelection ? row.getIsSelected() : undefined}
                     >
                       {row.getVisibleCells().map((cell) => (
-                        <td key={cell.id} className={`${config.padding} ${config.textSize} align-middle`} style={{ width: `${100 / colSpan}%` }}>
+                        <div
+                          key={cell.id}
+                          role="cell"
+                          className={`${config.padding} ${config.textSize} align-middle`}
+                        >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </td>
+                        </div>
                       ))}
-                    </tr>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
           ) : (
             /* ── Normal Table ── */
             <Table>
