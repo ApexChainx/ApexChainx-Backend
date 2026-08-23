@@ -1,5 +1,6 @@
 /** ApexChain Frontend Test Suite */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,13 +20,16 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ id: "outage-1" }),
+  useParams: () => ({ id: paramsId }),
+  useRouter: () => ({ push: vi.fn(), back: vi.fn(), replace: vi.fn() }),
 }));
 
 const mockUseOutagesTableState = vi.fn();
 const mockUseOutages = vi.fn();
 const mockGetOutage = vi.fn();
 const mockResolveOutage = vi.fn();
+
+let paramsId = "outage-1";
 
 vi.mock("@/hooks/useOutagesTableState", () => ({
   useOutagesTableState: () => mockUseOutagesTableState(),
@@ -40,6 +44,21 @@ vi.mock("@/services/outages", () => ({
   resolveOutage: (...args: unknown[]) => mockResolveOutage(...args),
 }));
 
+vi.mock("@/components/ui/toast", () => ({
+  useToast: () => vi.fn(),
+}));
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
 const baseOutage = {
   id: "outage-1",
   site_name: "Lagos Core POP",
@@ -53,42 +72,35 @@ const baseOutage = {
 
 describe("outages frontend flow", () => {
   beforeEach(() => {
+    paramsId = "outage-1";
     mockUseOutagesTableState.mockReset();
     mockUseOutages.mockReset();
     mockGetOutage.mockReset();
     mockResolveOutage.mockReset();
   });
 
-  it("covers outage list browsing", async () => {
-    mockUseOutagesTableState.mockReturnValue({
-      state: { page: 1, page_size: 10, severity: undefined, status: undefined },
-      actions: {
-        setPage: vi.fn(),
-        setPageSize: vi.fn(),
-        setSeverity: vi.fn(),
-        setStatus: vi.fn(),
-      },
-    });
-    mockUseOutages.mockReturnValue({
-      data: {
-        items: [baseOutage],
-        total: 1,
-        page: 1,
-        page_size: 10,
-      },
-      isLoading: false,
-      isError: false,
-    });
-
-    render(<OutagesPageClient />);
-
-    expect(screen.getByRole("heading", { name: "Outages" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "outage-1" })).toHaveAttribute(
-      "href",
-      "/outages/outage-1",
+  it("covers outage list browsing", () => {
+    renderWithProviders(
+      <OutagesPageClient
+        data={[
+          {
+            id: "outage-1",
+            title: "Lagos Core POP outage",
+            site_name: "Lagos Core POP",
+            status: "open",
+            createdAt: "2026-03-27T08:00:00.000Z",
+            assigned_to: "ops-team",
+          },
+        ]}
+      />,
     );
-    expect(screen.getByText("Lagos Core POP")).toBeInTheDocument();
-    expect(screen.getByText("critical")).toBeInTheDocument();
+
+    expect(screen.getByPlaceholderText("Search outages...")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(screen.getByText("Lagos Core POP outage")).toBeInTheDocument();
+    expect(screen.getByText("Assigned: ops-team")).toBeInTheDocument();
   });
 
   it("covers outage detail loading and resolution", async () => {
@@ -123,10 +135,10 @@ describe("outages frontend flow", () => {
       },
     });
 
-    render(<OutageDetailsPage />);
+    renderWithProviders(<OutageDetailsPage />);
 
     expect(await screen.findByRole("heading", { name: "Outage outage-1" })).toBeInTheDocument();
-    expect(mockGetOutage).toHaveBeenCalledWith("outage-1");
+    expect(mockGetOutage).toHaveBeenCalledWith("outage-1", expect.objectContaining({ signal: expect.any(AbortSignal) }));
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve Outage" }));
 
@@ -140,5 +152,110 @@ describe("outages frontend flow", () => {
 
     expect(await screen.findByText("pending")).toBeInTheDocument();
     expect(screen.getByText(/150 USDC/)).toBeInTheDocument();
+  });
+
+  it("cleans up polling and ignores in-flight poll responses after unmount", async () => {
+    let resolvePoll!: (outage: typeof baseOutage) => void;
+    const pollPromise = new Promise<typeof baseOutage>((resolve) => {
+      resolvePoll = resolve;
+    });
+
+    mockGetOutage
+      .mockResolvedValueOnce(baseOutage) // initial fetch
+      .mockImplementationOnce(() => pollPromise); // first poll stays in-flight
+
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+
+    try {
+      const { unmount } = renderWithProviders(<OutageDetailsPage />);
+
+      // Flush the initial fetch so the page renders with the outage
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByRole("heading", { name: "Outage outage-1" })).toBeInTheDocument();
+
+      // First poll fires at 15s and remains in-flight
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      expect(mockGetOutage).toHaveBeenCalledTimes(2);
+
+      // Navigate away while the poll request is in-flight
+      unmount();
+
+      // Resolving the in-flight poll after unmount must not throw or update state
+      await act(async () => {
+        resolvePoll({ ...baseOutage });
+        await pollPromise;
+      });
+
+      // Interval was cleared on unmount: no further polls fire
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(mockGetOutage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores stale poll responses after navigating to a different outage", async () => {
+    let resolvePoll!: (outage: typeof baseOutage) => void;
+    const stalePollPromise = new Promise<typeof baseOutage>((resolve) => {
+      resolvePoll = resolve;
+    });
+
+    mockGetOutage
+      .mockResolvedValueOnce(baseOutage) // initial fetch for outage-1
+      .mockImplementationOnce(() => stalePollPromise) // outage-1 poll stays in-flight
+      .mockResolvedValueOnce({ ...baseOutage, id: "outage-2" }); // fetch for outage-2
+
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+
+    try {
+      const { rerender } = renderWithProviders(<OutageDetailsPage />);
+
+      // Initial fetch for outage-1 resolves and the page renders
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByRole("heading", { name: "Outage outage-1" })).toBeInTheDocument();
+
+      // First poll for outage-1 fires at 15s and remains in-flight
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      expect(mockGetOutage).toHaveBeenCalledTimes(2);
+
+      // Navigate to a different outage while the poll is in-flight
+      paramsId = "outage-2";
+      rerender(<OutageDetailsPage />);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByRole("heading", { name: "Outage outage-2" })).toBeInTheDocument();
+
+      // The stale outage-1 poll response arrives late: it must not overwrite
+      // the current outage with data from the previous one
+      await act(async () => {
+        resolvePoll({ ...baseOutage });
+        await stalePollPromise;
+      });
+
+      expect(screen.getByRole("heading", { name: "Outage outage-2" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Outage outage-1" })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

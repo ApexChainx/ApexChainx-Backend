@@ -70,18 +70,23 @@ export default function OutageDetailsPage() {
     setLoading(true);
     setError(null);
 
+    let mounted = true;
+
     getOutage(id, { signal: controller.signal })
       .then((data) => {
+        if (!mounted) return;
         setOutage(data);
         setLoading(false);
       })
       .catch((err: unknown) => {
         if ((err as { name?: string }).name === "CanceledError") return;
+        if (!mounted) return;
         setError(getErrorMessage(err));
         setLoading(false);
       });
 
     return () => {
+      mounted = false;
       controller.abort();
     };
   }, [id]);
@@ -103,10 +108,13 @@ export default function OutageDetailsPage() {
   useEffect(() => {
     if (!id || !outage || outage.status === "resolved") return;
 
+    let mounted = true;
     const controller = new AbortController();
     const intervalId = setInterval(() => {
       getOutage(id, { signal: controller.signal })
-        .then((data) => setOutage(data))
+        .then((data) => {
+          if (mounted) setOutage(data);
+        })
         .catch((err: unknown) => {
           if ((err as { name?: string }).name !== "CanceledError") {
             console.error("Poll error:", err);
@@ -115,6 +123,7 @@ export default function OutageDetailsPage() {
     }, 15_000);
 
     return () => {
+      mounted = false;
       controller.abort();
       clearInterval(intervalId);
     };
