@@ -237,7 +237,20 @@ export async function mockApi(page: Page): Promise<void> {
 
     /* ---------------------------- Payments --------------------------- */
     if (method === "GET" && path === "/api/v1/payments") {
-      return json(200, { items: payments, total: payments.length });
+      const sortBy = url.searchParams.get("sort_by") || "created_at";
+      const sortDir = url.searchParams.get("sort_dir") || "desc";
+      const sorted = [...payments].sort((a, b) => {
+        let cmp = 0;
+        if (sortBy === "created_at") {
+          cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        } else if (sortBy === "amount") {
+          cmp = a.amount - b.amount;
+        } else if (sortBy === "status") {
+          cmp = a.status.localeCompare(b.status);
+        }
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+      return json(200, { items: sorted, total: sorted.length, page: 1, page_size: 10 });
     }
 
     /* ------------------------------ SLA ------------------------------ */

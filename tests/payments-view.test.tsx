@@ -1,5 +1,5 @@
 /** ApexChain Frontend Test Suite */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,6 +39,30 @@ describe("PaymentsView", () => {
     render(<PaymentsView />);
     expect(await screen.findByText("reward")).toBeInTheDocument();
     expect(screen.getByText("+$200")).toBeInTheDocument();
+  });
+
+  it("passes default sort parameters to the API", async () => {
+    mockFetchPayments.mockResolvedValue({ items: [payment], total: 1 });
+    render(<PaymentsView />);
+    await screen.findByText("reward");
+    const callArgs = mockFetchPayments.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(callArgs?.sort_by).toBe("created_at");
+    expect(callArgs?.sort_dir).toBe("desc");
+  });
+
+  it("re-fetches when sort column changes", async () => {
+    mockFetchPayments.mockResolvedValue({ items: [payment], total: 1 });
+    render(<PaymentsView />);
+    await screen.findByText("reward");
+
+    // Click Amount header to change sort
+    fireEvent.click(screen.getByText("Amount"));
+    await screen.findByText("reward");
+
+    expect(mockFetchPayments).toHaveBeenCalledTimes(2);
+    const secondCall = mockFetchPayments.mock.calls[1]?.[0] as Record<string, unknown> | undefined;
+    expect(secondCall?.sort_by).toBe("amount");
+    expect(secondCall?.sort_dir).toBe("asc");
   });
 
   it("shows empty state", async () => {

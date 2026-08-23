@@ -3,6 +3,9 @@ import { api } from "@/lib/api";
 import { ENDPOINTS } from "@/lib/endpoints";
 import { PaginatedPayments, Payment } from "../types/payment";
 
+export type PaymentSortBy = "created_at" | "amount" | "status";
+export type PaymentSortDir = "asc" | "desc";
+
 export interface PaymentFilters {
   page?: number | undefined;
   page_size?: number | undefined;
@@ -10,14 +13,16 @@ export interface PaymentFilters {
   type?: string | undefined;
   date_from?: string | undefined;
   date_to?: string | undefined;
+  sort_by?: PaymentSortBy | undefined;
+  sort_dir?: PaymentSortDir | undefined;
 }
 
 export const fetchPayments = async (
-  filters: PaymentFilters = {}
+  filters: PaymentFilters = {},
 ): Promise<PaginatedPayments> => {
-  const { page = 1, page_size = 10, ...rest } = filters;
+  const { page = 1, page_size = 10, sort_by = "created_at", sort_dir = "desc", ...rest } = filters;
   const response = await api.get<PaginatedPayments>(ENDPOINTS.payments.base, {
-    params: { page, page_size, ...rest },
+    params: { page, page_size, sort_by, sort_dir, ...rest },
   });
   return response.data;
 };

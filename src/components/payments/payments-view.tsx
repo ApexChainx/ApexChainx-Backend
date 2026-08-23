@@ -83,8 +83,8 @@ export default function PaymentsView() {
   };
 
   const requestKey = useMemo(
-    () => `${page}:${perPage}:${statusFilter}:${typeFilter}:${dateFrom}:${dateTo}`,
-    [page, perPage, statusFilter, typeFilter, dateFrom, dateTo]
+    () => `${page}:${perPage}:${statusFilter}:${typeFilter}:${dateFrom}:${dateTo}:${sortKey}:${sortDir}`,
+    [page, perPage, statusFilter, typeFilter, dateFrom, dateTo, sortKey, sortDir]
   );
 
   useEffect(() => {
@@ -97,28 +97,14 @@ export default function PaymentsView() {
       type: typeFilter || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
+      sort_by: sortKey,
+      sort_dir: sortDir,
     })
       .then((response) => { if (isMounted) { setData(response); setError(null); } })
       .catch(() => { if (isMounted) setError("Failed to load payments."); })
       .finally(() => { if (isMounted) setLoading(false); });
     return () => { isMounted = false; };
   }, [requestKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // FE-072: client-side sort
-  const sortedItems = useMemo(() => {
-    if (!data) return [];
-    return [...data.items].sort((a, b) => {
-      let cmp = 0;
-      if (sortKey === "created_at") {
-        cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      } else if (sortKey === "amount") {
-        cmp = a.amount - b.amount;
-      } else if (sortKey === "status") {
-        cmp = a.status.localeCompare(b.status);
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-  }, [data, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -127,6 +113,7 @@ export default function PaymentsView() {
       setSortKey(key);
       setSortDir("asc");
     }
+    setPage(1);
   }
 
   function SortIndicator({ col }: { col: SortKey }) {
@@ -279,11 +266,11 @@ export default function PaymentsView() {
               <tr><td colSpan={6} className="p-0">
                 <RouteErrorState title="Payments unavailable" description={error} primaryAction={{ label: "Reload page", onClick: () => window.location.reload() }} />
               </td></tr>
-            ) : sortedItems.length === 0 ? (
+            ) : (data && data.items.length === 0) ? (
               <tr><td colSpan={6} className="p-0">
                 <RouteEmptyState title="No payments found" description="Try adjusting your filters." />
               </td></tr>
-            ) : sortedItems.map((payment: Payment) => (
+            ) : (data && data.items.map((payment: Payment) => (
               <tr
                 key={payment.id}
                 className="border-t transition-colors hover:bg-gray-50 cursor-pointer"
@@ -321,7 +308,7 @@ export default function PaymentsView() {
                   </span>
                 </td>
               </tr>
-            ))}
+            )))}
           </tbody>
         </table>
       </div>
