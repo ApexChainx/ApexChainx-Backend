@@ -7,6 +7,13 @@ test.describe("Outage resolution flow", () => {
   }) => {
     await mockApi(page);
 
+    // Log in so the session is established before hitting protected pages.
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("ops@example.com");
+    await page.getByLabel("Password").fill("password123");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/\s*$/);
+
     // Create a new outage via the UI.
     await page.goto("/outages/new");
     await expect(

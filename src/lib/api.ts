@@ -22,6 +22,15 @@ export function dedupeByKey<T>(key: string, fetcher: () => Promise<T>): Promise<
 export const TOKEN_KEY = "noc_access_token";
 export const REFRESH_KEY = "noc_refresh_token";
 
+// Allow requests to opt out of the Authorization header. Used by the
+// cookie-only `/auth/session` check so a stale bearer token can never
+// override a valid httpOnly session cookie.
+declare module "axios" {
+  export interface AxiosRequestConfig {
+    skipAuth?: boolean;
+  }
+}
+
 let memoryAccessToken: string | null = null;
 let memoryRefreshToken: string | null = null;
 
@@ -113,9 +122,14 @@ api.interceptors.request.use((config) => {
     config.headers["X-CSRF-Token"] = csrfToken;
   }
 
-  const token = getAccessToken();
-  if (token && config.headers) {
-    config.headers.Authorization = `Bearer ${token}`;
+  // skipAuth: cookie-only requests (e.g. /auth/session) must not send a
+  // bearer token — after a hard refresh the in-memory token is gone and a
+  // stale cookie token could mask a still-valid httpOnly session.
+  if (!config.skipAuth) {
+    const token = getAccessToken();
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
   }
   return config;
 });
@@ -132,6 +146,9 @@ async function doRefresh(): Promise<string> {
   const res = await axios.post<{ access_token: string; refresh_token: string }>(
     env.API_REFRESH_URL,
     { refresh_token: refreshToken },
+    // Send cookies so the backend can also validate the httpOnly refresh
+    // cookie when the token itself is not readable from JS.
+    { withCredentials: true },
   );
   return res.data.access_token ?? null;
 }
@@ -150,6 +167,17 @@ async function doRefreshWithBreaker(): Promise<string> {
     refreshBreaker.recordFailure();
     throw err;
   }
+}
+
+/**
+ * A refresh failure is only definitive when the server explicitly rejected
+ * the refresh (401/403). Network errors, timeouts and 5xx responses mean the
+ * refresh could not be evaluated — clearing tokens in that case would destroy
+ * a still-valid httpOnly session (e.g. right after a hard refresh).
+ */
+function isDefinitiveAuthFailure(err: unknown): boolean {
+  const status = (err as AxiosError)?.response?.status;
+  return status === 401 || status === 403;
 }
 
 // Auto-refresh on 401 with single-flight dedup and circuit breaker + backoff for GET 5xx/429
@@ -196,8 +224,13 @@ api.interceptors.response.use(
         clearTokens();
         return Promise.reject(new Error("Session expired. Please sign in again."));
       } catch (refreshErr) {
-        clearTokens();
-        return Promise.reject(new Error("Session expired. Please sign in again."));
+        if (isDefinitiveAuthFailure(refreshErr)) {
+          clearTokens();
+          return Promise.reject(new Error("Session expired. Please sign in again."));
+        }
+        // Transient failure — keep tokens/cookies intact so the session can
+        // recover on the next attempt instead of being force-logged-out.
+        return Promise.reject(normalizeApiError(refreshErr));
       }
     }
 

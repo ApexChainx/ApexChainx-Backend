@@ -6,11 +6,14 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { ENDPOINTS } from "@/lib/endpoints";
+import { useSession } from "@/hooks/useSession";
+import type { SessionUser } from "@/types/session";
 
 export const dynamic = "force-static";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { storeSession } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -34,7 +37,15 @@ export default function RegisterPage() {
     try {
       await api.post(ENDPOINTS.auth.register, { email, password });
       // Auto-login after registration
-      await api.post(ENDPOINTS.auth.login, { email, password });
+      const response = await api.post<{
+        access_token?: string;
+        refresh_token?: string;
+        user?: SessionUser;
+      }>(ENDPOINTS.auth.login, { email, password });
+      const { access_token, refresh_token, user } = response.data ?? {};
+      if (access_token && refresh_token && user) {
+        storeSession(access_token, refresh_token, user);
+      }
       router.push("/");
       router.refresh();
     } catch (err) {

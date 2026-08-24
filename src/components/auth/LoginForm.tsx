@@ -6,9 +6,12 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { ENDPOINTS } from "@/lib/endpoints";
+import { useSession } from "@/hooks/useSession";
+import type { SessionUser } from "@/types/session";
 
 export default function LoginForm() {
   const router = useRouter();
+  const { storeSession } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +22,15 @@ export default function LoginForm() {
     setError(null);
     setLoading(true);
     try {
-      await api.post(ENDPOINTS.auth.login, { email, password });
+      const response = await api.post<{
+        access_token?: string;
+        refresh_token?: string;
+        user?: SessionUser;
+      }>(ENDPOINTS.auth.login, { email, password });
+      const { access_token, refresh_token, user } = response.data ?? {};
+      if (access_token && refresh_token && user) {
+        storeSession(access_token, refresh_token, user);
+      }
       router.push("/");
       router.refresh();
     } catch (err) {

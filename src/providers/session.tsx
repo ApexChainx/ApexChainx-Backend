@@ -15,6 +15,7 @@ import {
 import {
   api,
   clearTokens,
+  getAccessToken,
   setTokens,
 } from "@/lib/api";
 import { ENDPOINTS } from "@/lib/endpoints";
@@ -22,6 +23,18 @@ import { checkRateLimit } from "@/lib/rate-limit";
 
 const LOGOUT_RATE_LIMIT = { maxAttempts: 5, windowMs: 60_000 };
 import { logger } from "@/lib/logger";
+
+/**
+ * localStorage flag recording that this browser has successfully
+ * authenticated at least once. Unlike `wasAuthenticatedRef` it survives hard
+ * refreshes, so a first-visit bootstrap failure is never mistaken for a real
+ * logout (and never triggers a premature logout broadcast to other tabs).
+ */
+const SESSION_FLAG_KEY = "noc_session_seen";
+
+/** Bootstrap retry policy for transient (non-auth) failures. */
+const MAX_BOOTSTRAP_ATTEMPTS = 3;
+const BOOTSTRAP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
 
 import {
   createSessionSync,
@@ -71,6 +84,33 @@ function isBrowser() {
   return typeof window !== "undefined";
 }
 
+function hasSessionFlag(): boolean {
+  if (!isBrowser()) return false;
+  try {
+    return window.localStorage.getItem(SESSION_FLAG_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setSessionFlag(): void {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.setItem(SESSION_FLAG_KEY, "1");
+  } catch {
+    // Storage may be unavailable (e.g. private browsing) — non-fatal.
+  }
+}
+
+function clearSessionFlag(): void {
+  if (!isBrowser()) return;
+  try {
+    window.localStorage.removeItem(SESSION_FLAG_KEY);
+  } catch {
+    // Storage may be unavailable (e.g. private browsing) — non-fatal.
+  }
+}
+
 export function SessionProvider({
   children,
 }: {
@@ -109,6 +149,7 @@ export function SessionProvider({
   const setAuthenticated = useCallback(
     (sessionUser: SessionUser) => {
       wasAuthenticatedRef.current = true;
+      setSessionFlag();
       setUser(sessionUser);
       setState("authenticated");
     },
@@ -120,10 +161,11 @@ export function SessionProvider({
    */
 
   function broadcastLogout() {
-    // Only broadcast if this tab was previously authenticated — otherwise
-    // the initial bootstrap failure (no session on first load) would
-    // incorrectly tell other tabs to clear their valid sessions.
-    if (!wasAuthenticatedRef.current) return;
+    // Only broadcast if this tab — or this browser, across hard refreshes —
+    // was previously authenticated. Otherwise the initial bootstrap failure
+    // on a first visit would incorrectly tell other tabs to clear their
+    // still-valid sessions.
+    if (!wasAuthenticatedRef.current && !hasSessionFlag()) return;
     syncRef.current?.postMessage({ type: "logout" });
   }
 
@@ -139,6 +181,7 @@ export function SessionProvider({
     setUser(null);
     setState("unauthenticated");
     broadcastLogout();
+    clearSessionFlag();
   }, []);
 
   /**
@@ -241,7 +284,21 @@ export function SessionProvider({
       setAuthenticated(response.data);
       broadcastAuth(response.data);
     } catch (error) {
+      const status = (error as { response?: { status?: number } })
+        ?.response?.status;
+
+      // Only a definitive 401/403 means the session was revoked. Network
+      // errors, timeouts and 5xx responses must not destroy a session that
+      // may still be valid on the server.
+      if (status !== 401 && status !== 403) {
+        logger.warn("session-refresh-unreachable", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+
       logger.error("session-refresh-failed", {
+        status,
         message: error instanceof Error ? error.message : String(error),
       });
 
@@ -264,13 +321,25 @@ export function SessionProvider({
 
     const controller = new AbortController();
 
-    async function bootstrapSession() {
-      try {
-        // With httpOnly cookies, we cannot read tokens directly.
-        // Always try /auth/me — the cookie will be sent automatically.
-        // If no valid session exists, the request will 401 and we'll
-        // set state to unauthenticated.
+    function isCanceled(error: unknown): boolean {
+      return (error as { name?: string })?.name === "CanceledError";
+    }
 
+    function getStatus(error: unknown): number | undefined {
+      return (error as { response?: { status?: number } })?.response?.status;
+    }
+
+    /**
+     * Fallback validation via /auth/me. Distinguishes a definitive
+     * "no session" (401/403 response) from a transient failure (network
+     * error, timeout, 5xx) — only the former clears the session. Transient
+     * failures are retried with backoff and never destroy cookies.
+     */
+    async function tryMe(attempt: number): Promise<void> {
+      try {
+        // With httpOnly cookies the cookie is sent automatically
+        // (withCredentials). If a token is still readable, the interceptor
+        // attaches it as a Bearer header.
         const response = await api.get<SessionUser>(
           ENDPOINTS.auth.me,
           {
@@ -282,21 +351,105 @@ export function SessionProvider({
 
         setAuthenticated(response.data);
       } catch (error: unknown) {
-        if (
-          (error as { name?: string }).name ===
-          "CanceledError"
-        ) {
+        if (isCanceled(error)) return;
+
+        const status = getStatus(error);
+
+        // Definitive: the server says there is no valid session.
+        if (status === 401 || status === 403) {
+          logger.info("session-bootstrap-no-session", {
+            source: "me",
+            status,
+          });
+
+          if (!mountedRef.current) return;
+
+          clearSession();
           return;
         }
 
-        logger.error("session-bootstrap-failed", {
+        // Transient: the server could not be reached or errored. The
+        // session may still be valid, so retry and never clear tokens.
+        logger.warn("session-bootstrap-unreachable", {
+          source: "me",
+          attempt: attempt + 1,
           message: error instanceof Error ? error.message : String(error),
         });
 
+        if (attempt < MAX_BOOTSTRAP_ATTEMPTS - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, BOOTSTRAP_RETRY_DELAYS_MS[attempt])
+          );
+          if (!mountedRef.current) return;
+          return tryMe(attempt + 1);
+        }
+
         if (!mountedRef.current) return;
 
-        clearSession();
+        // Give up on the UI state, but preserve cookies so a later refresh
+        // or page load can recover the session without a forced logout.
+        setUser(null);
+        setState("unauthenticated");
       }
+    }
+
+    async function bootstrapSession() {
+      const hasReadableToken = !!getAccessToken();
+      const sessionSeen = hasSessionFlag();
+
+      // Fast path: no readable token and no record of a previous session on
+      // this browser — there is nothing to validate, skip the network calls.
+      if (!hasReadableToken && !sessionSeen) {
+        if (!mountedRef.current) return;
+        setUser(null);
+        setState("unauthenticated");
+        return;
+      }
+
+      // 1) Prefer the dedicated cookie-session endpoint. It validates the
+      //    httpOnly session cookies directly — without an Authorization
+      //    header — so a hard refresh (where in-memory tokens are gone and a
+      //    stale cookie token could mask a valid session) still restores the
+      //    session. When the endpoint is not deployed yet (404/405) or is
+      //    unreachable, fall back to /auth/me below.
+      try {
+        const sessionResponse = await api.get<SessionUser>(
+          ENDPOINTS.auth.session,
+          {
+            signal: controller.signal,
+            skipAuth: true,
+          } as Parameters<typeof api.get>[1]
+        );
+
+        if (!mountedRef.current) return;
+
+        setAuthenticated(sessionResponse.data);
+        return;
+      } catch (error: unknown) {
+        if (isCanceled(error)) return;
+
+        const status = getStatus(error);
+
+        if (status === 401 || status === 403) {
+          logger.info("session-bootstrap-no-session", {
+            source: "session",
+            status,
+          });
+
+          if (!mountedRef.current) return;
+
+          clearSession();
+          return;
+        }
+
+        logger.debug("session-bootstrap-fallback", {
+          source: "session",
+          status,
+        });
+      }
+
+      // 2) Fallback: validate via /auth/me with transient-error retries.
+      await tryMe(0);
     }
 
     bootstrapSession();

@@ -15,6 +15,24 @@ const TX_HASH =
 const FROM_ADDRESS = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const TO_ADDRESS = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 
+const MOCK_USER = {
+  id: "user-1",
+  email: "ops@example.com",
+  role: "admin",
+  full_name: "Ops User",
+};
+
+interface RegisteredUser {
+  id: string;
+  email: string;
+  password: string;
+  full_name?: string;
+  role: string;
+}
+
+/** Users created via POST /auth/register; login accepts them too. */
+const registeredUsers: RegisteredUser[] = [];
+
 interface SlaRecord {
   status: "met" | "violated";
   mttr_minutes: number;
@@ -114,24 +132,65 @@ export async function mockApi(page: Page): Promise<void> {
       });
 
     /* ----------------------------- Auth ----------------------------- */
+    if (method === "POST" && path === "/api/v1/auth/register") {
+      const body = request.postDataJSON() as {
+        email?: string;
+        password?: string;
+        full_name?: string;
+      };
+      const user: RegisteredUser = {
+        id: `user-${registeredUsers.length + 2}`,
+        email: body.email ?? "user@example.com",
+        password: body.password ?? "",
+        role: "engineer",
+        ...(body.full_name !== undefined ? { full_name: body.full_name } : {}),
+      };
+      registeredUsers.push(user);
+      return json(201, {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+        created_at: new Date().toISOString(),
+      });
+    }
+
     if (method === "POST" && path === "/api/v1/auth/login") {
       const body = request.postDataJSON() as { email?: string; password?: string };
+      const registered = registeredUsers.find(
+        (u) => u.email === body.email && u.password === body.password
+      );
+      if (registered) {
+        return json(200, {
+          access_token: "mock-access-token",
+          refresh_token: "mock-refresh-token",
+          user: {
+            id: registered.id,
+            email: registered.email,
+            role: registered.role,
+            full_name: registered.full_name,
+          },
+        });
+      }
       if (body.email === "ops@example.com" && body.password === "password123") {
         return json(200, {
           access_token: "mock-access-token",
           refresh_token: "mock-refresh-token",
+          user: MOCK_USER,
         });
       }
       return json(401, { message: "Invalid credentials" });
     }
 
+    // Cookie-only session check. The app prefers this endpoint during
+    // bootstrap so a hard refresh can restore the session; the mock treats
+    // any reachable session as valid (tests always log in first).
+    if (method === "GET" && path === "/api/v1/auth/session") {
+      return json(200, MOCK_USER);
+    }
+
     if (method === "GET" && path === "/api/v1/auth/me") {
-      return json(200, {
-        id: "user-1",
-        email: "ops@example.com",
-        role: "admin",
-        full_name: "Ops User",
-      });
+      return json(200, MOCK_USER);
     }
 
     if (method === "POST" && path === "/api/v1/auth/logout") {

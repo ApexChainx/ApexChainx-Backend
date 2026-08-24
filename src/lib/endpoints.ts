@@ -6,6 +6,13 @@ export const ENDPOINTS = {
     register: "/auth/register",
     logout: "/auth/logout",
     logoutAll: "/auth/logout-all",
+    /**
+     * Cookie-only session check. Reads the httpOnly session cookies directly
+     * (no Authorization header) so a hard refresh — where in-memory tokens are
+     * gone — can still restore the session. Falls back to `/auth/me` when the
+     * endpoint is not deployed yet.
+     */
+    session: "/auth/session",
     me: "/auth/me",
     twoFactorSetup: "/auth/2fa/setup",
     twoFactorVerify: "/auth/2fa/verify",
