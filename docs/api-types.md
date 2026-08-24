@@ -24,7 +24,7 @@ This produces `src/types/api.generated.ts` with strict TypeScript types for all 
 
 1. Add `openapi-typescript` as a devDependency (already done).
 2. Run `npm run codegen` whenever the backend spec changes.
-3. The CI workflow (`.github/workflows/codegen-check.yml`) detects drift automatically.
+3. The CI workflow (`.github/workflows/api-codegen-check.yml`) detects drift automatically.
 
 #### Re-exporting generated types
 
