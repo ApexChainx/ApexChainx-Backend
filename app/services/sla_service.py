@@ -66,10 +66,25 @@ class SLAOrchestrator:
         )
 
     def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> list[OutageORM]:
-        """Get all outages for a device within the specified period."""
+        """Get all outages for a device within the specified period.
+
+        Matching strategy (avoids cross-device contamination):
+        - Match directly by outage id (primary key).
+        - Match by site_id when the outage has a non-null site_id.
+        - Fall back to site_name only when site_id is NULL on the outage
+          record, so that devices sharing a site_name but distinguished by
+          site_id are never cross-matched.
+        """
+        from sqlalchemy import and_, or_
+
+        id_match = OutageORM.id == device_id
+        site_id_match = and_(OutageORM.site_id.isnot(None), OutageORM.site_id == device_id)
+        site_name_match = and_(OutageORM.site_id.is_(None), OutageORM.site_name == device_id)
+        device_filter = or_(id_match, site_id_match, site_name_match)
+
         return (
             self.db.query(OutageORM)
-            .filter((OutageORM.site_id == device_id) | (OutageORM.id == device_id) | (OutageORM.site_name == device_id))
+            .filter(device_filter)
             .filter(OutageORM.created_at >= start_date)
             .filter(OutageORM.created_at < end_date)
             .all()
