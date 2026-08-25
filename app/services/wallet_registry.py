@@ -174,16 +174,20 @@ class WalletRegistry:
         cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch from cache or DB, update cache on miss."""
+        if cache:
+            cached = cache.get(user_id)
+            if cached:
+                return Wallet(**cached)
+
         repo = WalletRepository(db)
         orm = repo.get_by_user_id(user_id)
         if orm is None:
             return None
 
         wallet = _orm_to_pydantic(orm)
-        # Touch the cache timestamp in DB to simulate freshness tracking
         repo.touch_cache(orm)
         if cache:
-            cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+            cache.set(user_id, wallet.model_dump(mode="json"))
         return wallet
 
     @classmethod

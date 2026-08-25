@@ -173,7 +173,7 @@ def compute_device_sla(
                 violation_reasons=[],
             )
             latency = time.monotonic() - start_time
-            record_histogram("sla_computation_latency_seconds", latency, tags={"device_id": device_id}, buckets=_SLA_LATENCY_BUCKETS)
+            record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "no_outages"}, buckets=_SLA_LATENCY_BUCKETS)
             record_sla_settlement_audit_events(device_id, period, result, status="initiated")
             record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             return result
@@ -232,7 +232,7 @@ def compute_device_sla(
             ],
         )
         latency = time.monotonic() - start_time
-        record_histogram("sla_computation_latency_seconds", latency, tags={"device_id": device_id}, buckets=_SLA_LATENCY_BUCKETS)
+        record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "violated" if is_violated else "ok"}, buckets=_SLA_LATENCY_BUCKETS)
         record_sla_settlement_audit_events(device_id, period, result, status="initiated")
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result
