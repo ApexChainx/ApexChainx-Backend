@@ -15,10 +15,13 @@ from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
+from app.utils.cache import TTLCache
 from app.utils.correlation_ctx import get_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
+
+_job_status_cache = TTLCache(ttl_seconds=5)
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
@@ -141,6 +144,15 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
     if job.status in (JobStatus.SUCCESS, JobStatus.FAILURE, JobStatus.REVOKED):
         return job
 
+    cache_key = str(job.id)
+    cached = _job_status_cache.get(cache_key)
+    if cached is not None:
+        if cached != job.status:
+            job.status = cached
+            db.commit()
+            db.refresh(job)
+        return job
+
     task_result: AsyncResult = AsyncResult(job.celery_task_id, app=celery_app)
     celery_state = task_result.state  # PENDING, STARTED, SUCCESS, FAILURE, REVOKED
 
@@ -153,6 +165,7 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
     }
 
     new_status = state_map.get(celery_state, job.status)
+    _job_status_cache.set(cache_key, new_status)
     if new_status != job.status:
         job.status = new_status
         db.commit()

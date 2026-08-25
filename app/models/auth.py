@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.enums import Role
 
@@ -37,7 +37,7 @@ class LoginRequest(BaseModel):
         }
     )
 
-    email: str
+    email: EmailStr
     password: str = Field(..., min_length=6)
 
 
