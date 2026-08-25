@@ -406,7 +406,7 @@ def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
     }
     payload = base64.urlsafe_b64encode(json.dumps(payload_dict).encode()).rstrip(b"=").decode()
 
-    signing_key = (app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
+    signing_key = (app_settings.IMPERSONATION_SIGNING_KEY or app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
     signature = hmac.new(
         signing_key,
         f"{header}.{payload}".encode(),

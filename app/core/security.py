@@ -81,8 +81,9 @@ def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
         payload_b64 += "=" * (4 - len(payload_b64) % 4) if len(payload_b64) % 4 else ""
         sig_b64 += "=" * (4 - len(sig_b64) % 4) if len(sig_b64) % 4 else ""
 
-        # Verify signature
-        secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
+        # Verify signature – prefer dedicated impersonation key when set
+        signing_key = app_settings.IMPERSONATION_SIGNING_KEY or app_settings.SECRET_KEY or "apexchainx-dev-secret"
+        secret = signing_key.encode()
         expected_sig = hmac.new(
             secret,
             f"{header_b64}.{payload_b64}".encode(),
