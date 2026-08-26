@@ -1,11 +1,13 @@
+import csv
 import hashlib
 import hmac
+import io
 import time
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -124,6 +126,46 @@ def list_payments(
         sort_dir=sort_dir.value,
     )
     return PaginatedPayments(items=items, total=total, page=page, page_size=page_size)
+
+
+# BE-287: mirrors GET /outages/export (app/utils/exporter.py conventions) —
+# same filters as list_payments, csv/json output, same Content-Disposition
+# and 400-on-bad-format behavior. Defined before "/{transaction_id}" so it
+# isn't shadowed by that path.
+@router.get("/export")
+def export_payments(
+    format: str = "json",
+    status: str | None = None,
+    type: str | None = None,
+    outage_id: str | None = None,
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
+    fmt = format.lower()
+    if fmt not in ("json", "csv"):
+        raise HTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
+
+    repo = PaymentRepository(db)
+    items, _ = repo.list(
+        page=1, page_size=10_000, status=status, outage_id=outage_id, type=type, date_from=date_from, date_to=date_to
+    )
+    rows = [item.model_dump(mode="json") for item in items]
+
+    if fmt == "json":
+        return rows
+
+    buffer = io.StringIO()
+    fieldnames = list(rows[0].keys()) if rows else ["id", "transaction_hash", "type", "amount", "status"]
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=payments.csv"},
+    )
 
 
 @router.get("/ping")
