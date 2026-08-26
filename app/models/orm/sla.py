@@ -10,7 +10,7 @@ class SLAResultORM(Base):
     __tablename__ = "sla_results"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    outage_id = Column(String, ForeignKey("outages.id", ondelete="CASCADE"), nullable=False, index=True)
+    outage_id = Column(String, ForeignKey("outages.id", ondelete="RESTRICT"), nullable=False, index=True)
     status = Column(String(20), nullable=False)  # "met" | "violated"
     mttr_minutes = Column(Integer, nullable=False)
     threshold_minutes = Column(Integer, nullable=False)
