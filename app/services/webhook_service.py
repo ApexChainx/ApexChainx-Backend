@@ -78,6 +78,9 @@ def _apply_jitter(delay: float) -> float:
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
+# BE-299: cap on due deliveries processed per retry sweep, so a large backlog
+# (e.g. after an outage burst) can't block the worker for an unbounded run.
+WEBHOOK_RETRY_BATCH_SIZE = 100
 
 
 def _build_headers(
@@ -368,7 +371,12 @@ def trigger_sla_violation_webhooks(
     return deliveries
 
 
-def retry_pending_deliveries(db: Session) -> int:
+def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_SIZE) -> int:
+    """Dispatch due retries, capped at `batch_size` per sweep (#299).
+
+    Oldest-due deliveries are processed first; any remainder is picked up by
+    the next scheduled sweep rather than blocking this run.
+    """
     now = datetime.now(UTC)
     due_deliveries = (
         db.query(WebhookDelivery)
@@ -376,6 +384,8 @@ def retry_pending_deliveries(db: Session) -> int:
             WebhookDelivery.status == WebhookDeliveryStatus.RETRYING,
             WebhookDelivery.next_retry_at <= now,
         )
+        .order_by(WebhookDelivery.next_retry_at)
+        .limit(batch_size)
         .all()
     )
 
