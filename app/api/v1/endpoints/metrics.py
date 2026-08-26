@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, Response
 
 from app.core.security import require_engineer
-from app.services.metrics import _DEFAULT_LATENCY_BUCKETS, metrics
+from app.services.metrics import metrics
 
 router = APIRouter(prefix="/metrics", tags=["Metrics"])
 
