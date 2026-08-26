@@ -8,6 +8,7 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=[
         "app.tasks.auth_tasks",
+        "app.tasks.audit_tasks",
         "app.tasks.sla_tasks",
         "app.tasks.webhook_tasks",
     ],
@@ -33,6 +34,10 @@ celery_app.conf.update(
         "cleanup-expired-auth-rows": {
             "task": "app.tasks.auth_tasks.cleanup_expired_auth_rows",
             "schedule": 3600.0,  # every hour
+        },
+        "archive-old-audit-entries": {
+            "task": "app.tasks.audit_tasks.archive_old_audit_entries",
+            "schedule": 86400.0,  # every day
         },
     },
 )
