@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import time
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -58,6 +59,19 @@ class ReconciliationHistoryResponse(BaseModel):
     history: list[ReconciliationHistoryEntry]
 
 
+# BE-286: whitelisted sort fields/directions, mirroring OutageSortField/
+# OutageSortDirection so unknown values 422 instead of being silently ignored.
+class PaymentSortField(str, Enum):
+    created_at = "created_at"
+    amount = "amount"
+    status = "status"
+
+
+class PaymentSortDirection(str, Enum):
+    asc = "asc"
+    desc = "desc"
+
+
 @router.get("/")
 def list_payments(
     page: int = Query(
@@ -73,6 +87,8 @@ def list_payments(
     outage_id: str | None = None,
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
+    sort_by: PaymentSortField = Query(default=PaymentSortField.created_at),
+    sort_dir: PaymentSortDirection = Query(default=PaymentSortDirection.desc),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
@@ -104,6 +120,8 @@ def list_payments(
         type=type,
         date_from=date_from,
         date_to=date_to,
+        sort_by=sort_by.value,
+        sort_dir=sort_dir.value,
     )
     return PaginatedPayments(items=items, total=total, page=page, page_size=page_size)
 
