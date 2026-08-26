@@ -168,3 +168,6 @@ def record_histogram(name: str, value: float, tags: dict[str, str] | None = None
 # --- SLA Dispute Metrics ---
 SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL = "sladispute_notification_attempt_total"
 SLADISPUTE_NOTIFICATION_DURATION_MS = "sladispute_notification_duration_ms"
+
+# --- SLA Recomputation Metrics ---
+SLA_RECOMPUTATION_TOTAL = "sla_recomputation_total"

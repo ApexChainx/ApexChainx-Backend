@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 VALID_STELLAR_NETWORKS = {"testnet", "mainnet", "futurenet", "standalone"}
 VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
+DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
+MIN_SECRET_KEY_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -11,6 +13,11 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = False
     SECRET_KEY: str = "apexchainx-dev-secret"
+    # Dedicated key for impersonation token signing. When unset, falls back to
+    # SECRET_KEY.  Production deployments should set this to a separate random
+    # value so that a SECRET_KEY leak does not automatically compromise
+    # impersonation tokens (and vice versa).
+    IMPERSONATION_SIGNING_KEY: str = ""
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
     DATABASE_AUDIT_URL: str | None = None
     API_V1_PREFIX: str = "/api/v1"
@@ -175,6 +182,26 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.TRUSTED_PROXY_COUNT < 0:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
+
+    if config.ENVIRONMENT not in {"local", "test"}:
+        if not config.SECRET_KEY or config.SECRET_KEY == DEFAULT_SECRET_KEY or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH:
+            errors.append(
+                f"SECRET_KEY must be set to a secure, non-default value in non-local environments. "
+                f"Current value is the development default or too short (< {MIN_SECRET_KEY_LENGTH} chars). "
+                f"ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+        imp_key = config.IMPERSONATION_SIGNING_KEY
+        if imp_key and len(imp_key) < MIN_SECRET_KEY_LENGTH:
+            errors.append(
+                f"IMPERSONATION_SIGNING_KEY is set but too short (< {MIN_SECRET_KEY_LENGTH} chars) "
+                f"for ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+        if not config.PAYMENT_WEBHOOK_SECRET:
+            errors.append(
+                f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
 
     try:
         delays = [int(d.strip()) for d in config.WEBHOOK_RETRY_BASE_DELAYS.split(",") if d.strip()]

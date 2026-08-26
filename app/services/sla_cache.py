@@ -1,9 +1,12 @@
 """Redis caching layer for SLA calculation results (#25)."""
 
 import json
+import logging
 from collections.abc import Callable
 
 from redis import Redis
+
+logger = logging.getLogger(__name__)
 
 
 class SLACache:
@@ -19,7 +22,11 @@ class SLACache:
     def get(self, device_id: str, period: str) -> dict | None:
         raw = self._redis.get(self._key(device_id, period))
         if raw:
-            return json.loads(raw)
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                logger.warning("Corrupt JSON in SLA cache for key %s:%s, treating as miss", device_id, period)
+                return None
         return None
 
     def set(self, device_id: str, period: str, result: dict) -> None:

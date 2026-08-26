@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from time import time
 
 from redis import Redis
@@ -15,7 +16,7 @@ class CredentialStuffingDetector:
         return f"cred_stuffing:{ip}"
 
     def record_attempt(self, ip: str, password: str) -> None:
-        prefix = password[:4]
+        prefix = hashlib.sha256(password[:4].encode()).hexdigest()[:16]
         now = time()
         key = self._prefix_key(ip)
         window = settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES * 60
@@ -25,7 +26,7 @@ class CredentialStuffingDetector:
 
     def detect_stuffing(self, ip: str) -> bool:
         count = self.get_suspicious_ip_count(ip)
-        return count > settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD
+        return count >= settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD
 
     def get_suspicious_ip_count(self, ip: str) -> int:
         now = time()

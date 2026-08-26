@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.enums import OutageStatus, Severity
 from app.models.orm.outage import OutageORM
+from app.models.orm.sla import SLAResultORM
 from app.models.outage import Location, Outage, SLAStatus
 from app.models.outage_dto import OutageCreate, OutageSortDirection, OutageSortField, OutageUpdate
 from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
@@ -388,21 +389,47 @@ class OutageRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def list_violations(self) -> builtins.list[dict]:
-        from app.services.sla import SLACalculator
+    def list_violations(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        query = (
+            self.db.query(SLAResultORM, OutageORM)
+            .join(OutageORM, OutageORM.id == SLAResultORM.outage_id)
+            .filter(SLAResultORM.is_latest.is_(True), SLAResultORM.status == "violated")
+            .order_by(SLAResultORM.created_at.desc())
+        )
 
-        rows = self.db.query(OutageORM).filter(OutageORM.status == OutageStatus.resolved.value).all()
+        total = query.count()
+        rows = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        violations = []
-        for orm in rows:
-            if orm.mttr_minutes is None:
-                continue
-            sla = SLACalculator.calculate(
-                outage_id=orm.id,
-                severity=orm.severity,
-                mttr_minutes=orm.mttr_minutes,
+        items = []
+        for sla_orm, outage_orm in rows:
+            items.append(
+                {
+                    "outage": _orm_to_pydantic(outage_orm),
+                    "sla": {
+                        "id": sla_orm.id,
+                        "outage_id": sla_orm.outage_id,
+                        "status": sla_orm.status,
+                        "mttr_minutes": sla_orm.mttr_minutes,
+                        "threshold_minutes": sla_orm.threshold_minutes,
+                        "amount": sla_orm.amount,
+                        "payment_type": sla_orm.payment_type,
+                        "rating": sla_orm.rating,
+                        "policy_version": sla_orm.policy_version,
+                        "threshold_source": sla_orm.threshold_source,
+                        "reason_code": sla_orm.reason_code,
+                        "decision_trace": sla_orm.decision_trace,
+                        "compute_hash": sla_orm.compute_hash,
+                    },
+                }
             )
-            if sla.status == "violated":
-                violations.append({"outage": _orm_to_pydantic(orm), "sla": sla})
 
-        return violations
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }

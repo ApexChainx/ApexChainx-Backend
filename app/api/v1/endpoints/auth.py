@@ -21,6 +21,7 @@ from app.repositories.user_repository import UserRepository, user_orm_to_pydanti
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
 from app.services.token_revocation import revoke
+from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
 router = APIRouter()
 
@@ -164,6 +165,12 @@ def update_profile(
     if payload.full_name is None and payload.stellar_wallet is None:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
 
+    if payload.stellar_wallet is not None:
+        try:
+            normalize_wallet(payload.stellar_wallet)
+        except WalletAddressError as exc:
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+
     repo = UserRepository(db)
     updated = repo.update_profile(
         user_id=current_user.id,
@@ -264,30 +271,23 @@ def auth_ping():
 # --------------------------------------------------------------------------- #
 
 
-class GDPRExportResponse(BaseModel):
-    job_id: str
-    exported_at: str
-    size_bytes: int
-    tarball_base64: bytes
-    entry_count: int
-
-
 class GDPREraseResponse(BaseModel):
     status: str
     job_id: str
     message: str
 
 
-@router.post("/me/export", response_model=GDPRExportResponse)
+@router.post("/me/export")
 def export_my_data(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Export all personal data for the authenticated user (GDPR compliance).
 
-    Returns a tarball containing user data and audit log entries.
-    Designed to complete in < 30 s for up to 1 000 audit events.
+    Returns a streaming gzip tarball containing user data and audit log entries.
     """
+    from fastapi.responses import StreamingResponse
+
     from app.services.gdpr import export_user_data
 
     repo = UserRepository(db)
@@ -295,8 +295,16 @@ def export_my_data(
     if not user_orm:
         raise HTTPException(status_code=404, detail="User not found")
 
-    result = export_user_data(db, user_orm)
-    return result
+    tarball_bytes = export_user_data(db, user_orm)
+
+    def _iter():
+        yield tarball_bytes
+
+    return StreamingResponse(
+        _iter(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": "attachment; filename=gdpr_export.tar.gz"},
+    )
 
 
 @router.post("/me/erase", response_model=GDPREraseResponse, status_code=status.HTTP_202_ACCEPTED)

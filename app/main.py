@@ -4,8 +4,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
-from redis import ConnectionError, Redis, TimeoutError
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import ALL_METHODS, SAFELISTED_HEADERS, CORSMiddleware
@@ -43,25 +41,6 @@ install_signal_handlers()
 init_tracing()
 
 
-async def check_database() -> bool:
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-            conn.commit()
-        return True
-    except ConnectionError:
-        return False
-
-
-async def check_celery() -> bool:
-    try:
-        r = Redis.from_url(settings.CELERY_BROKER_URL)
-        r.ping()
-        return True
-    except (ConnectionError, TimeoutError):
-        return False
-
-
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
@@ -80,9 +59,14 @@ app.add_middleware(IdempotencyMiddleware)
 class _DynamicCORSMiddleware(CORSMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
+        self._origins_cache = list(settings.ALLOWED_ORIGINS)
+
+    def refresh_origins(self) -> None:
+        """Re-read allowed origins from settings."""
+        self._origins_cache = list(settings.ALLOWED_ORIGINS)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        allow_origins = settings.ALLOWED_ORIGINS
+        allow_origins = self._origins_cache
         allow_methods = settings.CORS_ALLOWED_METHODS
         allow_headers = settings.CORS_ALLOWED_HEADERS
         expose_headers = settings.CORS_EXPOSE_HEADERS
@@ -204,6 +188,7 @@ async def apex_transient_error_handler(request: Request, exc: ApexTransientError
 @app.get("/health/liveness")
 def liveness():
     return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+
 
 @app.get("/health/readiness")
 async def readiness():

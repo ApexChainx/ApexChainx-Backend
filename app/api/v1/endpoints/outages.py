@@ -75,9 +75,14 @@ def export_outages_endpoint(
 
 
 @router.get("/violations")
-def list_violations(current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def list_violations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
     repo = OutageRepository(db)
-    return repo.list_violations()
+    return repo.list_violations(page=page, page_size=page_size)
 
 
 @router.get("/")
@@ -508,12 +513,12 @@ def resolve_outage(
             OutageEventRepository(db).record(outage_id, "sla_computed", {"status": stored_sla.status})
             payment_repo = PaymentRepository(db)
             payment = payment_repo.create_for_sla_result(outage.id, stored_sla)
-            webhook_event = WebhookEvent.SLA_VIOLATION if stored_sla.status == "violated" else WebhookEvent.SLA_RESOLVED
-            trigger_sla_violation_webhooks(
-                db,
-                sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
-                event=webhook_event,
-            )
+            if stored_sla.status == "violated":
+                trigger_sla_violation_webhooks(
+                    db,
+                    sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
+                    event=WebhookEvent.SLA_VIOLATION,
+                )
 
             return {"outage": outage, "sla": stored_sla, "payment": payment}
     except ConcurrencyLockError as exc:
@@ -547,7 +552,7 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
 
     # Acquire advisory lock to prevent concurrent recomputations
     try:
-        with advisory_lock_nowait(db, f"recompute:{outage_id}"):
+        with advisory_lock_nowait(db, f"sla_recompute:{outage_id}"):
             orm = repo.get_orm_locked(outage_id)
 
             # Build compute_hash inputs from outage timestamps for idempotency (#35)
@@ -570,18 +575,18 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
             _invalidate_analytics_cache()
             payment_repo = PaymentRepository(db)
             payment = payment_repo.create_for_sla_result(outage.id, stored_sla)
-            webhook_event = WebhookEvent.SLA_VIOLATION if stored_sla.status == "violated" else WebhookEvent.SLA_RESOLVED
-            trigger_sla_violation_webhooks(
-                db,
-                sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
-                event=webhook_event,
-            )
+            if stored_sla.status == "violated":
+                trigger_sla_violation_webhooks(
+                    db,
+                    sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
+                    event=WebhookEvent.SLA_VIOLATION,
+                )
 
             audit_log.log("sla_recomputed", {"id": outage.id})
             OutageEventRepository(db).record(outage_id, "sla_recomputed", {"status": stored_sla.status})
             return {"sla": stored_sla, "payment": payment}
-    except ConcurrencyLockError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConcurrencyLockError:
+        raise HTTPException(status_code=409, detail="SLA recomputation already in progress")
 
 
 @router.get("/{outage_id}/timeline")

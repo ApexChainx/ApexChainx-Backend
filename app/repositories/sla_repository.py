@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,6 +15,7 @@ from app.models.sla import SLAAnalyticsSnapshot, SLADashboardKPI, SLAPerformance
 
 BucketInterval = Literal["day", "week", "month"]
 VALID_BUCKETS: tuple[str, ...] = ("day", "week", "month")
+DEFAULT_SCAN_DAYS = 365
 
 
 def _orm_to_pydantic(orm: SLAResultORM) -> SLAResult:
@@ -158,6 +159,9 @@ class SLARepository:
         severity: str | None = None,
         site_id: str | None = None,
     ) -> SLAPerformanceAggregation:
+        if start_date is None:
+            start_date = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEFAULT_SCAN_DAYS)
+
         latest_results_query = select(
             SLAResultORM.outage_id.label("outage_id"),
             SLAResultORM.status.label("status"),
@@ -179,6 +183,8 @@ class SLARepository:
             latest_results_query = latest_results_query.where(OutageORM.severity == severity)
         if site_id:
             latest_results_query = latest_results_query.where(OutageORM.site_id == site_id)
+
+        latest_results_query = latest_results_query.where(SLAResultORM.is_latest.is_(True))
 
         latest_results = latest_results_query.subquery()
 
@@ -209,6 +215,8 @@ class SLARepository:
         severity: str | None = None,
         site_id: str | None = None,
     ) -> SLADashboardKPI:
+        scan_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEFAULT_SCAN_DAYS)
+
         query = select(
             func.count(SLAResultORM.id).label("total_outages"),
             func.coalesce(
@@ -223,6 +231,9 @@ class SLARepository:
                 func.sum(case((SLAResultORM.payment_type == "penalty", func.abs(SLAResultORM.amount)), else_=0.0)),
                 0.0,
             ).label("total_penalties"),
+        ).where(
+            SLAResultORM.is_latest.is_(True),
+            SLAResultORM.created_at >= scan_start,
         )
 
         if severity or site_id:
@@ -259,6 +270,8 @@ class SLARepository:
         except ZoneInfoNotFoundError:
             raise ValueError(f"Unknown timezone: '{tz}'")
 
+        scan_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEFAULT_SCAN_DAYS)
+
         # Truncate created_at to the requested bucket in the target timezone.
         # We convert UTC → target tz using AT TIME ZONE (PostgreSQL).
         if bucket == "day":
@@ -284,6 +297,10 @@ class SLARepository:
                     func.sum(case((SLAResultORM.payment_type == "penalty", func.abs(SLAResultORM.amount)), else_=0.0)),
                     0.0,
                 ).label("penalties"),
+            )
+            .where(
+                SLAResultORM.is_latest.is_(True),
+                SLAResultORM.created_at >= scan_start,
             )
             .group_by(bucket_expr)
             .order_by(bucket_expr.desc())
