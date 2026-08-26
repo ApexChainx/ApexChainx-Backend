@@ -26,7 +26,7 @@ class OutageORM(Base):
     mttr_minutes = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=datetime.now(UTC),
         onupdate=datetime.now(UTC),
