@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
@@ -26,7 +27,7 @@ from app.core.exceptions import (
 from app.core.lifecycle import install_signal_handlers
 from app.core.logging_config import configure_logging
 from app.core.tracing import init_tracing, instrument_app
-from app.db.session import engine
+from app.db.session import audit_engine, engine
 from app.middleware.api_version import ApiVersionMiddleware
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
@@ -192,7 +193,11 @@ def liveness():
 
 @app.get("/health/readiness")
 async def readiness():
-    report = build_readiness_report(engine, settings.CELERY_BROKER_URL)
+    # Run the (blocking) probe work on a worker thread so a slow DB/Redis never
+    # stalls the event loop.
+    report = await asyncio.to_thread(
+        build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL
+    )
     report["timestamp"] = datetime.now(UTC).isoformat()
     return report
 
