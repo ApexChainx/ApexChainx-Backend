@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import random
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -110,17 +109,15 @@ def _build_headers(
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
         "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
+        "X-Correlation-ID": corr_id,
     }
 
-    # Inject OTel trace context (traceparent) for distributed tracing
+    # Inject OTel trace context (traceparent) only when a real span is active
+    # (#300): a correlation ID is not a trace ID, and fabricating one here
+    # produced fake sampled root traces with no real parent linkage.
     traceparent = get_current_traceparent()
     if traceparent:
         headers["traceparent"] = traceparent
-    else:
-        # Fallback: generate traceparent from correlation ID for non-OTel contexts
-        trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-        span_id = os.urandom(8).hex()
-        headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
 
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
