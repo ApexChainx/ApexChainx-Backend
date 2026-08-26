@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import random
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -79,6 +78,9 @@ def _apply_jitter(delay: float) -> float:
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
+# BE-299: cap on due deliveries processed per retry sweep, so a large backlog
+# (e.g. after an outage burst) can't block the worker for an unbounded run.
+WEBHOOK_RETRY_BATCH_SIZE = 100
 
 
 def _build_headers(
@@ -110,17 +112,15 @@ def _build_headers(
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
         "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
+        "X-Correlation-ID": corr_id,
     }
 
-    # Inject OTel trace context (traceparent) for distributed tracing
+    # Inject OTel trace context (traceparent) only when a real span is active
+    # (#300): a correlation ID is not a trace ID, and fabricating one here
+    # produced fake sampled root traces with no real parent linkage.
     traceparent = get_current_traceparent()
     if traceparent:
         headers["traceparent"] = traceparent
-    else:
-        # Fallback: generate traceparent from correlation ID for non-OTel contexts
-        trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-        span_id = os.urandom(8).hex()
-        headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
 
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
@@ -371,7 +371,12 @@ def trigger_sla_violation_webhooks(
     return deliveries
 
 
-def retry_pending_deliveries(db: Session) -> int:
+def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_SIZE) -> int:
+    """Dispatch due retries, capped at `batch_size` per sweep (#299).
+
+    Oldest-due deliveries are processed first; any remainder is picked up by
+    the next scheduled sweep rather than blocking this run.
+    """
     now = datetime.now(UTC)
     due_deliveries = (
         db.query(WebhookDelivery)
@@ -379,6 +384,8 @@ def retry_pending_deliveries(db: Session) -> int:
             WebhookDelivery.status == WebhookDeliveryStatus.RETRYING,
             WebhookDelivery.next_retry_at <= now,
         )
+        .order_by(WebhookDelivery.next_retry_at)
+        .limit(batch_size)
         .all()
     )
 
