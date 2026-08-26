@@ -21,6 +21,7 @@ from app.repositories.user_repository import UserRepository, user_orm_to_pydanti
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
 from app.services.token_revocation import revoke
+from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
 router = APIRouter()
 
@@ -163,6 +164,12 @@ def update_profile(
     """Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here."""
     if payload.full_name is None and payload.stellar_wallet is None:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
+
+    if payload.stellar_wallet is not None:
+        try:
+            normalize_wallet(payload.stellar_wallet)
+        except WalletAddressError as exc:
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
 
     repo = UserRepository(db)
     updated = repo.update_profile(
