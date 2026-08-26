@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
 from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
+from app.models.enums import Role
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
@@ -48,7 +49,7 @@ class AuthStore:
             email=payload.email,
             hashed_password=hashed_password,
             full_name=payload.full_name,
-            role=payload.role,
+            role=Role.engineer,
         )
 
         audit_log.log_event(
@@ -56,7 +57,41 @@ class AuthStore:
             "registration",
             email=payload.email,
             actor_id=user_id,
-            details={"user_id": user_id, "role": payload.role},
+            details={"user_id": user_id, "role": Role.engineer},
+        )
+
+        return user_orm_to_pydantic(orm_user)
+
+    @classmethod
+    def admin_create_user(cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session) -> AuthUser:
+        """Admin-only user creation with audit logging of the approving admin."""
+        user_repo = UserRepository(db)
+        if user_repo.get_by_email(email):
+            raise ValueError("User already exists")
+
+        if not validate_password_policy(password):
+            raise ValueError(
+                "Password does not meet policy requirements (min 8 chars, "
+                "uppercase, lowercase, digit, special char)"
+            )
+
+        hashed_password = get_password_hash(password)
+        user_id = f"user_{uuid4().hex[:8]}"
+
+        orm_user = user_repo.create(
+            user_id=user_id,
+            email=email,
+            hashed_password=hashed_password,
+            full_name=full_name,
+            role=role,
+        )
+
+        audit_log.log_event(
+            db,
+            "admin_user_created",
+            email=actor_email,
+            actor_id=actor_id,
+            details={"created_user_id": user_id, "created_email": email, "role": role},
         )
 
         return user_orm_to_pydantic(orm_user)
