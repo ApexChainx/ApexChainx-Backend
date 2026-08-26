@@ -1,13 +1,13 @@
-import base64
 import hashlib
-import hmac
-import json
+import hashlib
+import logging
 import re
-import time
 from datetime import UTC, datetime
 from typing import Any
 
+import jwt
 from fastapi import Depends, Header, HTTPException
+from jwt import InvalidTokenError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,8 @@ from app.core.config import settings as app_settings
 from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
+
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -65,47 +67,32 @@ def _extract_bearer_token(authorization: str | None) -> str:
 
 
 def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
-    """Verify a short-lived impersonation JWT.
-
+    """Verify a short-lived impersonation JWT using PyJWT.
     Returns the decoded payload if valid, or None if invalid/expired.
     """
     try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-
-        header_b64, payload_b64, sig_b64 = parts
-
-        # Pad for base64
-        header_b64 += "=" * (4 - len(header_b64) % 4) if len(header_b64) % 4 else ""
-        payload_b64 += "=" * (4 - len(payload_b64) % 4) if len(payload_b64) % 4 else ""
-        sig_b64 += "=" * (4 - len(sig_b64) % 4) if len(sig_b64) % 4 else ""
-
-        # Verify signature – prefer dedicated impersonation key when set
-        signing_key = app_settings.IMPERSONATION_SIGNING_KEY or app_settings.SECRET_KEY or "apexchainx-dev-secret"
-        secret = signing_key.encode()
-        expected_sig = hmac.new(
+        secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret")
+        payload = jwt.decode(
+            token,
             secret,
-            f"{header_b64}.{payload_b64}".encode(),
-            hashlib.sha256,
-        ).digest()
-        actual_sig = base64.urlsafe_b64decode(sig_b64)
-        if not hmac.compare_digest(expected_sig, actual_sig):
-            return None
-
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-
-        # Check expiry
-        now = int(time.time())
-        if payload.get("exp", 0) < now:
-            return None
-
-        # Must have impersonation scope
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub", "scope"]},
+        )
         if payload.get("scope") != "impersonate":
+            logger.warning("impersonation_verification_failed", extra={"reason": "wrong_scope"})
             return None
-
         return payload
-    except Exception:
+    except jwt.ExpiredSignatureError:
+        logger.warning("impersonation_verification_failed", extra={"reason": "expired"})
+        return None
+    except jwt.InvalidAlgorithmError:
+        logger.warning("impersonation_verification_failed", extra={"reason": "invalid_algorithm"})
+        return None
+    except InvalidTokenError as exc:
+        logger.warning("impersonation_verification_failed", extra={"reason": str(exc)})
+        return None
+    except Exception as exc:
+        logger.warning("impersonation_verification_failed", extra={"reason": f"unexpected: {exc}"})
         return None
 
 
