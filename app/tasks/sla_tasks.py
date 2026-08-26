@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -41,7 +40,7 @@ class DatabaseTask(Task):
         job = self._get_job(db, celery_task_id)
         if job:
             job.status = JobStatus.SUCCESS
-            job.result = json.dumps(result)
+            job.result = result
             job.progress = 100.0
             job.finished_at = datetime.now(UTC)
             db.commit()
@@ -346,7 +345,7 @@ def enqueue_sla_computation(
     job = Job(
         celery_task_id=task_result.id,
         job_type=job_type,
-        payload=json.dumps(payload),
+        payload=payload,
     )
     db.add(job)
     db.commit()
@@ -367,7 +366,7 @@ def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correla
     job = Job(
         celery_task_id=task_result.id,
         job_type=JobType.BULK_SLA_COMPUTATION,
-        payload=json.dumps(payload),
+        payload=payload,
     )
     db.add(job)
     db.commit()
