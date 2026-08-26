@@ -122,13 +122,19 @@ def get_config_with_hash(severity: str) -> SLAPolicyContent:
 
 
 def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest) -> SLASeverityConfig:
-    """Update config (backward-compatible). Does NOT bump version or check tokens."""
-    normalized = severity.lower()
-    if normalized not in SLA_CONFIG:
-        raise ValueError(f"Unknown severity level: {severity}")
+    """Update config for a severity without an expected token (#273).
 
-    SLA_CONFIG[normalized] = payload.model_dump()
-    return SLASeverityConfig(**deepcopy(SLA_CONFIG[normalized]))
+    Delegates to publish_config_for_severity with no token check, so a
+    token-less update now gets the same version bump, history entry, and
+    content-hash consistency as a normal publish, instead of silently
+    mutating SLA_CONFIG in place.
+    """
+    policy, _token, _history = publish_config_for_severity(severity, payload, expected_token=None)
+    return SLASeverityConfig(
+        threshold_minutes=policy.threshold_minutes,
+        penalty_per_minute=policy.penalty_per_minute,
+        reward_base=policy.reward_base,
+    )
 
 
 def publish_config_for_severity(
