@@ -392,37 +392,22 @@ def impersonate_user(
 
 
 def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
-    """Generate a short-lived impersonation access token."""
-    import base64
-    import hashlib
-    import hmac
-    import json
+    """Generate a short-lived impersonation JWT using PyJWT."""
     import time
-
+    import jwt
     from app.core.config import settings as app_settings
-
-    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
 
     now = int(time.time())
     payload_dict = {
         "sub": target_orm.id,
         "email": target_orm.email,
-        "act": admin_user.id,  # acting admin
+        "act": admin_user.id,
         "iat": now,
-        "exp": now + 900,  # 15 minutes
+        "exp": now + 900,
         "scope": "impersonate",
     }
-    payload = base64.urlsafe_b64encode(json.dumps(payload_dict).encode()).rstrip(b"=").decode()
-
-    signing_key = (app_settings.IMPERSONATION_SIGNING_KEY or app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
-    signature = hmac.new(
-        signing_key,
-        f"{header}.{payload}".encode(),
-        hashlib.sha256,
-    ).digest()
-    sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
-
-    return f"{header}.{payload}.{sig_b64}"
+    secret = app_settings.SECRET_KEY or "apexchainx-dev-secret"
+    return jwt.encode(payload_dict, secret, algorithm="HS256")
 
 
 class RevokeResponse(BaseModel):

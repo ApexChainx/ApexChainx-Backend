@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -32,7 +33,7 @@ from app.repositories.sla_repository import SLARepository
 from app.services.audit_log import audit_log
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.webhook_service import trigger_sla_violation_webhooks
-from app.utils.exporter import export_outages
+from app.utils.exporter import export_outages, stream_export_csv, stream_export_json
 
 router = APIRouter()
 
@@ -49,25 +50,28 @@ def export_outages_endpoint(
     db: Session = Depends(get_db),
 ):
     repo = OutageRepository(db)
-    data = repo.list_filtered(
+    fmt = format.lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
+
+    outage_iter = repo.iter_filtered(
         severity=severity,
         status=status,
         search=search,
         start_date=start_date,
         end_date=end_date,
     )
-    try:
-        exported = export_outages(data, format)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if format == "csv":
-        return Response(
-            content=exported,
+    if fmt == "csv":
+        return StreamingResponse(
+            stream_export_csv(outage_iter),
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=outages.csv"},
         )
-    return exported
+    return StreamingResponse(
+        stream_export_json(outage_iter),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=outages.json"},
+    )
 
 
 @router.get("/violations")
@@ -258,8 +262,20 @@ async def import_outages(
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
     elif filename.endswith(".csv"):
         try:
-            rows = list(csv.DictReader(io.StringIO(content.decode("utf-8"))))
-        except (csv.Error, UnicodeDecodeError) as exc:
+            # utf-8-sig strips BOM automatically (handles Excel on Windows exports)
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                # Fallback to latin-1 for Windows-1252 / ISO-8859-1 exports
+                text = content.decode("latin-1")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"CSV encoding not supported. Please re-save as UTF-8: {exc}",
+                ) from exc
+        try:
+            rows = list(csv.DictReader(io.StringIO(text)))
+        except csv.Error as exc:
             raise HTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
