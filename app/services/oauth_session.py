@@ -23,12 +23,12 @@ class OAuthStateRepository:
     def _state_key(self, state: str) -> str:
         return f"oauth_state:{state}"
 
-    def create_state(self, provider: str, redirect_uri: str, code_verifier: str | None = None) -> str:
+    def create_state(self, provider: str, redirect_uri: str, code_challenge: str | None = None) -> str:
         state = f"oauth_state_{secrets.token_hex(16)}"
         payload = {
             "provider": provider,
             "redirect_uri": redirect_uri,
-            "code_verifier": code_verifier,
+            "code_challenge": code_challenge,
             "created_at": datetime.now(UTC).isoformat(),
         }
         self.redis.setex(self._state_key(state), self.ttl, json.dumps(payload))

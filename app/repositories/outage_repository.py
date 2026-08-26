@@ -365,9 +365,29 @@ class OutageRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
+    def has_financial_history(self, outage_id: str) -> bool:
+        """Return True if the outage has SLA results or payments referencing it."""
+        from app.models.orm.sla import SLAResultORM
+        from app.models.orm.payment import PaymentTransactionORM
+
+        sla_count = self.db.query(SLAResultORM).filter(SLAResultORM.outage_id == outage_id).count()
+        if sla_count > 0:
+            return True
+        try:
+            payment_count = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).count()
+            return payment_count > 0
+        except Exception:
+            # PaymentTransactionORM may not have outage_id in all schema versions
+            return False
+
     def delete(self, outage_id: str) -> None:
         orm = self.get_orm(outage_id)
         if orm:
+            if self.has_financial_history(outage_id):
+                raise ValueError(
+                    f"Cannot delete outage '{outage_id}': it has associated SLA results or payment records. "
+                    "Archive the outage instead or contact an administrator."
+                )
             self.db.delete(orm)
             self.db.commit()
 

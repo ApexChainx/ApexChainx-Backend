@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
 from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
+from app.models.enums import Role
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
@@ -21,6 +22,19 @@ class AuthStore:
     @staticmethod
     def _now() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _is_expired(expires_at: datetime, now: datetime | None = None) -> bool:
+        current = now or datetime.now(UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        else:
+            current = current.astimezone(UTC)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        else:
+            expires_at = expires_at.astimezone(UTC)
+        return current > expires_at
 
     @classmethod
     def register(cls, payload: RegisterRequest, db: Session = None) -> AuthUser:
@@ -48,7 +62,7 @@ class AuthStore:
             email=payload.email,
             hashed_password=hashed_password,
             full_name=payload.full_name,
-            role=payload.role,
+            role=Role.engineer,
         )
 
         audit_log.log_event(
@@ -56,7 +70,41 @@ class AuthStore:
             "registration",
             email=payload.email,
             actor_id=user_id,
-            details={"user_id": user_id, "role": payload.role},
+            details={"user_id": user_id, "role": Role.engineer},
+        )
+
+        return user_orm_to_pydantic(orm_user)
+
+    @classmethod
+    def admin_create_user(cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session) -> AuthUser:
+        """Admin-only user creation with audit logging of the approving admin."""
+        user_repo = UserRepository(db)
+        if user_repo.get_by_email(email):
+            raise ValueError("User already exists")
+
+        if not validate_password_policy(password):
+            raise ValueError(
+                "Password does not meet policy requirements (min 8 chars, "
+                "uppercase, lowercase, digit, special char)"
+            )
+
+        hashed_password = get_password_hash(password)
+        user_id = f"user_{uuid4().hex[:8]}"
+
+        orm_user = user_repo.create(
+            user_id=user_id,
+            email=email,
+            hashed_password=hashed_password,
+            full_name=full_name,
+            role=role,
+        )
+
+        audit_log.log_event(
+            db,
+            "admin_user_created",
+            email=actor_email,
+            actor_id=actor_id,
+            details={"created_user_id": user_id, "created_email": email, "role": role},
         )
 
         return user_orm_to_pydantic(orm_user)
@@ -156,16 +204,7 @@ class AuthStore:
         if not session:
             return None
 
-        # Check if expired
-        # session.expires_at might be offset-naive or aware depending on how it was stored.
-        # SQLAlchemy DateTime usually returns naive. We need to compare carefully.
-        now = datetime.now(UTC)
-        expires_at = session.expires_at
-        if expires_at.tzinfo is not None:
-            now = datetime.now(UTC).replace(tzinfo=None)  # Keep it naive for comparison if needed
-            expires_at = expires_at.replace(tzinfo=None)
-
-        if now > expires_at:
+        if cls._is_expired(session.expires_at):
             session_repo.delete_session(hashed_token)
             return None
 
@@ -309,13 +348,8 @@ class AuthStore:
 
         # Return session info without sensitive token material
         session_list = []
-        now = datetime.now(UTC)
         for session in sessions:
-            expires_at = session.expires_at
-            if expires_at.tzinfo is not None:
-                expires_at = expires_at.replace(tzinfo=None)
-
-            is_expired = now > expires_at
+            is_expired = cls._is_expired(session.expires_at)
             session_list.append(
                 {
                     "access_token_preview": session.access_token[:12] + "..." if session.access_token else None,
