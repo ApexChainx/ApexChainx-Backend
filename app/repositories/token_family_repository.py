@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from app.models.orm.session import SessionORM
 from app.models.orm.token_family import TokenFamilyORM
 
 
@@ -49,3 +50,24 @@ class TokenFamilyRepository:
             self.db.delete(family)
         self.db.commit()
         return count
+
+    def delete_orphaned_families(self, batch_size: int = 1000) -> int:
+        """Delete token families that no longer have any sessions. Returns total count deleted."""
+        total_deleted = 0
+        while True:
+            orphaned = (
+                self.db.query(TokenFamilyORM)
+                .outerjoin(SessionORM, SessionORM.family_id == TokenFamilyORM.family_id)
+                .filter(SessionORM.family_id.is_(None))
+                .limit(batch_size)
+                .all()
+            )
+            if not orphaned:
+                break
+            for family in orphaned:
+                self.db.delete(family)
+            self.db.commit()
+            total_deleted += len(orphaned)
+            if len(orphaned) < batch_size:
+                break
+        return total_deleted

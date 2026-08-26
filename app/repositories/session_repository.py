@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -64,3 +64,24 @@ class SessionRepository:
             self.db.delete(session)
         self.db.commit()
         return count
+
+    def delete_expired_sessions(self, batch_size: int = 1000) -> int:
+        """Delete expired sessions in batches. Returns total count deleted."""
+        now = datetime.now(UTC)
+        total_deleted = 0
+        while True:
+            expired = (
+                self.db.query(SessionORM)
+                .filter(SessionORM.expires_at < now)
+                .limit(batch_size)
+                .all()
+            )
+            if not expired:
+                break
+            for session in expired:
+                self.db.delete(session)
+            self.db.commit()
+            total_deleted += len(expired)
+            if len(expired) < batch_size:
+                break
+        return total_deleted
