@@ -311,6 +311,10 @@ async def import_outages(
         if any(r.status == "error" for r in row_outcomes):
             return _import_response("import", consistency, len(rows), 0, row_outcomes)
 
+        # create_or_get_existing commits per row, so a mid-batch failure would
+        # otherwise leave earlier rows persisted despite "atomic" mode (#304).
+        # Track and compensate by deleting anything this batch persisted.
+        rows_persisted_this_batch: list[str] = []
         try:
             for i, payload in enumerate(parsed):
                 created, persisted = repo.create_or_get_existing(payload)
@@ -318,16 +322,21 @@ async def import_outages(
                 row_outcomes[i].persisted = persisted
                 if persisted:
                     persisted_count += 1
+                    rows_persisted_this_batch.append(created.id)
                 else:
                     row_outcomes[i].duplicate = True
                     row_outcomes[i].existing_id = created.id
             db.commit()
         except (IntegrityError, SQLAlchemyError) as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}") from exc
+            for outage_id in rows_persisted_this_batch:
+                repo.delete(outage_id)
+            raise HTTPException(status_code=500, detail=f"Transaction failed, batch rolled back: {exc}") from exc
         except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Unexpected import error: {exc}") from exc
+            for outage_id in rows_persisted_this_batch:
+                repo.delete(outage_id)
+            raise HTTPException(status_code=500, detail=f"Unexpected import error, batch rolled back: {exc}") from exc
     else:
         for i, row in enumerate(rows):
             try:
@@ -462,12 +471,27 @@ def resolve_outage(
     # Acquire advisory lock to prevent concurrent resolutions
     try:
         with advisory_lock_nowait(db, f"resolve:{outage_id}"):
+            # Short-circuit replays: if this is already resolved with the same
+            # MTTR, skip recompute/payment/webhook side effects (#302).
+            existing = repo.get(outage_id)
+            already_resolved = (
+                existing is not None
+                and existing.status == "resolved"
+                and existing.mttr_minutes == payload.mttr_minutes
+            )
+
             try:
                 outage = repo.resolve(outage_id, payload.mttr_minutes)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not outage:
                 raise HTTPException(status_code=404, detail="Outage not found")
+
+            if already_resolved:
+                stored_sla = SLARepository(db).get_by_outage(outage.id)
+                payments = PaymentRepository(db).list_by_outage(outage.id)
+                payment = payments[-1] if payments else None
+                return {"outage": outage, "sla": stored_sla, "payment": payment}
 
             audit_log.log("outage_resolved", {"id": outage.id, "mttr": payload.mttr_minutes})
             OutageEventRepository(db).record(outage_id, "resolved", {"mttr_minutes": payload.mttr_minutes})
