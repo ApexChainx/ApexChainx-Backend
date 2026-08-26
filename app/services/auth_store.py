@@ -23,6 +23,19 @@ class AuthStore:
     def _now() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _is_expired(expires_at: datetime, now: datetime | None = None) -> bool:
+        current = now or datetime.now(UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        else:
+            current = current.astimezone(UTC)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        else:
+            expires_at = expires_at.astimezone(UTC)
+        return current > expires_at
+
     @classmethod
     def register(cls, payload: RegisterRequest, db: Session = None) -> AuthUser:
         if db is None:
@@ -191,16 +204,7 @@ class AuthStore:
         if not session:
             return None
 
-        # Check if expired
-        # session.expires_at might be offset-naive or aware depending on how it was stored.
-        # SQLAlchemy DateTime usually returns naive. We need to compare carefully.
-        now = datetime.now(UTC)
-        expires_at = session.expires_at
-        if expires_at.tzinfo is not None:
-            now = datetime.now(UTC).replace(tzinfo=None)  # Keep it naive for comparison if needed
-            expires_at = expires_at.replace(tzinfo=None)
-
-        if now > expires_at:
+        if cls._is_expired(session.expires_at):
             session_repo.delete_session(hashed_token)
             return None
 
@@ -344,13 +348,8 @@ class AuthStore:
 
         # Return session info without sensitive token material
         session_list = []
-        now = datetime.now(UTC)
         for session in sessions:
-            expires_at = session.expires_at
-            if expires_at.tzinfo is not None:
-                expires_at = expires_at.replace(tzinfo=None)
-
-            is_expired = now > expires_at
+            is_expired = cls._is_expired(session.expires_at)
             session_list.append(
                 {
                     "access_token_preview": session.access_token[:12] + "..." if session.access_token else None,
