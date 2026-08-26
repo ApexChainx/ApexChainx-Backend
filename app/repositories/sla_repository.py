@@ -223,7 +223,11 @@ class SLARepository:
                 func.sum(case((SLAResultORM.payment_type == "penalty", func.abs(SLAResultORM.amount)), else_=0.0)),
                 0.0,
             ).label("total_penalties"),
-        )
+        # (#276) Only count each outage's current result. Without this filter,
+        # every historical recompute (is_latest=False) is double-counted here
+        # while aggregate_performance already dedupes via row_number, so the
+        # two dashboard endpoints disagreed on total_outages for the same data.
+        ).where(SLAResultORM.is_latest.is_(True))
 
         if severity or site_id:
             query = query.join(OutageORM, OutageORM.id == SLAResultORM.outage_id)
