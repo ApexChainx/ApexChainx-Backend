@@ -2,6 +2,7 @@ import builtins
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -92,14 +93,18 @@ class PaymentRepository:
         if date_to:
             query = query.filter(PaymentTransactionORM.created_at <= date_to)
 
-        total = query.count()
+        # BE-285: compute the total in the same statement as the page via
+        # COUNT(*) OVER() instead of a separate query.count() scan, so the
+        # total always matches the returned page under concurrent writes.
         rows = (
-            query.order_by(PaymentTransactionORM.created_at.desc())
+            query.add_columns(func.count().over())
+            .order_by(PaymentTransactionORM.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
         )
-        return [_orm_to_pydantic(r) for r in rows], total
+        total = rows[0][1] if rows else 0
+        return [_orm_to_pydantic(r[0]) for r in rows], total
 
     def list_by_outage(self, outage_id: str) -> builtins.list[PaymentTransaction]:
         rows = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).all()
