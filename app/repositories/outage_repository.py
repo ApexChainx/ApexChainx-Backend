@@ -88,12 +88,11 @@ class OutageRepository:
         query = query.order_by(direction_fn(sort_column), OutageORM.id.asc())
 
         if include_total:
-            # Use COUNT(*) OVER() to get total in the same query as items.
-            # This avoids a separate COUNT(*) query which is expensive with ILIKE.
-            total_subq = query.with_entities(func.count().over()).subquery()
-            row = query.add_columns(func.count().over()).offset((page - 1) * page_size).limit(page_size).first()
-            total = row[1] if row else 0
-            items = query.offset((page - 1) * page_size).limit(page_size).all()
+            # Use COUNT(*) OVER() window function to get total count in the same
+            # query pass as the page items — avoids a second round-trip to the DB.
+            rows = query.add_columns(func.count().over()).offset((page - 1) * page_size).limit(page_size).all()
+            total = rows[0][1] if rows else 0
+            items = [row[0] for row in rows]
         else:
             total = None
             items = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -214,6 +213,35 @@ class OutageRepository:
         if end_date:
             query = query.filter(OutageORM.detected_at <= end_date)
         return [_orm_to_pydantic(r) for r in query.all()]
+
+    def iter_filtered(
+        self,
+        severity: Severity | None = None,
+        status: OutageStatus | None = None,
+        search: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        batch_size: int = 200,
+    ):
+        """Stream filtered outages in batches to avoid loading all rows into memory."""
+        query = self.db.query(OutageORM)
+        if severity:
+            query = query.filter(OutageORM.severity == severity.value)
+        if status:
+            query = query.filter(OutageORM.status == status.value)
+        if search:
+            query = query.filter(
+                or_(
+                    OutageORM.id.ilike(f"%{search}%"),
+                    OutageORM.site_id.ilike(f"%{search}%"),
+                    OutageORM.site_name.ilike(f"%{search}%"),
+                )
+            )
+        if start_date:
+            query = query.filter(OutageORM.detected_at >= start_date)
+        if end_date:
+            query = query.filter(OutageORM.detected_at <= end_date)
+        yield from (_orm_to_pydantic(r) for r in query.yield_per(batch_size))
 
     def get(self, outage_id: str) -> Outage | None:
         row = self.db.query(OutageORM).filter(OutageORM.id == outage_id).first()
