@@ -413,6 +413,15 @@ def provider_callback(
         raise HTTPException(status_code=404, detail="Payment not found")
 
     if existing.status == payload.status:
+        audit_log.log(
+            "payment_provider_callback_duplicate",
+            {
+                "transaction_id": payload.transaction_id,
+                "provider_ref": payload.provider_ref,
+                "nonce": effective_nonce,
+                "status": payload.status,
+            },
+        )
         return existing
 
     try:
