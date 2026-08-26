@@ -4,8 +4,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
-from redis import ConnectionError, Redis, TimeoutError
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import ALL_METHODS, SAFELISTED_HEADERS, CORSMiddleware
@@ -41,25 +39,6 @@ configure_logging()
 validate_critical_settings(settings)
 install_signal_handlers()
 init_tracing()
-
-
-async def check_database() -> bool:
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-            conn.commit()
-        return True
-    except ConnectionError:
-        return False
-
-
-async def check_celery() -> bool:
-    try:
-        r = Redis.from_url(settings.CELERY_BROKER_URL)
-        r.ping()
-        return True
-    except (ConnectionError, TimeoutError):
-        return False
 
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
