@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
     OAUTH_STATE_TTL_SECONDS: int = 600
 
+    # Outage event timeline retention (#329)
+    # Days to keep outage timeline events before the scheduled cleanup removes them.
+    OUTAGE_EVENT_RETENTION_DAYS: int = 90
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
 

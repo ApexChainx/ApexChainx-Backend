@@ -28,6 +28,28 @@ class OutageEventRepository:
         self.db.refresh(orm)
         return orm
 
+    def delete_events_older_than(self, cutoff: datetime, batch_size: int = 1000) -> int:
+        """Delete outage timeline events older than the cutoff in batches. Returns total deleted."""
+        total_deleted = 0
+        while True:
+            old_ids = [
+                row[0]
+                for row in self.db.query(OutageEventORM.id)
+                .filter(OutageEventORM.occurred_at < cutoff)
+                .limit(batch_size)
+                .all()
+            ]
+            if not old_ids:
+                break
+            self.db.query(OutageEventORM).filter(OutageEventORM.id.in_(old_ids)).delete(
+                synchronize_session=False
+            )
+            self.db.commit()
+            total_deleted += len(old_ids)
+            if len(old_ids) < batch_size:
+                break
+        return total_deleted
+
     # Add bulk Payments state-transition endpoint with all-or-nothing semantics
     def list_for_outage(
         self,
