@@ -7,6 +7,7 @@ from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
 from app.db.session import get_db
 from app.models.auth import (
+    AdminCreateUserRequest,
     AuthLogoutResponse,
     AuthSessionResponse,
     AuthUser,
@@ -98,6 +99,30 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
     try:
         return AuthStore.register(payload, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
+def admin_create_user(
+    payload: AdminCreateUserRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin-only endpoint to create a user with an explicit role.
+
+    Every creation is audit-logged with the approving admin's identity.
+    """
+    try:
+        return AuthStore.admin_create_user(
+            email=payload.email,
+            password=payload.password,
+            full_name=payload.full_name,
+            role=payload.role,
+            actor_id=admin_user.id,
+            actor_email=admin_user.email,
+            db=db,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

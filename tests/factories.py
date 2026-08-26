@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from app.api.v1.endpoints.webhooks import WebhookCreate
 from app.models.auth import LoginRequest, RegisterRequest
-from app.models.enums import OutageStatus, Role, Severity
+from app.models.enums import OutageStatus, Severity
 from app.models.outage import Location, Outage
 from app.models.outage_dto import OutageCreate
 from app.models.payment import PaymentTransaction
@@ -27,14 +27,12 @@ def make_login_request(email: str | None = None, password: str = "Password123!")
 def make_register_request(
     email: str | None = None,
     full_name: str = "Test User",
-    role: Role = Role.engineer,
     password: str = "Password123!",
 ) -> RegisterRequest:
     return RegisterRequest(
         email=email or f"user{_next_id()}@example.com",
         password=password,
         full_name=full_name,
-        role=role,
     )
 
 
