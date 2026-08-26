@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -346,9 +346,19 @@ def list_webhook_deliveries(
             )
         )
 
-    total = query.order_by(None).count()
-    deliveries = query.order_by(WebhookDelivery.created_at.desc()).offset(offset).limit(limit).all()
-    items = [_serialize_delivery(d) for d in deliveries]
+    # Single statement for total + page (issue #296): avoids the separate
+    # COUNT(*) scan that used to run before every page query. Cursor-based
+    # paging (via app/utils/cursor.py) and the composite index are a
+    # follow-up that needs a schema migration, tracked in #296.
+    paged = (
+        query.add_columns(func.count().over().label("total_count"))
+        .order_by(WebhookDelivery.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    total = paged[0].total_count if paged else query.order_by(None).count()
+    items = [_serialize_delivery(row[0]) for row in paged]
     return PaginatedWebhookDeliveries(
         items=items,
         total=total,
