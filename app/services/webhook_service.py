@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.formatters import canonical_json
+from app.services.metrics import increment_counter
 from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
@@ -130,6 +131,10 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
+    # NOTE: full-table scan + per-row json.loads is a known N+1 (issue #294).
+    # The durable fix (JSONB column + SQL containment filter, or a normalized
+    # webhook_events join table) needs a schema migration and is tracked
+    # separately; this only stops corrupt rows from being silently dropped.
     webhooks = db.query(Webhook).filter(Webhook.is_active).all()
     result = []
     for webhook in webhooks:
@@ -138,7 +143,8 @@ def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webh
             if event.value in events:
                 result.append(webhook)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Webhook %s has invalid events JSON, skipping.", webhook.id)
+            logger.error("Webhook %s has invalid events JSON, skipping.", webhook.id)
+            increment_counter("webhook.events_json.corrupt", tags={"webhook_id": str(webhook.id)})
     return result
 
 
