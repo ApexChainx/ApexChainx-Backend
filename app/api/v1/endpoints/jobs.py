@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from sqlalchemy import and_, or_
+
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.job import Job, JobStatus, JobType
@@ -16,6 +18,7 @@ from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
 from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
 from app.utils.correlation_ctx import get_correlation_id
+from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
@@ -248,21 +251,46 @@ def submit_bulk_sla_computation(
         return _serialize_job(job)
 
 
-@router.get("", response_model=list[JobResponse])
+@router.get("", response_model=CursorPage)
 def list_jobs(
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """List all jobs with optional filters."""
-    query = db.query(Job).order_by(Job.created_at.desc())
+    """List jobs with cursor-based pagination."""
+    query = db.query(Job).order_by(Job.created_at.desc(), Job.id.desc())
     if job_type is not None:
         query = query.filter(Job.job_type == job_type)
     if status_filter is not None:
         query = query.filter(Job.status == status_filter)
-    return [_serialize_job(j) for j in query.limit(limit).all()]
+
+    decoded = decode_cursor(cursor)
+    if decoded:
+        cursor_id, cursor_created_at = decoded
+        query = query.filter(
+            or_(
+                Job.created_at < cursor_created_at,
+                and_(Job.created_at == cursor_created_at, Job.id < cursor_id),
+            )
+        )
+
+    items = query.limit(limit + 1).all()
+    has_more = len(items) > limit
+    items = items[:limit]
+
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+    return CursorPage(
+        items=[_serialize_job(j) for j in items],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 @router.get("/{job_id}", response_model=JobResponse)
