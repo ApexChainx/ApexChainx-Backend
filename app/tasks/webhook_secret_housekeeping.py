@@ -4,13 +4,19 @@ from datetime import UTC, datetime
 
 from app.db.session import SessionLocal
 from app.models.webhook import Webhook
+from app.services.metrics import increment_counter
+from app.tasks.celery_app import celery_app
 
 
-def expire_old_secrets():
-    """Remove expired previous_secrets from all webhooks."""
+@celery_app.task(
+    name="app.tasks.webhook_secret_housekeeping.expire_old_secrets",
+)
+def expire_old_secrets() -> dict:
+    """Remove expired previous_secrets from all webhooks. Returns the number removed."""
     from sqlalchemy.orm import Session
 
     db: Session = SessionLocal()
+    removed = 0
     try:
         webhooks = db.query(Webhook).all()
         now = datetime.now(UTC)
@@ -19,10 +25,14 @@ def expire_old_secrets():
                 continue
             active = [s for s in webhook.previous_secrets if datetime.fromisoformat(s["expires_at"]) > now]
             if len(active) != len(webhook.previous_secrets):
+                removed += len(webhook.previous_secrets) - len(active)
                 webhook.previous_secrets = active
-        db.commit()
+        if removed:
+            db.commit()
+            increment_counter("webhook_secrets_expired", value=removed)
     finally:
         db.close()
+    return {"removed": removed}
 
 
 def run():
