@@ -128,9 +128,14 @@ class PaymentRepository:
             return existing
 
         normalized_amount = abs(float(sla_result.amount))
+        # BE-288: no real Stellar submission path exists yet, so this hash is
+        # simulated. Use a genuinely random, unique value (instead of a
+        # deterministic sla_result-derived string) so retries/duplicates
+        # can't collide, and prefix it so it's never mistaken for a real
+        # on-chain transaction hash.
         transaction = PaymentTransaction(
             id=f"pay_{uuid4().hex[:12]}",
-            transaction_hash=f"sla-{sla_result.id}-{sla_result.payment_type}",
+            transaction_hash=f"simulated-{uuid4().hex}",
             type=sla_result.payment_type,
             amount=normalized_amount,
             asset_code=settings.PAYMENT_ASSET_CODE,
