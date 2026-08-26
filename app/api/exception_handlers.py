@@ -11,6 +11,8 @@ The shape is intentionally minimal — the spec allows extension members
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 from fastapi import Request
@@ -20,6 +22,8 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.utils.correlation_ctx import get_or_generate_correlation_id
+
+logger = logging.getLogger(__name__)
 
 
 class ProblemDetail(BaseModel):
@@ -95,6 +99,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Last-resort catch-all for unhandled exceptions (500)."""
+    correlation_id = get_or_generate_correlation_id()
+    # Log the full exception server-side (with traceback + correlation ID) so
+    # 500s are never invisible, while keeping the client response sanitized.
+    # Control-flow exceptions (e.g. cancellation) are not errors and are skipped.
+    if not isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)):
+        logger.exception(
+            "Unhandled exception",
+            extra={"correlation_id": correlation_id, "path": request.url.path},
+        )
     return _problem_response(
         status=500,
         title="Internal Server Error",
