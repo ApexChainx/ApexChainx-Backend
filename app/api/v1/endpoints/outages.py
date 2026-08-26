@@ -249,22 +249,50 @@ async def import_outages(
     content = b"".join(chunks)
 
     # --- parse into a row iterator (avoids holding two full copies in memory) ---
-    if filename.endswith(".json"):
+    # Sniff actual content type from first non-whitespace byte
+    stripped = content.lstrip()
+    actual_is_json = stripped.startswith((b"{", b"["))
+    actual_is_csv = not actual_is_json and len(stripped) > 0
+
+    declared_json = filename.endswith(".json")
+    declared_csv = filename.endswith(".csv")
+
+    # Detect mislabeled files
+    if declared_json and not actual_is_json:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File appears to be CSV or unsupported format, not JSON as declared by filename '{filename}'",
+        )
+    if declared_csv and actual_is_json:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File appears to be JSON, not CSV as declared by filename '{filename}'",
+        )
+
+    if actual_is_json:
         try:
             rows = json.loads(content)
             if not isinstance(rows, list):
                 raise HTTPException(status_code=400, detail="JSON file must contain a list of outage objects")
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
-    elif filename.endswith(".csv"):
+    elif declared_csv:
         try:
-            rows = list(csv.DictReader(io.StringIO(content.decode("utf-8"))))
+            # utf-8-sig strips BOM automatically (handles Excel on Windows exports)
+            try:
+                text = content.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = content.decode("latin-1")
+            rows = list(csv.DictReader(io.StringIO(text)))
         except (csv.Error, UnicodeDecodeError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
     else:
-        raise HTTPException(status_code=400, detail="Unsupported file format. Use .json or .csv")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. File '{filename}' does not appear to be JSON or CSV.",
+        )
 
     if len(rows) > settings.MAX_BULK_OUTAGES_COUNT:
         raise HTTPException(
@@ -440,8 +468,10 @@ def delete_outage(outage_id: str, current_user=Depends(require_admin), db: Sessi
     existing = repo.get(outage_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Outage not found")
-
-    repo.delete(outage_id)
+    try:
+        repo.delete(outage_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"message": "Outage deleted successfully"}
 
 
@@ -495,6 +525,17 @@ def resolve_outage(
             stored_sla = sla_repo.create_if_changed(sla)
             _invalidate_analytics_cache()
             OutageEventRepository(db).record(outage_id, "sla_computed", {"status": stored_sla.status})
+            # Update denormalized sla_status on the outage row
+            outage_orm = repo.get_orm(outage_id)
+            if outage_orm:
+                outage_orm.sla_status = {
+                    "status": stored_sla.status,
+                    "mttr_minutes": stored_sla.mttr_minutes,
+                    "threshold_minutes": stored_sla.threshold_minutes,
+                    "time_remaining_minutes": None,
+                }
+                db.commit()
+            outage = repo.get(outage_id)
             payment_repo = PaymentRepository(db)
             payment = payment_repo.create_for_sla_result(outage.id, stored_sla)
             if stored_sla.status == "violated":
@@ -557,6 +598,16 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
             sla_repo = SLARepository(db)
             stored_sla = sla_repo.create_if_changed(sla)
             _invalidate_analytics_cache()
+            # Update denormalized sla_status on the outage row
+            outage_orm_recompute = repo.get_orm(outage_id)
+            if outage_orm_recompute:
+                outage_orm_recompute.sla_status = {
+                    "status": stored_sla.status,
+                    "mttr_minutes": stored_sla.mttr_minutes,
+                    "threshold_minutes": stored_sla.threshold_minutes,
+                    "time_remaining_minutes": None,
+                }
+                db.commit()
             payment_repo = PaymentRepository(db)
             payment = payment_repo.create_for_sla_result(outage.id, stored_sla)
             if stored_sla.status == "violated":

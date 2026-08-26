@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -86,6 +86,13 @@ class OutageCreate(BaseModel):
         # Normalize to UTC
         if v.tzinfo != UTC:
             v = v.astimezone(UTC)
+        # Reject dates more than 60 seconds in the future (configurable skew tolerance)
+        max_detected_at = datetime.now(UTC) + timedelta(seconds=getattr(settings, 'OUTAGE_FUTURE_DETECTION_SKEW_SECONDS', 60))
+        if v > max_detected_at:
+            raise ValueError(
+                f"detected_at cannot be in the future. Received {v.isoformat()}, "
+                f"maximum allowed is approximately {max_detected_at.isoformat()}"
+            )
         return v
 
 
@@ -100,6 +107,17 @@ class OutageUpdate(BaseModel):
     assigned_to: str | None = None
     created_by: str | None = None
     location: Location | None = None
+
+    @field_validator("resolved_at")
+    @classmethod
+    def validate_resolved_at_not_future(cls, v: datetime | None) -> datetime | None:
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            raise ValueError("resolved_at must be timezone-aware")
+        if v.tzinfo != UTC:
+            v = v.astimezone(UTC)
+        return v
 
 
 class ImportConsistency(str, Enum):
