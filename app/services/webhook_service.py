@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -79,6 +80,21 @@ def _apply_jitter(delay: float) -> float:
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
+
+# Response bodies are receiver-controlled; cap and scrub before persisting (#301).
+RESPONSE_BODY_STORAGE_LIMIT = 500
+_SCRUB_PATTERNS = [
+    re.compile(r"S[A-Za-z0-9]{55}"),  # Stellar secret key
+    re.compile(r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+"),
+]
+
+
+def _scrub_response_body(body: str) -> str:
+    """Redact likely-sensitive patterns and bound the stored size (#301)."""
+    scrubbed = body
+    for pattern in _SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed[:RESPONSE_BODY_STORAGE_LIMIT]
 
 
 def _build_headers(
@@ -197,7 +213,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook.url, content=payload_str, headers=headers)
         delivery.response_status_code = response.status_code
-        delivery.response_body = response.text[:4000]
+        delivery.response_body = _scrub_response_body(response.text)
 
         if response.is_success:
             breaker.on_success(webhook.url)
