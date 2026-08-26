@@ -307,7 +307,7 @@ def retry_now(
         raise HTTPException(status_code=409, detail="Max retries reached")
     audit_log.log(
         "payment_retry_now",
-        {"id": transaction_id, "retry_count": payment.retry_count, "actor": getattr(current_user, "username", None)},
+        {"id": transaction_id, "retry_count": payment.retry_count, "actor": current_user.email},
     )
     return payment
 
