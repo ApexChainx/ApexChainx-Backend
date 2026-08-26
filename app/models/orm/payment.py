@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import BIGINT
 
 from app.db.base import Base
 
@@ -11,7 +12,7 @@ class PaymentTransactionORM(Base):
     id = Column(String, primary_key=True, index=True)
     transaction_hash = Column(String(255), nullable=False, unique=True)
     type = Column(String(50), nullable=False)
-    amount = Column(Float, nullable=False)
+    amount = Column(BIGINT, nullable=False)  # exact integer amount
     asset_code = Column(String(20), nullable=False)
     from_address = Column(String(255), nullable=False)
     to_address = Column(String(255), nullable=False)
