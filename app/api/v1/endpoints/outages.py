@@ -71,9 +71,14 @@ def export_outages_endpoint(
 
 
 @router.get("/violations")
-def list_violations(current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def list_violations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
     repo = OutageRepository(db)
-    return repo.list_violations()
+    return repo.list_violations(page=page, page_size=page_size)
 
 
 @router.get("/")
