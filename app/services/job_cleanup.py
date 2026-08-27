@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
+from app.core.db_retry import run_with_db_retry
 from app.models.job import Job, JobStatus
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus
 
@@ -169,18 +170,22 @@ class JobCleanupService:
             if not job_ids:
                 break
 
-            # Delete the batch
-            delete_stmt = delete(Job).where(Job.id.in_(job_ids))
-            self.db.execute(delete_stmt)
-            self.db.commit()
-
-            total_deleted += len(job_ids)
+            # Delete the batch (idempotent — re-running deletes the same ids is
+            # a no-op), retrying transient DB failures at the batch boundary.
+            total_deleted += run_with_db_retry(self._delete_job_batch, job_ids)
 
             # If we got fewer than batch_size, we're done
             if len(job_ids) < batch_size:
                 break
 
         return total_deleted
+
+    def _delete_job_batch(self, job_ids) -> int:
+        """Delete one batch of job ids. Idempotent; returns the batch size."""
+        self.db.rollback()  # clear any aborted transaction from a prior attempt
+        self.db.execute(delete(Job).where(Job.id.in_(job_ids)))
+        self.db.commit()
+        return len(job_ids)
 
     def get_retention_stats(self) -> dict:
         """Get current job retention statistics without deleting anything."""
