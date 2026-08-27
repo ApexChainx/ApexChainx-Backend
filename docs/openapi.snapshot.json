@@ -27,7 +27,6 @@
             "title": "Name"
           },
           "scopes": {
-            "default": [],
             "items": {
               "type": "string"
             },
@@ -129,6 +128,10 @@
             },
             "title": "Scopes",
             "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [
@@ -138,7 +141,8 @@
           "expires_at",
           "revoked_at",
           "created_at",
-          "created_by"
+          "created_by",
+          "status"
         ],
         "title": "ApiKeyItem",
         "type": "object"
