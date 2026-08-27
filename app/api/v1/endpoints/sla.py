@@ -121,15 +121,17 @@ def update_sla_config(
     payload: SLAConfigUpdateRequest,
     expected_token: str | None = Query(default=None, description="Optimistic concurrency token (#37). Mismatch → 409."),
     current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """Update SLA config for a severity with optional optimistic concurrency (#37).
 
     When `expected_token` is provided:
     - The update is atomic: policy_version is bumped, content_hash is computed,
-      history is recorded.
+      history is recorded in sla_config_history.
     - If another concurrent update has already occurred, returns 409 Conflict.
 
-    Without `expected_token`, the update is backward-compatible (no version bump).
+    Without `expected_token`, the update still records a version bump and a
+    history entry (see #272).
     """
     try:
         if expected_token is not None:
@@ -137,10 +139,11 @@ def update_sla_config(
                 severity,
                 payload,
                 expected_token=expected_token,
-                published_by=getattr(current_user, "username", None),
+                published_by=current_user.email,
+                db=db,
             )
             return policy
-        return update_config_for_severity(severity, payload)
+        return update_config_for_severity(severity, payload, db=db)
     except ConcurrencyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -148,10 +151,18 @@ def update_sla_config(
 
 
 @router.get("/config/{severity}/token")
-def get_config_publish_token(severity: str, current_user=Depends(require_admin)):
-    """Get the current publish token for optimistic concurrency control (#37)."""
+def get_config_publish_token(
+    severity: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get the current publish token for optimistic concurrency control (#37).
+
+    Reads the latest persisted history row so a token fetched after a
+    restart matches the token the publish path compares against (#272).
+    """
     try:
-        return {"severity": severity, "token": get_current_token(severity)}
+        return {"severity": severity, "token": get_current_token(severity, db=db)}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

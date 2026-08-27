@@ -8281,7 +8281,7 @@
         ]
       },
       "put": {
-        "description": "Update SLA config for a severity with optional optimistic concurrency (#37).\n\nWhen `expected_token` is provided:\n- The update is atomic: policy_version is bumped, content_hash is computed,\n  history is recorded.\n- If another concurrent update has already occurred, returns 409 Conflict.\n\nWithout `expected_token`, the update is backward-compatible (no version bump).",
+        "description": "Update SLA config for a severity with optional optimistic concurrency (#37).\n\nWhen `expected_token` is provided:\n- The update is atomic: policy_version is bumped, content_hash is computed,\n  history is recorded in sla_config_history.\n- If another concurrent update has already occurred, returns 409 Conflict.\n\nWithout `expected_token`, the update still records a version bump and a\nhistory entry (see #272).",
         "operationId": "update_sla_config_api_v1_sla_config__severity__put",
         "parameters": [
           {
@@ -8366,7 +8366,7 @@
     },
     "/api/v1/sla/config/{severity}/token": {
       "get": {
-        "description": "Get the current publish token for optimistic concurrency control (#37).",
+        "description": "Get the current publish token for optimistic concurrency control (#37).\n\nReads the latest persisted history row so a token fetched after a\nrestart matches the token the publish path compares against (#272).",
         "operationId": "get_config_publish_token_api_v1_sla_config__severity__token_get",
         "parameters": [
           {
