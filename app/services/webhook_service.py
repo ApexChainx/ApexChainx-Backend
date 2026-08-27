@@ -236,7 +236,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     if not breaker.allow_request(webhook.url):
         delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
         delivery.error_message = "Circuit breaker open, delivery deferred"
-        delivery.next_retry_at = None
+        delivery.next_retry_at = datetime.now(UTC) + timedelta(seconds=settings.WEBHOOK_BREAKER_RESET_SECONDS)
         delivery.updated_at = datetime.now(UTC)
         db.commit()
         logger.warning(
@@ -381,7 +381,9 @@ def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
-            WebhookDelivery.status == WebhookDeliveryStatus.RETRYING,
+            WebhookDelivery.status.in_(
+                [WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]
+            ),
             WebhookDelivery.next_retry_at <= now,
         )
         .order_by(WebhookDelivery.next_retry_at)

@@ -213,7 +213,10 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
         )
     if not payment:
         raise HTTPException(status_code=409, detail="Max retries reached")
-    audit_log.log("payment_retried", {"id": transaction_id, "retry_count": payment.retry_count})
+    audit_log.log(
+        "payment_retried",
+        {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
+    )
     return payment
 
 
@@ -328,8 +331,13 @@ def retry_now(
     if not payment:
         raise HTTPException(status_code=409, detail="Max retries reached")
     audit_log.log(
-        "payment_retry_now",
-        {"id": transaction_id, "retry_count": payment.retry_count, "actor": getattr(current_user, "username", None)},
+        "payment_retried",
+        {
+            "id": transaction_id,
+            "retry_count": payment.retry_count,
+            "actor": current_user.email,
+            "override": True,
+        },
     )
     return payment
 
@@ -435,6 +443,15 @@ def provider_callback(
         raise HTTPException(status_code=404, detail="Payment not found")
 
     if existing.status == payload.status:
+        audit_log.log(
+            "payment_provider_callback_duplicate",
+            {
+                "transaction_id": payload.transaction_id,
+                "provider_ref": payload.provider_ref,
+                "nonce": effective_nonce,
+                "status": payload.status,
+            },
+        )
         return existing
 
     try:

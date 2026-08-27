@@ -44,7 +44,7 @@ def api_propose_admin(
     audit_log.log(
         event_type="governance_propose_admin",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "new_admin": payload.new_admin_address,
             "tx_hash": result["tx_hash"],
         },
@@ -65,7 +65,7 @@ def api_accept_admin(
     audit_log.log(
         event_type="governance_accept_admin",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
@@ -85,7 +85,7 @@ def api_cancel_admin_proposal(
     audit_log.log(
         event_type="governance_cancel_admin_proposal",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
@@ -105,7 +105,7 @@ def api_renounce_admin(
     audit_log.log(
         event_type="governance_renounce_admin",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
@@ -126,7 +126,7 @@ def api_propose_operator(
     audit_log.log(
         event_type="governance_propose_operator",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "new_operator": payload.new_operator_address,
             "tx_hash": result["tx_hash"],
         },
@@ -147,7 +147,7 @@ def api_accept_operator(
     audit_log.log(
         event_type="governance_accept_operator",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
