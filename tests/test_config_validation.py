@@ -1,6 +1,6 @@
 import unittest
 
-from app.core.config import Settings, validate_critical_settings, MIN_SECRET_KEY_LENGTH
+from app.core.config import Settings, validate_critical_settings
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -21,6 +21,7 @@ class ConfigValidationTests(unittest.TestCase):
             "ENVIRONMENT": "local",
             "SECRET_KEY": "apexchainx-dev-secret",
             "PAYMENT_WEBHOOK_SECRET": "test-webhook-secret-1234",
+            "WEBHOOK_SECRET_ENCRYPTION_KEY": "V5OOA_Ao70n9OxGEbj1WmRsZX6vI4IdtuJ_jYcIhNDg=",
         }
         defaults.update(overrides)
         return Settings.model_construct(**defaults)
