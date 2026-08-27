@@ -98,6 +98,12 @@ The shared shell and providers live in:
 
 Feature modules are organized under `src/features/` for domain-specific UI and hooks.
 
+The app is offline-first for outage reads: an IndexedDB layer
+(`src/lib/persisted-cache.ts`), the React Query cache, and a service worker
+(`public/sw.js`) each cache a slice of the data with different lifetimes. See
+[docs/offline-cache.md](./docs/offline-cache.md) for what's cached where, TTLs,
+hydration rules, and the current purge/eviction gaps.
+
 ---
 
 ## Backend Integration

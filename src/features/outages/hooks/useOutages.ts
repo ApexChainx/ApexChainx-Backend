@@ -7,6 +7,14 @@ import { slaEventKeys } from "@/lib/query-keys";
 import type { PaginatedOutages } from "@/types/outages";
 import type { OutagesQuery } from "@/lib/outages";
 
+/**
+ * See docs/offline-cache.md for the full picture of what's cached where
+ * (IndexedDB via `persistedCache`, this React Query cache, and the service
+ * worker), TTL/staleTime/gcTime values, the hydration rules applied below,
+ * and — importantly — the current purge/eviction gaps (e.g. neither this
+ * cache nor `persistedCache` is cleared on logout today).
+ */
+
 export interface UseOutagesParams {
   page?: number | undefined;
   page_size?: number | undefined;
