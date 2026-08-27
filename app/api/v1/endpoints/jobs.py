@@ -101,15 +101,24 @@ class JobCleanupResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def _serialize_job(job: Job) -> JobResponse:
-    def _parse(val):
-        if val is None:
-            return None
+def _parse_job_json(val):
+    """Parse a job payload/result value into a dict.
+
+    Corrupt data is never returned as a raw string: it is logged and
+    surfaced as None so consumers always see dict | None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, str):
         try:
             return json.loads(val)
         except (json.JSONDecodeError, TypeError):
-            return val
+            logger.warning("Job payload/result is not valid JSON; returning null", value=val[:200])
+            return None
+    return val
 
+
+def _serialize_job(job: Job) -> JobResponse:
     return JobResponse(
         id=job.id,
         celery_task_id=job.celery_task_id,
@@ -119,8 +128,8 @@ def _serialize_job(job: Job) -> JobResponse:
         progress_details=job.progress_details,
         partial_results=job.partial_results,
         per_item_errors=job.per_item_errors,
-        payload=_parse(job.payload),
-        result=_parse(job.result),
+        payload=_parse_job_json(job.payload),
+        result=_parse_job_json(job.result),
         error=job.error,
         # BE-041: Include retry metadata
         retry_count=job.retry_count,
@@ -478,7 +487,7 @@ def retry_job(
 
     # Re-enqueue the job based on its type
     try:
-        payload = json.loads(job.payload) if job.payload else {}
+        payload = _parse_job_json(job.payload) or {}
 
         if job.job_type == JobType.SLA_COMPUTATION:
             task_result = compute_sla_for_device.delay(
@@ -487,7 +496,7 @@ def retry_job(
                 correlation_id=correlation_id,
             )
             job.celery_task_id = task_result.id
-            job.payload = json.dumps(payload)
+            job.payload = payload
             db.commit()
             db.refresh(job)
         elif job.job_type == JobType.BULK_SLA_COMPUTATION:

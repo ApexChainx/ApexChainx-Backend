@@ -80,6 +80,30 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
 
 
 @contextmanager
+def blocking_advisory_lock(db: Session, lock_key: str) -> Generator[None, None, None]:
+    """Acquire a PostgreSQL advisory lock, blocking until it is available.
+
+    Transaction-scoped: the lock is automatically released when the
+    transaction commits or rolls back. Use for read-modify-write sequences
+    that must be serialized (e.g. appending to the audit hash chain).
+
+    Args:
+        db: SQLAlchemy session
+        lock_key: Unique string identifier for the lock
+
+    Yields:
+        None
+    """
+    lock_id = _lock_id_from_key(lock_key)
+    db.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    try:
+        yield
+    finally:
+        # The lock is released automatically when the transaction ends.
+        pass
+
+
+@contextmanager
 def advisory_lock_nowait(db: Session, lock_key: str) -> Generator[None, None, None]:
     """Acquire a PostgreSQL advisory lock without waiting.
 

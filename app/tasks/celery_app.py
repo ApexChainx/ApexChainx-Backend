@@ -7,6 +7,7 @@ celery_app = Celery(
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
     include=[
+        "app.tasks.auth_tasks",
         "app.tasks.sla_tasks",
         "app.tasks.webhook_tasks",
     ],
@@ -28,6 +29,10 @@ celery_app.conf.update(
         "retry-pending-webhook-deliveries": {
             "task": "app.tasks.webhook_tasks.retry_pending_webhook_deliveries",
             "schedule": 60.0,  # every 60 seconds
+        },
+        "cleanup-expired-auth-rows": {
+            "task": "app.tasks.auth_tasks.cleanup_expired_auth_rows",
+            "schedule": 3600.0,  # every hour
         },
     },
 )
