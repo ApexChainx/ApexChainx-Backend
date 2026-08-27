@@ -24,6 +24,38 @@ export async function verifyTwoFactor(code: string): Promise<{ success: boolean 
   return response.data;
 }
 
+export interface AuthSessionResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+  expires_in?: number;
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    full_name?: string | null;
+    stellar_wallet?: string | null;
+    created_at?: string;
+  };
+}
+
+/**
+ * Submit a TOTP code to complete a login for a 2FA-protected account.
+ * The credentials step already succeeded; this call exchanges the TOTP
+ * code for the final authenticated session.
+ *
+ * @returns the full authenticated session (tokens + user) on success.
+ */
+export async function completeTwoFactorLogin(
+  code: string
+): Promise<AuthSessionResponse> {
+  const response = await api.post<AuthSessionResponse>(
+    ENDPOINTS.auth.loginTwoFactor,
+    { code }
+  );
+  return response.data;
+}
+
 /**
  * Disable 2FA for the current user.
  */
