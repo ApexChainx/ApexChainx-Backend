@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.enums import Role
 
@@ -37,7 +37,7 @@ class LoginRequest(BaseModel):
         }
     )
 
-    email: str
+    email: EmailStr
     password: str = Field(..., min_length=6)
 
 
@@ -48,13 +48,14 @@ class RegisterRequest(LoginRequest):
                 "email": "user@example.com",
                 "password": "Password123!",
                 "full_name": "Example User",
-                "role": "engineer",
             }
         }
     )
 
     full_name: str = Field(..., min_length=1)
-    role: Role = Role.engineer
+    # role is intentionally omitted — public registration always creates
+    # an engineer account.  Admin users must be created via the admin-only
+    # POST /auth/admin/users endpoint.
 
 
 class AuthSessionResponse(BaseModel):
@@ -93,6 +94,26 @@ class LogoutAllSessionsResponse(BaseModel):
 
     message: str
     sessions_invalidated: int
+
+
+class AdminCreateUserRequest(BaseModel):
+    """Request body for the admin-only user creation endpoint."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "email": "newuser@example.com",
+                "password": "Password123!",
+                "full_name": "New User",
+                "role": "engineer",
+            }
+        }
+    )
+
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    full_name: str = Field(..., min_length=1)
+    role: Role = Role.engineer
 
 
 class ProfileUpdateRequest(BaseModel):

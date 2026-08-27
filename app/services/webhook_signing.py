@@ -36,8 +36,6 @@ Webhooks include an explicit timestamp in the payload (`timestamp` field) for:
 
 import hashlib
 import hmac
-from datetime import UTC, datetime
-from typing import Any
 
 # Current signature algorithm version
 CURRENT_SIGNATURE_VERSION = 1
@@ -115,40 +113,11 @@ def verify_signature(
         return False
 
 
-def verify_signature_with_grace(
-    secret: str,
-    payload: str,
-    signature: str,
-    version: int = CURRENT_SIGNATURE_VERSION,
-    previous_secrets: list[dict[str, Any]] | None = None,
-) -> bool:
-    """Verify signature against current secret and valid previous secrets.
-
-    Tries the current secret first. If that fails, tries each previous
-    secret that has not yet expired. This enables zero-downtime secret rotation.
-
-    Args:
-        secret: Current secret key
-        payload: Original JSON payload
-        signature: Hex-encoded signature
-        version: Signature algorithm version
-        previous_secrets: List of dicts with hashed_secret and expires_at
-
-    Returns:
-        True if any valid secret produces a matching signature
-    """
-    if verify_signature(secret, payload, signature, version):
-        return True
-
-    if not previous_secrets:
-        return False
-
-    now = datetime.now(UTC)
-    for entry in previous_secrets:
-        expires_at = datetime.fromisoformat(entry["expires_at"])
-        if expires_at < now:
-            continue
-        if verify_signature(entry["hashed_secret"], payload, signature, version):
-            return True
-
-    return False
+# NOTE (#297): `verify_signature_with_grace` was removed. It verified against
+# `hashed_secret` (a one-way SHA-256 digest stored by rotate_webhook_secret) as
+# if it were the raw HMAC key, which can never match a signature produced with
+# the real old secret — the "grace period" it implemented was non-functional
+# and unused by any call site. Until previous secrets are stored in a form
+# that can actually re-verify old signatures (e.g. encrypted, not hashed),
+# the backend does not implement a verification-side grace period: only
+# `verify_signature` against the current secret is supported.

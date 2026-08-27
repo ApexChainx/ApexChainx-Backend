@@ -91,7 +91,7 @@ class WalletRegistry:
 
         wallet = _orm_to_pydantic(orm)
         if cache:
-            cache.set(public_key, wallet.model_dump(mode="json"))
+            cache.set(f"addr:{public_key}", wallet.model_dump(mode="json"))
 
         return WalletCreateResponse(
             **wallet.model_dump(),
@@ -147,7 +147,7 @@ class WalletRegistry:
             )
             wallet = _orm_to_pydantic(orm)
             if cache:
-                cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+                cache.set(f"addr:{wallet.public_key}", wallet.model_dump(mode="json"))
             return wallet
 
         # Check 4: No conflicts - create new link
@@ -159,7 +159,7 @@ class WalletRegistry:
         )
         wallet = _orm_to_pydantic(orm)
         if cache:
-            cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+            cache.set(f"addr:{wallet.public_key}", wallet.model_dump(mode="json"))
         return wallet
 
     # ------------------------------------------------------------------
@@ -174,16 +174,21 @@ class WalletRegistry:
         cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch from cache or DB, update cache on miss."""
+        cache_key = f"user:{user_id}"
+        if cache:
+            cached = cache.get(cache_key)
+            if cached:
+                return Wallet(**cached)
+
         repo = WalletRepository(db)
         orm = repo.get_by_user_id(user_id)
         if orm is None:
             return None
 
         wallet = _orm_to_pydantic(orm)
-        # Touch the cache timestamp in DB to simulate freshness tracking
         repo.touch_cache(orm)
         if cache:
-            cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+            cache.set(cache_key, wallet.model_dump(mode="json"))
         return wallet
 
     @classmethod
@@ -194,8 +199,9 @@ class WalletRegistry:
         cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch by public key from cache or DB."""
+        cache_key = f"addr:{address}"
         if cache:
-            cached = cache.get(address)
+            cached = cache.get(cache_key)
             if cached:
                 return Wallet(**cached)
 
@@ -206,7 +212,7 @@ class WalletRegistry:
 
         wallet = _orm_to_pydantic(orm)
         if cache:
-            cache.set(address, wallet.model_dump(mode="json"))
+            cache.set(cache_key, wallet.model_dump(mode="json"))
         return wallet
 
     # ------------------------------------------------------------------

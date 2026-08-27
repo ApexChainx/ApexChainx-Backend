@@ -1,7 +1,7 @@
 import json
 import logging
-import os
 import random
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -16,13 +16,14 @@ from app.core.config import settings
 from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.formatters import canonical_json
+from app.services.metrics import increment_counter
 from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
 )
 from app.utils.correlation_ctx import get_or_generate_correlation_id
-from app.utils.network_validation import validate_webhook_url
+from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,24 @@ def _apply_jitter(delay: float) -> float:
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
+# BE-299: cap on due deliveries processed per retry sweep, so a large backlog
+# (e.g. after an outage burst) can't block the worker for an unbounded run.
+WEBHOOK_RETRY_BATCH_SIZE = 100
+
+# Response bodies are receiver-controlled; cap and scrub before persisting (#301).
+RESPONSE_BODY_STORAGE_LIMIT = 500
+_SCRUB_PATTERNS = [
+    re.compile(r"S[A-Za-z0-9]{55}"),  # Stellar secret key
+    re.compile(r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+"),
+]
+
+
+def _scrub_response_body(body: str) -> str:
+    """Redact likely-sensitive patterns and bound the stored size (#301)."""
+    scrubbed = body
+    for pattern in _SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed[:RESPONSE_BODY_STORAGE_LIMIT]
 
 
 def _build_headers(
@@ -110,17 +129,15 @@ def _build_headers(
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
         "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
+        "X-Correlation-ID": corr_id,
     }
 
-    # Inject OTel trace context (traceparent) for distributed tracing
+    # Inject OTel trace context (traceparent) only when a real span is active
+    # (#300): a correlation ID is not a trace ID, and fabricating one here
+    # produced fake sampled root traces with no real parent linkage.
     traceparent = get_current_traceparent()
     if traceparent:
         headers["traceparent"] = traceparent
-    else:
-        # Fallback: generate traceparent from correlation ID for non-OTel contexts
-        trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-        span_id = os.urandom(8).hex()
-        headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
 
     if webhook.secret:
         sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
@@ -130,6 +147,10 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
+    # NOTE: full-table scan + per-row json.loads is a known N+1 (issue #294).
+    # The durable fix (JSONB column + SQL containment filter, or a normalized
+    # webhook_events join table) needs a schema migration and is tracked
+    # separately; this only stops corrupt rows from being silently dropped.
     webhooks = db.query(Webhook).filter(Webhook.is_active).all()
     result = []
     for webhook in webhooks:
@@ -138,7 +159,8 @@ def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webh
             if event.value in events:
                 result.append(webhook)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Webhook %s has invalid events JSON, skipping.", webhook.id)
+            logger.error("Webhook %s has invalid events JSON, skipping.", webhook.id)
+            increment_counter("webhook.events_json.corrupt", tags={"webhook_id": str(webhook.id)})
     return result
 
 
@@ -184,7 +206,26 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
     )
 
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
-    validate_webhook_url(webhook.url)
+    current_ips = validate_webhook_url(webhook.url)
+
+    # Pin delivery to the addresses approved at registration (issue #295): if the
+    # webhook was registered with a resolved_ips snapshot and delivery-time
+    # resolution no longer overlaps it at all, fail closed rather than silently
+    # following the new (possibly rebound) address. Redirect-target validation
+    # and a configurable warn/allow policy are follow-ups, tracked in #295.
+    if webhook.resolved_ips:
+        try:
+            approved_ips = set(json.loads(webhook.resolved_ips))
+        except (json.JSONDecodeError, TypeError):
+            approved_ips = set()
+        if approved_ips and not (approved_ips & set(current_ips)):
+            logger.error(
+                "Webhook %s delivery blocked: resolved IPs %s do not match approved %s (possible DNS rebinding).",
+                webhook.id,
+                current_ips,
+                approved_ips,
+            )
+            raise NetworkValidationError("Webhook host resolution no longer matches the approved address.")
 
     # Check circuit breaker before attempting
     if not breaker.allow_request(webhook.url):
@@ -197,7 +238,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook.url, content=payload_str, headers=headers)
         delivery.response_status_code = response.status_code
-        delivery.response_body = response.text[:4000]
+        delivery.response_body = _scrub_response_body(response.text)
 
         if response.is_success:
             breaker.on_success(webhook.url)
@@ -236,7 +277,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     if not breaker.allow_request(webhook.url):
         delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
         delivery.error_message = "Circuit breaker open, delivery deferred"
-        delivery.next_retry_at = None
+        delivery.next_retry_at = datetime.now(UTC) + timedelta(seconds=settings.WEBHOOK_BREAKER_RESET_SECONDS)
         delivery.updated_at = datetime.now(UTC)
         db.commit()
         logger.warning(
@@ -371,14 +412,23 @@ def trigger_sla_violation_webhooks(
     return deliveries
 
 
-def retry_pending_deliveries(db: Session) -> int:
+def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_SIZE) -> int:
+    """Dispatch due retries, capped at `batch_size` per sweep (#299).
+
+    Oldest-due deliveries are processed first; any remainder is picked up by
+    the next scheduled sweep rather than blocking this run.
+    """
     now = datetime.now(UTC)
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
-            WebhookDelivery.status == WebhookDeliveryStatus.RETRYING,
+            WebhookDelivery.status.in_(
+                [WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]
+            ),
             WebhookDelivery.next_retry_at <= now,
         )
+        .order_by(WebhookDelivery.next_retry_at)
+        .limit(batch_size)
         .all()
     )
 

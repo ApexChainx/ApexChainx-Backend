@@ -42,7 +42,7 @@ _dashboard_cache: TTLCache = TTLCache(ttl_seconds=30)
 
 def _invalidate_analytics_cache() -> None:
     """Invalidate all analytics cache keys after a mutating write (#157)."""
-    _dashboard_cache.invalidate("dashboard_kpis")
+    _dashboard_cache.invalidate_prefix("dashboard_kpis_")
     # Invalidate all trend keys by clearing the entire store
     _dashboard_cache.invalidate_prefix("trends_")
 

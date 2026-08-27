@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.enums import OutageStatus, Severity
 from app.models.orm.outage import OutageORM
+from app.models.orm.sla import SLAResultORM
 from app.models.outage import Location, Outage, SLAStatus
 from app.models.outage_dto import OutageCreate, OutageSortDirection, OutageSortField, OutageUpdate
 from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
@@ -88,12 +89,11 @@ class OutageRepository:
         query = query.order_by(direction_fn(sort_column), OutageORM.id.asc())
 
         if include_total:
-            # Use COUNT(*) OVER() to get total in the same query as items.
-            # This avoids a separate COUNT(*) query which is expensive with ILIKE.
-            total_subq = query.with_entities(func.count().over()).subquery()
-            row = query.add_columns(func.count().over()).offset((page - 1) * page_size).limit(page_size).first()
-            total = row[1] if row else 0
-            items = query.offset((page - 1) * page_size).limit(page_size).all()
+            # Use COUNT(*) OVER() window function to get total count in the same
+            # query pass as the page items — avoids a second round-trip to the DB.
+            rows = query.add_columns(func.count().over()).offset((page - 1) * page_size).limit(page_size).all()
+            total = rows[0][1] if rows else 0
+            items = [row[0] for row in rows]
         else:
             total = None
             items = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -215,6 +215,35 @@ class OutageRepository:
             query = query.filter(OutageORM.detected_at <= end_date)
         return [_orm_to_pydantic(r) for r in query.all()]
 
+    def iter_filtered(
+        self,
+        severity: Severity | None = None,
+        status: OutageStatus | None = None,
+        search: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        batch_size: int = 200,
+    ):
+        """Stream filtered outages in batches to avoid loading all rows into memory."""
+        query = self.db.query(OutageORM)
+        if severity:
+            query = query.filter(OutageORM.severity == severity.value)
+        if status:
+            query = query.filter(OutageORM.status == status.value)
+        if search:
+            query = query.filter(
+                or_(
+                    OutageORM.id.ilike(f"%{search}%"),
+                    OutageORM.site_id.ilike(f"%{search}%"),
+                    OutageORM.site_name.ilike(f"%{search}%"),
+                )
+            )
+        if start_date:
+            query = query.filter(OutageORM.detected_at >= start_date)
+        if end_date:
+            query = query.filter(OutageORM.detected_at <= end_date)
+        yield from (_orm_to_pydantic(r) for r in query.yield_per(batch_size))
+
     def get(self, outage_id: str) -> Outage | None:
         row = self.db.query(OutageORM).filter(OutageORM.id == outage_id).first()
         if not row:
@@ -272,6 +301,20 @@ class OutageRepository:
 
         duplicate = self._find_duplicate_orm(payload)
         if duplicate:
+            # #303: a matching site/time/description tuple with different
+            # severity/status/affected_services/assigned_to is a conflicting
+            # correction, not a no-op (id is intentionally excluded here,
+            # since this path is only reached when ids differ or are unset).
+            if (
+                duplicate.severity != payload.severity.value
+                or duplicate.status != payload.status.value
+                or (duplicate.affected_services or []) != payload.affected_services
+                or duplicate.assigned_to != payload.assigned_to
+            ):
+                raise ValueError(
+                    f"Outage matching site '{payload.site_name}' at '{payload.detected_at}' "
+                    "already exists with different content"
+                )
             return _orm_to_pydantic(duplicate)
         return None
 
@@ -336,9 +379,29 @@ class OutageRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
+    def has_financial_history(self, outage_id: str) -> bool:
+        """Return True if the outage has SLA results or payments referencing it."""
+        from app.models.orm.sla import SLAResultORM
+        from app.models.orm.payment import PaymentTransactionORM
+
+        sla_count = self.db.query(SLAResultORM).filter(SLAResultORM.outage_id == outage_id).count()
+        if sla_count > 0:
+            return True
+        try:
+            payment_count = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).count()
+            return payment_count > 0
+        except Exception:
+            # PaymentTransactionORM may not have outage_id in all schema versions
+            return False
+
     def delete(self, outage_id: str) -> None:
         orm = self.get_orm(outage_id)
         if orm:
+            if self.has_financial_history(outage_id):
+                raise ValueError(
+                    f"Cannot delete outage '{outage_id}': it has associated SLA results or payment records. "
+                    "Archive the outage instead or contact an administrator."
+                )
             self.db.delete(orm)
             self.db.commit()
 
@@ -360,21 +423,47 @@ class OutageRepository:
         self.db.refresh(orm)
         return _orm_to_pydantic(orm)
 
-    def list_violations(self) -> builtins.list[dict]:
-        from app.services.sla import SLACalculator
+    def list_violations(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        query = (
+            self.db.query(SLAResultORM, OutageORM)
+            .join(OutageORM, OutageORM.id == SLAResultORM.outage_id)
+            .filter(SLAResultORM.is_latest.is_(True), SLAResultORM.status == "violated")
+            .order_by(SLAResultORM.created_at.desc())
+        )
 
-        rows = self.db.query(OutageORM).filter(OutageORM.status == OutageStatus.resolved.value).all()
+        total = query.count()
+        rows = query.offset((page - 1) * page_size).limit(page_size).all()
 
-        violations = []
-        for orm in rows:
-            if orm.mttr_minutes is None:
-                continue
-            sla = SLACalculator.calculate(
-                outage_id=orm.id,
-                severity=orm.severity,
-                mttr_minutes=orm.mttr_minutes,
+        items = []
+        for sla_orm, outage_orm in rows:
+            items.append(
+                {
+                    "outage": _orm_to_pydantic(outage_orm),
+                    "sla": {
+                        "id": sla_orm.id,
+                        "outage_id": sla_orm.outage_id,
+                        "status": sla_orm.status,
+                        "mttr_minutes": sla_orm.mttr_minutes,
+                        "threshold_minutes": sla_orm.threshold_minutes,
+                        "amount": sla_orm.amount,
+                        "payment_type": sla_orm.payment_type,
+                        "rating": sla_orm.rating,
+                        "policy_version": sla_orm.policy_version,
+                        "threshold_source": sla_orm.threshold_source,
+                        "reason_code": sla_orm.reason_code,
+                        "decision_trace": sla_orm.decision_trace,
+                        "compute_hash": sla_orm.compute_hash,
+                    },
+                }
             )
-            if sla.status == "violated":
-                violations.append({"outage": _orm_to_pydantic(orm), "sla": sla})
 
-        return violations
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }

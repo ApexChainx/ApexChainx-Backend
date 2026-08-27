@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
 from app.services.audit_log import audit_log
+from app.utils.cursor import CursorPage, encode_cursor, decode_cursor
 
 router = APIRouter()
 
@@ -212,7 +213,10 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
         )
     if not payment:
         raise HTTPException(status_code=409, detail="Max retries reached")
-    audit_log.log("payment_retried", {"id": transaction_id, "retry_count": payment.retry_count})
+    audit_log.log(
+        "payment_retried",
+        {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
+    )
     return payment
 
 
@@ -229,7 +233,7 @@ def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -
     """Return the datetime when the next retry should occur, or None if at max."""
     if retry_count >= PaymentRepository.MAX_RETRIES:
         return None
-    delay = min(_RETRY_BASE_SECONDS * (2 ** retry_count), _RETRY_MAX_SECONDS)
+    delay = min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
     anchor = last_retried_at or datetime.now(UTC)
     return anchor + timedelta(seconds=delay)
 
@@ -250,18 +254,33 @@ class PaymentRetryQueueItem(BaseModel):
     last_retried_at: datetime | None
 
 
-@router.get("/retry-queue", response_model=list[PaymentRetryQueueItem])
+@router.get("/retry-queue", response_model=CursorPage)
 def list_retry_queue(
+    cursor: str | None = Query(default=None, description="Cursor for pagination."),
+    limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """Return all payments eligible for retry with computed backoff metadata."""
+    """Return payments eligible for retry with computed backoff metadata.
+
+    Supports cursor-based pagination. The cursor encodes
+    ``(created_at, id)`` of the last item on the previous page.
+    """
     repo = PaymentRepository(db)
     items, _ = repo.list(status="failed")
+
+    decoded = decode_cursor(cursor)
+    if decoded is not None:
+        cursor_id, cursor_created_at_str = decoded
+        items = [p for p in items if (p.created_at.isoformat(), p.id) < (cursor_created_at_str, cursor_id)]
+
+    page_items = items[:limit]
+    has_more = len(items) > limit
+
     result: list[PaymentRetryQueueItem] = []
-    for p in items:
+    for p in page_items:
         next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
-        backoff = min(_RETRY_BASE_SECONDS * (2 ** p.retry_count), _RETRY_MAX_SECONDS)
+        backoff = min(_RETRY_BASE_SECONDS * (2**p.retry_count), _RETRY_MAX_SECONDS)
         result.append(
             PaymentRetryQueueItem(
                 id=p.id,
@@ -277,7 +296,13 @@ def list_retry_queue(
                 last_retried_at=p.last_retried_at,
             )
         )
-    return result
+
+    next_cursor = None
+    if has_more and result:
+        last = result[-1]
+        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+    return CursorPage(items=result, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
@@ -306,8 +331,13 @@ def retry_now(
     if not payment:
         raise HTTPException(status_code=409, detail="Max retries reached")
     audit_log.log(
-        "payment_retry_now",
-        {"id": transaction_id, "retry_count": payment.retry_count, "actor": getattr(current_user, "username", None)},
+        "payment_retried",
+        {
+            "id": transaction_id,
+            "retry_count": payment.retry_count,
+            "actor": current_user.email,
+            "override": True,
+        },
     )
     return payment
 
@@ -413,11 +443,20 @@ def provider_callback(
         raise HTTPException(status_code=404, detail="Payment not found")
 
     if existing.status == payload.status:
+        audit_log.log(
+            "payment_provider_callback_duplicate",
+            {
+                "transaction_id": payload.transaction_id,
+                "provider_ref": payload.provider_ref,
+                "nonce": effective_nonce,
+                "status": payload.status,
+            },
+        )
         return existing
 
     try:
         updated = repo.reconcile(payload.transaction_id, payload.status)
-    except ValueError as exc:
+    except (ValueError, PaymentTransitionError) as exc:
         audit_log.log(
             "callback_rejected_invalid_transition",
             {
@@ -428,7 +467,31 @@ def provider_callback(
                 "error": str(exc),
             },
         )
+        audit_log.log(
+            "payment_dead_letter",
+            {
+                "transaction_id": payload.transaction_id,
+                "from_status": existing.status,
+                "to_status": payload.status,
+                "provider_ref": payload.provider_ref,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
         raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        audit_log.log(
+            "payment_dead_letter",
+            {
+                "transaction_id": payload.transaction_id,
+                "from_status": existing.status,
+                "to_status": payload.status,
+                "provider_ref": payload.provider_ref,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Internal error processing callback")
 
     audit_log.log(
         "payment_provider_callback",
@@ -439,4 +502,20 @@ def provider_callback(
             "nonce": effective_nonce,
         },
     )
+
+    # Auto-retry on failure: if the provider marked the payment as failed
+    # and we have retries remaining, schedule a retry with exponential backoff.
+    if payload.status == "failed" and updated.retry_count < PaymentRepository.MAX_RETRIES:
+        payment = repo.retry(payload.transaction_id)
+        if payment:
+            next_retry_at = _compute_next_retry_at(payment.retry_count, payment.last_retried_at)
+            audit_log.log(
+                "payment_auto_retry_scheduled",
+                {
+                    "id": payload.transaction_id,
+                    "retry_count": payment.retry_count,
+                    "next_retry_at": next_retry_at.isoformat() if next_retry_at else None,
+                },
+            )
+
     return updated

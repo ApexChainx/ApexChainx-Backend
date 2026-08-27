@@ -7,6 +7,7 @@ from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
 from app.db.session import get_db
 from app.models.auth import (
+    AdminCreateUserRequest,
     AuthLogoutResponse,
     AuthSessionResponse,
     AuthUser,
@@ -21,6 +22,7 @@ from app.repositories.user_repository import UserRepository, user_orm_to_pydanti
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
 from app.services.token_revocation import revoke
+from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
 router = APIRouter()
 
@@ -101,6 +103,30 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
+def admin_create_user(
+    payload: AdminCreateUserRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin-only endpoint to create a user with an explicit role.
+
+    Every creation is audit-logged with the approving admin's identity.
+    """
+    try:
+        return AuthStore.admin_create_user(
+            email=payload.email,
+            password=payload.password,
+            full_name=payload.full_name,
+            role=payload.role,
+            actor_id=admin_user.id,
+            actor_email=admin_user.email,
+            db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/login", response_model=AuthSessionResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.services.audit_log import audit_log
@@ -163,6 +189,12 @@ def update_profile(
     """Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here."""
     if payload.full_name is None and payload.stellar_wallet is None:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
+
+    if payload.stellar_wallet is not None:
+        try:
+            normalize_wallet(payload.stellar_wallet)
+        except WalletAddressError as exc:
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
 
     repo = UserRepository(db)
     updated = repo.update_profile(
@@ -264,30 +296,23 @@ def auth_ping():
 # --------------------------------------------------------------------------- #
 
 
-class GDPRExportResponse(BaseModel):
-    job_id: str
-    exported_at: str
-    size_bytes: int
-    tarball_base64: bytes
-    entry_count: int
-
-
 class GDPREraseResponse(BaseModel):
     status: str
     job_id: str
     message: str
 
 
-@router.post("/me/export", response_model=GDPRExportResponse)
+@router.post("/me/export")
 def export_my_data(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Export all personal data for the authenticated user (GDPR compliance).
 
-    Returns a tarball containing user data and audit log entries.
-    Designed to complete in < 30 s for up to 1 000 audit events.
+    Returns a streaming gzip tarball containing user data and audit log entries.
     """
+    from fastapi.responses import StreamingResponse
+
     from app.services.gdpr import export_user_data
 
     repo = UserRepository(db)
@@ -295,8 +320,16 @@ def export_my_data(
     if not user_orm:
         raise HTTPException(status_code=404, detail="User not found")
 
-    result = export_user_data(db, user_orm)
-    return result
+    tarball_bytes = export_user_data(db, user_orm)
+
+    def _iter():
+        yield tarball_bytes
+
+    return StreamingResponse(
+        _iter(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": "attachment; filename=gdpr_export.tar.gz"},
+    )
 
 
 @router.post("/me/erase", response_model=GDPREraseResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -384,37 +417,22 @@ def impersonate_user(
 
 
 def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
-    """Generate a short-lived impersonation access token."""
-    import base64
-    import hashlib
-    import hmac
-    import json
+    """Generate a short-lived impersonation JWT using PyJWT."""
     import time
-
+    import jwt
     from app.core.config import settings as app_settings
-
-    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
 
     now = int(time.time())
     payload_dict = {
         "sub": target_orm.id,
         "email": target_orm.email,
-        "act": admin_user.id,  # acting admin
+        "act": admin_user.id,
         "iat": now,
-        "exp": now + 900,  # 15 minutes
+        "exp": now + 900,
         "scope": "impersonate",
     }
-    payload = base64.urlsafe_b64encode(json.dumps(payload_dict).encode()).rstrip(b"=").decode()
-
-    signing_key = (app_settings.IMPERSONATION_SIGNING_KEY or app_settings.SECRET_KEY or "apexchainx-dev-secret").encode()
-    signature = hmac.new(
-        signing_key,
-        f"{header}.{payload}".encode(),
-        hashlib.sha256,
-    ).digest()
-    sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
-
-    return f"{header}.{payload}.{sig_b64}"
+    secret = app_settings.SECRET_KEY or "apexchainx-dev-secret"
+    return jwt.encode(payload_dict, secret, algorithm="HS256")
 
 
 class RevokeResponse(BaseModel):

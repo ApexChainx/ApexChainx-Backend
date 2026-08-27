@@ -7,14 +7,43 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from redis import Redis
+
 from app.core.exceptions import ApexTransientError
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.sla import SLACalculationResult
 from app.services.audit_log import audit_log
 from app.services.metrics import _SLA_LATENCY_BUCKETS, increment_counter, record_histogram
+from app.services.sla_cache import SLACache
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_aware(dt: datetime | None) -> datetime | None:
+    """Return *dt* with UTC attached if it was timezone-naive."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+_sla_cache: SLACache | None = None
+
+
+def _get_sla_cache() -> SLACache | None:
+    """Lazily initialise the Redis-backed SLA cache."""
+    global _sla_cache
+    if _sla_cache is not None:
+        return _sla_cache
+    try:
+        from app.core.config import settings as _settings
+
+        _redis = Redis.from_url(_settings.REDIS_URL, decode_responses=True)
+        _sla_cache = SLACache(_redis)
+    except Exception:
+        logger.debug("SLA cache unavailable; skipping cache lookups")
+        return None
+    return _sla_cache
 
 
 class SLAOrchestrator:
@@ -42,11 +71,11 @@ class SLAOrchestrator:
         if m:
             year = int(m.group(1))
             month = int(m.group(2))
-            start_date = datetime(year, month, 1)
+            start_date = datetime(year, month, 1, tzinfo=UTC)
             if month == 12:
-                end_date = datetime(year + 1, 1, 1)
+                end_date = datetime(year + 1, 1, 1, tzinfo=UTC)
             else:
-                end_date = datetime(year, month + 1, 1)
+                end_date = datetime(year, month + 1, 1, tzinfo=UTC)
             return start_date, end_date
 
         m = self._QUARTERLY_RE.match(period)
@@ -54,11 +83,11 @@ class SLAOrchestrator:
             year = int(m.group(1))
             quarter = int(m.group(2))
             start_month = (quarter - 1) * 3 + 1
-            start_date = datetime(year, start_month, 1)
+            start_date = datetime(year, start_month, 1, tzinfo=UTC)
             if start_month == 10:
-                end_date = datetime(year + 1, 1, 1)
+                end_date = datetime(year + 1, 1, 1, tzinfo=UTC)
             else:
-                end_date = datetime(year, start_month + 3, 1)
+                end_date = datetime(year, start_month + 3, 1, tzinfo=UTC)
             return start_date, end_date
 
         raise ApexValidationError(
@@ -66,10 +95,25 @@ class SLAOrchestrator:
         )
 
     def get_outages_for_device(self, device_id: str, start_date: datetime, end_date: datetime) -> list[OutageORM]:
-        """Get all outages for a device within the specified period."""
+        """Get all outages for a device within the specified period.
+
+        Matching strategy (avoids cross-device contamination):
+        - Match directly by outage id (primary key).
+        - Match by site_id when the outage has a non-null site_id.
+        - Fall back to site_name only when site_id is NULL on the outage
+          record, so that devices sharing a site_name but distinguished by
+          site_id are never cross-matched.
+        """
+        from sqlalchemy import and_, or_
+
+        id_match = OutageORM.id == device_id
+        site_id_match = and_(OutageORM.site_id.isnot(None), OutageORM.site_id == device_id)
+        site_name_match = and_(OutageORM.site_id.is_(None), OutageORM.site_name == device_id)
+        device_filter = or_(id_match, site_id_match, site_name_match)
+
         return (
             self.db.query(OutageORM)
-            .filter((OutageORM.site_id == device_id) | (OutageORM.id == device_id) | (OutageORM.site_name == device_id))
+            .filter(device_filter)
             .filter(OutageORM.created_at >= start_date)
             .filter(OutageORM.created_at < end_date)
             .all()
@@ -82,13 +126,15 @@ class SLAOrchestrator:
 
         mttr_values = []
         for outage in outages:
-            if outage.started_at and outage.resolved_at:
-                duration = outage.resolved_at - outage.started_at
+            started = _ensure_aware(outage.started_at)
+            resolved = _ensure_aware(outage.resolved_at)
+            if started and resolved:
+                duration = resolved - started
                 mttr_minutes = duration.total_seconds() / 60
                 mttr_values.append(mttr_minutes)
-            elif outage.started_at:
+            elif started:
                 # For unresolved outages, calculate time since start
-                duration = datetime.now(UTC) - outage.started_at
+                duration = datetime.now(UTC) - started
                 mttr_minutes = duration.total_seconds() / 60
                 mttr_values.append(mttr_minutes)
 
@@ -103,12 +149,14 @@ class SLAOrchestrator:
         downtime_minutes = 0
 
         for outage in outages:
-            if outage.started_at and outage.resolved_at:
-                downtime = outage.resolved_at - outage.started_at
+            started = _ensure_aware(outage.started_at)
+            resolved = _ensure_aware(outage.resolved_at)
+            if started and resolved:
+                downtime = resolved - started
                 downtime_minutes += downtime.total_seconds() / 60
-            elif outage.started_at:
+            elif started:
                 # For unresolved outages, calculate downtime since start
-                downtime = datetime.now(UTC) - outage.started_at
+                downtime = datetime.now(UTC) - started
                 downtime_minutes += downtime.total_seconds() / 60
 
         availability = max(0.0, (total_minutes - downtime_minutes) / total_minutes * 100)
@@ -144,6 +192,13 @@ def compute_device_sla(
     orchestrator = SLAOrchestrator(db)
     increment_counter("sla_recomputation_total", tags={"device_id": device_id, "period": period})
 
+    # Check cache before computing
+    cache = _get_sla_cache()
+    if cache is not None:
+        cached = cache.get(device_id, period)
+        if cached is not None:
+            return SLACalculationResult.model_validate(cached)
+
     # Default SLA thresholds if not provided
     if sla_thresholds is None:
         sla_thresholds = {
@@ -173,9 +228,11 @@ def compute_device_sla(
                 violation_reasons=[],
             )
             latency = time.monotonic() - start_time
-            record_histogram("sla_computation_latency_seconds", latency, tags={"device_id": device_id}, buckets=_SLA_LATENCY_BUCKETS)
+            record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "no_outages"}, buckets=_SLA_LATENCY_BUCKETS)
             record_sla_settlement_audit_events(device_id, period, result, status="initiated")
             record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+            if cache is not None:
+                cache.set(device_id, period, result.model_dump())
             return result
 
         # Calculate metrics
@@ -232,9 +289,11 @@ def compute_device_sla(
             ],
         )
         latency = time.monotonic() - start_time
-        record_histogram("sla_computation_latency_seconds", latency, tags={"device_id": device_id}, buckets=_SLA_LATENCY_BUCKETS)
+        record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "violated" if is_violated else "ok"}, buckets=_SLA_LATENCY_BUCKETS)
         record_sla_settlement_audit_events(device_id, period, result, status="initiated")
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+        if cache is not None:
+            cache.set(device_id, period, result.model_dump())
         return result
 
     except ApexTransientError:

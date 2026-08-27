@@ -10,6 +10,51 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.models.job import Job, JobStatus
+from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus
+
+# BE-298: Terminal (non-in-flight) delivery statuses eligible for retention cleanup.
+WEBHOOK_DELIVERY_TERMINAL_STATUSES = (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.FAILED)
+WEBHOOK_DELIVERY_RETENTION_DAYS = 30
+WEBHOOK_DEAD_LETTER_RETENTION_DAYS = 90
+
+
+def cleanup_old_webhook_deliveries(
+    db: Session,
+    retention_days: int = WEBHOOK_DELIVERY_RETENTION_DAYS,
+    dead_letter_retention_days: int = WEBHOOK_DEAD_LETTER_RETENTION_DAYS,
+    batch_size: int = 1000,
+) -> int:
+    """Batch-delete terminal webhook_deliveries rows older than the retention window.
+
+    Mirrors JobCleanupService's batched-delete pattern. PENDING, RETRYING, and
+    BREAKER_OPEN (in-flight) deliveries are never touched; DEAD_LETTER rows get
+    their own (longer) retention period.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    dead_letter_cutoff = datetime.now(UTC) - timedelta(days=dead_letter_retention_days)
+    total_deleted = 0
+
+    for statuses, cutoff_date in (
+        (WEBHOOK_DELIVERY_TERMINAL_STATUSES, cutoff),
+        ((WebhookDeliveryStatus.DEAD_LETTER,), dead_letter_cutoff),
+    ):
+        while True:
+            ids = (
+                db.query(WebhookDelivery.id)
+                .filter(WebhookDelivery.status.in_(statuses), WebhookDelivery.created_at < cutoff_date)
+                .limit(batch_size)
+                .all()
+            )
+            ids = [row[0] for row in ids]
+            if not ids:
+                break
+            db.execute(delete(WebhookDelivery).where(WebhookDelivery.id.in_(ids)))
+            db.commit()
+            total_deleted += len(ids)
+            if len(ids) < batch_size:
+                break
+
+    return total_deleted
 
 
 class JobCleanupService:
