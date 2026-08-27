@@ -390,10 +390,6 @@
       },
       "CreateProposedSLARequest": {
         "properties": {
-          "created_by": {
-            "title": "Created By",
-            "type": "string"
-          },
           "mttr_minutes": {
             "title": "Mttr Minutes",
             "type": "integer"
@@ -425,7 +421,6 @@
           }
         },
         "required": [
-          "created_by",
           "severity",
           "mttr_minutes"
         ],
@@ -443,10 +438,12 @@
             "type": "string"
           },
           "dispute_id": {
+            "format": "uuid",
             "title": "Dispute Id",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "title": "Id",
             "type": "string"
           },
@@ -484,15 +481,9 @@
             "minLength": 10,
             "title": "Dispute Reason",
             "type": "string"
-          },
-          "flagged_by": {
-            "description": "Identifier of the operator flagging the dispute",
-            "title": "Flagged By",
-            "type": "string"
           }
         },
         "required": [
-          "flagged_by",
           "dispute_reason"
         ],
         "title": "DisputeFlagRequest",
@@ -512,18 +503,12 @@
             "title": "Resolution Notes",
             "type": "string"
           },
-          "resolved_by": {
-            "description": "Identifier of the operator resolving the dispute",
-            "title": "Resolved By",
-            "type": "string"
-          },
           "status": {
             "$ref": "#/components/schemas/DisputeStatus",
             "description": "Resolution outcome: resolved or rejected"
           }
         },
         "required": [
-          "resolved_by",
           "resolution_notes",
           "status"
         ],
@@ -557,6 +542,7 @@
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "title": "Id",
             "type": "string"
           },
@@ -8694,6 +8680,22 @@
               "title": "Sla Result Id",
               "type": "integer"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -8801,6 +8803,22 @@
             "schema": {
               "title": "Sla Result Id",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
