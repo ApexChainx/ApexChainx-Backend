@@ -46,7 +46,6 @@ app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
-app.add_exception_handler(RequestValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
 

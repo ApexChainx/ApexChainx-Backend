@@ -29,7 +29,14 @@ def test_validation_handler_on_bad_request():
 
     assert response.status_code == 422
     body = response.json()
+
+    assert body["type"] == "about:blank"
     assert body["title"] == "Unprocessable Entity"
     assert body["status"] == 422
-    assert "errors" in body
-    assert "type" in body
+    assert body["detail"] == "Request validation failed."
+    assert "correlation_id" in body
+
+    assert body["errors"]
+    assert all("pointer" in error for error in body["errors"])
+    assert all("type" in error for error in body["errors"])
+    assert all("message" in error for error in body["errors"])
