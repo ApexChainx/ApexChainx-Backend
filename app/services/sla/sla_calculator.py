@@ -4,7 +4,7 @@ import time
 from app.models import SLAResult
 
 from ..metrics import record_histogram
-from .config import SLA_CONFIG, get_config_for_severity
+from .config import SLA_CONFIG, get_config_for_severity, get_policy_version
 
 
 def _compute_hash(outage_id: str, started_at: str, resolved_at: str, policy_version: str) -> str:
@@ -30,9 +30,19 @@ class SLACalculator:
         if severity not in SLA_CONFIG:
             raise ValueError(f"Unknown severity level: {severity}")
 
-        # Use policy version to get configuration (for historical recompute)
+        # (#274) There is no persisted per-version config history yet, so a
+        # requested policy_version older/newer than the live version cannot
+        # be honored. Detect the mismatch explicitly instead of silently
+        # computing with the current config as if it matched.
+        version_fallback_note = ""
         try:
             config = get_config_for_severity(severity)
+            live_version = str(get_policy_version(severity))
+            if policy_version and policy_version != live_version:
+                version_fallback_note = (
+                    f" [WARNING: requested policy_version={policy_version} but no history "
+                    f"exists; computed with live config version={live_version}]"
+                )
         except ValueError:
             # Fallback to default config if version-specific config not found
             config = SLA_CONFIG[severity]
@@ -61,7 +71,8 @@ class SLACalculator:
                 policy_version=policy_version,
                 threshold_source=threshold_source,
                 reason_code="mttr_exceeded",
-                decision_trace=f"MTTR {mttr_minutes} > threshold {threshold} (overtime {overtime} minutes)",
+                decision_trace=f"MTTR {mttr_minutes} > threshold {threshold} (overtime {overtime} minutes)"
+                + version_fallback_note,
                 compute_hash=compute_hash,
             )
 
@@ -98,6 +109,7 @@ class SLACalculator:
             policy_version=policy_version,
             threshold_source=threshold_source,
             reason_code=reason_code,
-            decision_trace=f"MTTR {mttr_minutes} <= threshold {threshold}, performance ratio {performance_ratio}%, rating {rating}",
+            decision_trace=f"MTTR {mttr_minutes} <= threshold {threshold}, performance ratio {performance_ratio}%, rating {rating}"
+            + version_fallback_note,
             compute_hash=compute_hash,
         )
