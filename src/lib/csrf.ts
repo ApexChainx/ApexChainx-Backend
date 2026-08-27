@@ -1,5 +1,7 @@
 /** ApexChain - Network Operations Intelligence Platform */
 
+import { bytesToHex } from "@/lib/encoding";
+
 /**
  * Read a cookie value by name.
  * Only works for non-HttpOnly cookies (like the CSRF token).
@@ -21,5 +23,5 @@ export function getCookie(name: string): string | null {
 export function generateCsrfToken(): string {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
-  return Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
+  return bytesToHex(array);
 }
