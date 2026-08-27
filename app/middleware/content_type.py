@@ -1,8 +1,14 @@
+"""Content-type enforcement middleware."""
+
+import logging
+
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from app.utils.correlation_ctx import get_or_generate_correlation_id
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_CONTENT_TYPES = frozenset(
     {
@@ -14,16 +20,22 @@ ALLOWED_CONTENT_TYPES = frozenset(
 BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
+def _has_body(content_length: str | None, transfer_encoding: str) -> bool:
+    has_content_length = False
+    if content_length is not None:
+        try:
+            has_content_length = int(content_length) > 0
+        except (ValueError, TypeError):
+            pass
+    return has_content_length or bool(transfer_encoding)
+
+
 class ContentTypeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.method in BODY_METHODS:
-            # Skip content-type enforcement when the request carries no body.
-            # Requests without a body (no Content-Length or Content-Length: 0)
-            # should pass through so that auth/authz middleware can reject them
-            # with the appropriate 401/403 before content-type is relevant.
             content_length = request.headers.get("content-length")
             transfer_encoding = request.headers.get("transfer-encoding", "")
-            has_body = (content_length is not None and int(content_length) > 0) or bool(transfer_encoding)
+            has_body = _has_body(content_length, transfer_encoding)
 
             if has_body:
                 content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()

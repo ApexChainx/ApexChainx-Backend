@@ -1,9 +1,14 @@
-from fastapi import HTTPException, Request
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.core.config import settings
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("payload_size_middleware")
+
+
+class _PayloadTooLarge(Exception):
+    pass
 
 
 class PayloadSizeMiddleware:
@@ -13,19 +18,16 @@ class PayloadSizeMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        # Only process HTTP requests
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
         request = Request(scope, receive)
 
-        # Skip size checking for non-body requests (GET, HEAD, OPTIONS)
         if request.method in ("GET", "HEAD", "OPTIONS"):
             await self.app(scope, receive, send)
             return
 
-        # Check Content-Length header if present
         content_length = request.headers.get("Content-Length")
         if content_length:
             try:
@@ -38,15 +40,10 @@ class PayloadSizeMiddleware:
                         path=request.url.path,
                         method=request.method,
                     )
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
-                    )
+                    raise _PayloadTooLarge
             except ValueError:
-                # Invalid Content-Length header, let it pass through
                 pass
 
-        # Wrap receive to check actual body size as we read it
         original_receive = receive
         total_body_size = 0
 
@@ -63,10 +60,20 @@ class PayloadSizeMiddleware:
                     path=request.url.path,
                     method=request.method,
                 )
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
-                )
+                raise _PayloadTooLarge
             return message
 
-        await self.app(scope, size_limited_receive, send)
+        try:
+            await self.app(scope, size_limited_receive, send)
+        except _PayloadTooLarge:
+            response = JSONResponse(
+                status_code=413,
+                content={
+                    "type": "about:blank",
+                    "title": "Payload Too Large",
+                    "status": 413,
+                    "detail": f"Request body too large. Maximum allowed size is {settings.MAX_REQUEST_BODY_SIZE_BYTES} bytes.",
+                },
+                media_type="application/problem+json",
+            )
+            await response(scope, receive, send)
