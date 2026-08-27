@@ -1,6 +1,6 @@
 /** ApexChain Network Operations Intelligence Platform */
 /**
- * Hook: useInvalidateOnResolve
+ * Hook: useInvalidateOutageChange
  *
  * Issue #131 — Coordinate query invalidation across mutating flows.
  *
@@ -18,7 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { slaEventKeys } from "@/lib/query-keys";
 
-export function useInvalidateOnResolve() {
+export function useInvalidateOutageChange() {
   const queryClient = useQueryClient();
 
   const invalidate = useCallback(async () => {
