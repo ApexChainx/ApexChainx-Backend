@@ -38,7 +38,7 @@ const KPICard: React.FC<KPICardProps> = ({
       <p className={`mt-1 text-3xl font-bold ${valueColorMap[highlight]}`}>
         {value}
       </p>
-      {subtitle && <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{subtitle}</p>}
+      {subtitle && <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">{subtitle}</p>}
     </div>
   );
 };

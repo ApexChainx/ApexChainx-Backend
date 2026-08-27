@@ -1189,7 +1189,7 @@ function StellarHealthCard({
       {!isReachable && !isChecking && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <p className="font-medium">Horizon is unreachable</p>
-          <p className="mt-1 text-red-600">
+          <p className="mt-1 text-red-700">
             Stellar network actions (wallet creation, payments) are currently
             unavailable. Please check your network connection or the Horizon
             endpoint configuration.
