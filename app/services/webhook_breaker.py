@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from enum import Enum
 
 from app.core.config import settings
 from app.services.metrics import set_gauge
+
+logger = logging.getLogger(__name__)
+
+# Cross-worker visibility for the OPEN state (issue #293): a minimal shared
+# marker so a host tripped by one gunicorn worker is also blocked by the
+# others, instead of relying purely on in-process memory. This intentionally
+# does not attempt the full Lua-atomic, failure-window-in-Redis design (see
+# app/core/rate_limiter.py for that pattern) or fix half-open probe
+# multiplication / restart-survival beyond the TTL below — those remain
+# tracked in #293. Fails open (falls back to in-process state) if Redis is
+# unavailable, matching the existing rate limiter's fail-open behavior.
+try:
+    import redis as _redis_sync
+
+    _redis_client: object | None = _redis_sync.Redis.from_url(
+        settings.CELERY_BROKER_URL, socket_timeout=0.2, socket_connect_timeout=0.2
+    )
+except Exception:  # pragma: no cover - best-effort shared state
+    _redis_client = None
 
 
 class BreakerState(Enum):
@@ -50,6 +70,11 @@ class CircuitBreaker:
             self._open_since[host] = now
             self._probe_sent[host] = False
             self._update_metric(host)
+            if _redis_client is not None:
+                try:
+                    _redis_client.setex(f"webhook_breaker:open:{host}", self._reset_seconds, "1")
+                except Exception:
+                    logger.warning("Webhook breaker: failed to publish OPEN state for %s to Redis.", host)
 
     def _record_success(self, host: str) -> None:
         self._failures.pop(host, None)
@@ -57,6 +82,11 @@ class CircuitBreaker:
         self._open_since.pop(host, None)
         self._probe_sent.pop(host, None)
         self._update_metric(host)
+        if _redis_client is not None:
+            try:
+                _redis_client.delete(f"webhook_breaker:open:{host}")
+            except Exception:
+                logger.warning("Webhook breaker: failed to clear OPEN state for %s in Redis.", host)
 
     def _update_metric(self, host: str) -> None:
         state = self._state.get(host, BreakerState.CLOSED)
@@ -67,6 +97,17 @@ class CircuitBreaker:
         host = self._host_key(url)
         with self._lock:
             state = self._state.get(host, BreakerState.CLOSED)
+
+            if state == BreakerState.CLOSED and _redis_client is not None:
+                try:
+                    if _redis_client.exists(f"webhook_breaker:open:{host}"):
+                        # Another worker tripped this host; adopt OPEN locally.
+                        self._state[host] = BreakerState.OPEN
+                        self._open_since[host] = time.time()
+                        state = BreakerState.OPEN
+                        self._update_metric(host)
+                except Exception:
+                    logger.warning("Webhook breaker: failed to check shared OPEN state for %s.", host)
 
             if state == BreakerState.OPEN:
                 now = time.time()

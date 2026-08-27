@@ -16,13 +16,14 @@ from app.core.config import settings
 from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.formatters import canonical_json
+from app.services.metrics import increment_counter
 from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
 )
 from app.utils.correlation_ctx import get_or_generate_correlation_id
-from app.utils.network_validation import validate_webhook_url
+from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,10 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
+    # NOTE: full-table scan + per-row json.loads is a known N+1 (issue #294).
+    # The durable fix (JSONB column + SQL containment filter, or a normalized
+    # webhook_events join table) needs a schema migration and is tracked
+    # separately; this only stops corrupt rows from being silently dropped.
     webhooks = db.query(Webhook).filter(Webhook.is_active).all()
     result = []
     for webhook in webhooks:
@@ -154,7 +159,8 @@ def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webh
             if event.value in events:
                 result.append(webhook)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Webhook %s has invalid events JSON, skipping.", webhook.id)
+            logger.error("Webhook %s has invalid events JSON, skipping.", webhook.id)
+            increment_counter("webhook.events_json.corrupt", tags={"webhook_id": str(webhook.id)})
     return result
 
 
@@ -200,7 +206,26 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
     )
 
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
-    validate_webhook_url(webhook.url)
+    current_ips = validate_webhook_url(webhook.url)
+
+    # Pin delivery to the addresses approved at registration (issue #295): if the
+    # webhook was registered with a resolved_ips snapshot and delivery-time
+    # resolution no longer overlaps it at all, fail closed rather than silently
+    # following the new (possibly rebound) address. Redirect-target validation
+    # and a configurable warn/allow policy are follow-ups, tracked in #295.
+    if webhook.resolved_ips:
+        try:
+            approved_ips = set(json.loads(webhook.resolved_ips))
+        except (json.JSONDecodeError, TypeError):
+            approved_ips = set()
+        if approved_ips and not (approved_ips & set(current_ips)):
+            logger.error(
+                "Webhook %s delivery blocked: resolved IPs %s do not match approved %s (possible DNS rebinding).",
+                webhook.id,
+                current_ips,
+                approved_ips,
+            )
+            raise NetworkValidationError("Webhook host resolution no longer matches the approved address.")
 
     # Check circuit breaker before attempting
     if not breaker.allow_request(webhook.url):
