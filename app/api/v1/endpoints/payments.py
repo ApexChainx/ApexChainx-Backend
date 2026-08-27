@@ -406,8 +406,10 @@ class ProviderCallbackRequest(BaseModel):
     transaction_id: str
     status: str
     provider_ref: str | None = None
-    # BE-028: callers must supply a per-request nonce for replay protection.
-    # The nonce must be unique within the CALLBACK_NONCE_TTL_SECONDS window.
+    # BE-028 / #264: callers MUST supply a per-request nonce for replay
+    # protection. The nonce must be unique within the
+    # CALLBACK_NONCE_TTL_SECONDS window; nonce-less callbacks are rejected
+    # with a dedicated 400 error.
     nonce: str | None = None
 
 
@@ -441,12 +443,16 @@ def provider_callback(
     Inbound callback from a payment provider to update payment status (BE-028).
 
     Security model:
-    - HMAC-SHA256 signature (X-Webhook-Signature) verified when
-      PAYMENT_WEBHOOK_SECRET is configured.  The signed message includes the
-      nonce so replaying a captured request fails if the nonce changes.
+    - HMAC-SHA256 signature (X-Webhook-Signature) is verified whenever
+      PAYMENT_WEBHOOK_SECRET is configured. PAYMENT_WEBHOOK_SECRET is required
+      in non-local environments (validate_critical_settings), so signature
+      verification is effectively mandatory in deployments.  The signed
+      message includes the nonce so replaying a captured request fails if the
+      nonce changes.
     - Replay protection: the nonce (from X-Callback-Nonce header or the
-      ``nonce`` body field) must be unique within a 5-minute window.
-      Duplicate nonces are rejected with 409 Conflict.
+      ``nonce`` body field) is MANDATORY. Nonce-less callbacks are rejected
+      with 400, and duplicate nonces within the 5-minute window are rejected
+      with 409 Conflict.
     - Idempotency: a callback that moves a payment into its current status
       is silently accepted (returns 200 with the unchanged record).
     - Failures and suspicious events are written to the audit log so they
@@ -454,6 +460,19 @@ def provider_callback(
     """
     # --- 1. Resolve nonce (header takes precedence over body field) ----------
     effective_nonce = x_callback_nonce or payload.nonce
+
+    # --- 1b. Reject nonce-less callbacks (#264) -------------------------------
+    # Replay protection is mandatory, not opt-in: a callback without a nonce
+    # is rejected with a dedicated error code before any state change.
+    if not effective_nonce:
+        audit_log.log(
+            "callback_rejected_missing_nonce",
+            {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Callback nonce is required (X-Callback-Nonce header or 'nonce' body field)",
+        )
 
     # --- 2. Authenticate signature -------------------------------------------
     secret = settings.PAYMENT_WEBHOOK_SECRET

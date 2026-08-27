@@ -30,10 +30,12 @@ class ConcurrencyLockError(ApexTransientError):
 def _lock_id_from_key(key: str) -> int:
     """Convert a string key to a 64-bit integer for PostgreSQL advisory locks.
 
-    Uses SHA-256 to generate a deterministic hash, then takes the first 8 bytes.
+    Uses SHA-256 to generate a deterministic hash, then takes the first 8 bytes
+    as a *signed* bigint so the value always fits in PostgreSQL's int8 range
+    (advisory locks take bigint; values above 2**63 - 1 overflow the cast).
     """
     hash_bytes = hashlib.sha256(key.encode("utf-8")).digest()
-    return int.from_bytes(hash_bytes[:8], byteorder="big", signed=False)
+    return int.from_bytes(hash_bytes[:8], byteorder="big", signed=True)
 
 
 @contextmanager
@@ -64,7 +66,9 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
     lock_id = _lock_id_from_key(lock_key)
 
     # Try to acquire the lock (non-blocking first check)
-    result = db.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    result = db.execute(
+        text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id}
+    )
     acquired = result.scalar()
 
     if not acquired:
@@ -95,7 +99,7 @@ def blocking_advisory_lock(db: Session, lock_key: str) -> Generator[None, None, 
         None
     """
     lock_id = _lock_id_from_key(lock_key)
-    db.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    db.execute(text("SELECT pg_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
     try:
         yield
     finally:
@@ -127,7 +131,9 @@ def advisory_lock_nowait(db: Session, lock_key: str) -> Generator[None, None, No
     """
     lock_id = _lock_id_from_key(lock_key)
 
-    result = db.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    result = db.execute(
+        text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id}
+    )
     acquired = result.scalar()
 
     if not acquired:

@@ -68,6 +68,21 @@ class Settings(BaseSettings):
     AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
     USE_REDIS_RATE_LIMITER: bool = True
 
+    # Detail keys that must always be redacted when writing audit-log entries
+    # (app/services/scrubber.py). Values under these keys are replaced with
+    # "[REDACTED]" before persistence.
+    AUDIT_SENSITIVE_FIELDS: list[str] = [
+        "password",
+        "hashed_password",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "api_key",
+        "x_api_key",
+    ]
+
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
     MAX_FILE_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max file upload size (matches existing import limit)
