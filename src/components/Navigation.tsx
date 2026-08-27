@@ -29,8 +29,6 @@ const Navigation = () => {
             className={`w-3 h-3 rounded-full mr-2 ${
               status === "green"
                 ? "bg-green-500"
-                : status === "yellow"
-                ? "bg-yellow-500"
                 : "bg-red-500"
             }`}
             title={`${t('navigation.systemHealth')}: ${status}`}
