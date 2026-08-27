@@ -2,6 +2,7 @@ import builtins
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -69,6 +70,13 @@ class PaymentRepository:
             return None
         return _orm_to_pydantic(orm)
 
+    # BE-286: whitelisted sort columns to avoid arbitrary-column ORDER BY.
+    SORT_COLUMNS = {
+        "created_at": PaymentTransactionORM.created_at,
+        "amount": PaymentTransactionORM.amount,
+        "status": PaymentTransactionORM.status,
+    }
+
     def list(
         self,
         page: int = 1,
@@ -78,6 +86,8 @@ class PaymentRepository:
         type: str | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
     ) -> tuple[list[PaymentTransaction], int]:
         query = self.db.query(PaymentTransactionORM)
 
@@ -92,14 +102,21 @@ class PaymentRepository:
         if date_to:
             query = query.filter(PaymentTransactionORM.created_at <= date_to)
 
-        total = query.count()
+        sort_column = self.SORT_COLUMNS.get(sort_by, PaymentTransactionORM.created_at)
+        order_clause = sort_column.asc() if sort_dir == "asc" else sort_column.desc()
+
+        # BE-285: compute the total in the same statement as the page via
+        # COUNT(*) OVER() instead of a separate query.count() scan, so the
+        # total always matches the returned page under concurrent writes.
         rows = (
-            query.order_by(PaymentTransactionORM.created_at.desc())
+            query.add_columns(func.count().over())
+            .order_by(order_clause)
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
         )
-        return [_orm_to_pydantic(r) for r in rows], total
+        total = rows[0][1] if rows else 0
+        return [_orm_to_pydantic(r[0]) for r in rows], total
 
     def list_by_outage(self, outage_id: str) -> builtins.list[PaymentTransaction]:
         rows = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).all()
@@ -123,9 +140,14 @@ class PaymentRepository:
             return existing
 
         normalized_amount = abs(float(sla_result.amount))
+        # BE-288: no real Stellar submission path exists yet, so this hash is
+        # simulated. Use a genuinely random, unique value (instead of a
+        # deterministic sla_result-derived string) so retries/duplicates
+        # can't collide, and prefix it so it's never mistaken for a real
+        # on-chain transaction hash.
         transaction = PaymentTransaction(
             id=f"pay_{uuid4().hex[:12]}",
-            transaction_hash=f"sla-{sla_result.id}-{sla_result.payment_type}",
+            transaction_hash=f"simulated-{uuid4().hex}",
             type=sla_result.payment_type,
             amount=normalized_amount,
             asset_code=settings.PAYMENT_ASSET_CODE,
