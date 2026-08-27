@@ -15,8 +15,11 @@ from app.core.config import settings as app_settings
 from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
+from app.services.metrics import increment_counter
+from app.utils.correlation_ctx import get_correlation_id
 
 logger = logging.getLogger(__name__)
+IMPERSONATION_VERIFICATION_FAILURES = "impersonation_verification_failures"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -68,7 +71,12 @@ def _extract_bearer_token(authorization: str | None) -> str:
 
 def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
     """Verify a short-lived impersonation JWT using PyJWT.
+
     Returns the decoded payload if valid, or None if invalid/expired.
+    Every failure mode emits a structured log line with a machine-readable
+    reason and the request correlation ID, and increments the
+    ``impersonation_verification_failures`` counter tagged by reason, so
+    scanning of this privileged surface is observable (#271).
     """
     try:
         secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret")
@@ -79,21 +87,32 @@ def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
             options={"require": ["exp", "sub", "scope"]},
         )
         if payload.get("scope") != "impersonate":
-            logger.warning("impersonation_verification_failed", extra={"reason": "wrong_scope"})
+            _record_impersonation_failure("wrong_scope")
             return None
         return payload
     except jwt.ExpiredSignatureError:
-        logger.warning("impersonation_verification_failed", extra={"reason": "expired"})
-        return None
+        _record_impersonation_failure("expired")
     except jwt.InvalidAlgorithmError:
-        logger.warning("impersonation_verification_failed", extra={"reason": "invalid_algorithm"})
-        return None
-    except InvalidTokenError as exc:
-        logger.warning("impersonation_verification_failed", extra={"reason": str(exc)})
-        return None
-    except Exception as exc:
-        logger.warning("impersonation_verification_failed", extra={"reason": f"unexpected: {exc}"})
-        return None
+        _record_impersonation_failure("invalid_algorithm")
+    except jwt.InvalidSignatureError:
+        _record_impersonation_failure("bad_signature")
+    except jwt.DecodeError:
+        _record_impersonation_failure("malformed")
+    except InvalidTokenError:
+        _record_impersonation_failure("invalid_token")
+    except Exception:
+        _record_impersonation_failure("unexpected")
+    return None
+
+
+def _record_impersonation_failure(reason: str) -> None:
+    """Record a failed impersonation verification without exposing token data."""
+    correlation_id = get_correlation_id()
+    logger.warning(
+        "impersonation_verification_failed",
+        extra={"reason": reason, "correlation_id": correlation_id},
+    )
+    increment_counter(IMPERSONATION_VERIFICATION_FAILURES, tags={"reason": reason})
 
 
 def get_current_user(
