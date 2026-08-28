@@ -33,6 +33,8 @@ from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.etag import ETagMiddleware
 from app.services.health_report import build_readiness_report
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 
@@ -128,6 +130,9 @@ app.add_middleware(SecurityHeadersMiddleware)
 # API version and commit headers on every response
 app.add_middleware(ApiVersionMiddleware)
 
+# ETag middleware: computes ETag for GET/HEAD responses and honours If-None-Match
+app.add_middleware(ETagMiddleware, exclude_path_prefixes=settings.ETAG_EXCLUDE_PATH_PREFIXES)
+
 
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
@@ -218,8 +223,13 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
 
+
 # API routes
 app.include_router(api_router, prefix="/api/v1")
 
 # Apply OpenTelemetry auto-instrumentation (after all routes registered)
 instrument_app(app)
+
+# Wrap the FastAPI ASGI app with the payload size guard so it runs outside
+# the BaseHTTPMiddleware stack and can short-circuit large request bodies.
+app = PayloadSizeMiddleware(app)
