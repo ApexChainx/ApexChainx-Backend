@@ -31,6 +31,7 @@ from app.db.session import audit_engine, engine
 from app.middleware.api_version import ApiVersionMiddleware
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
+from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.services.health_report import build_readiness_report
@@ -49,6 +50,7 @@ app.add_exception_handler(ValidationError, pydantic_validation_handler)
 app.add_exception_handler(RequestValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
+app.add_middleware(ETagMiddleware)
 
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)
