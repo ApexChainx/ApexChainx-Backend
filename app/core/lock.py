@@ -1,14 +1,17 @@
 """Distributed locking utilities for concurrency protection.
 
-Provides advisory lock mechanisms using PostgreSQL's pg_advisory_xact_lock
-to prevent concurrent execution of critical operations like SLA resolution
-and recomputation.
+Provides transaction-scoped advisory lock mechanisms using PostgreSQL's
+pg_advisory_xact_lock and pg_try_advisory_xact_lock. The bounded-wait helper
+prevents concurrent execution while nowait remains available for retryable
+request paths.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import math
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -46,8 +49,7 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
     Args:
         db: SQLAlchemy session
         lock_key: Unique string identifier for the lock (e.g., "resolve:outage_123")
-        timeout_seconds: Maximum time to wait for the lock (not directly enforced by PG,
-                        but we can check before acquiring)
+        timeout_seconds: Maximum time to wait for the lock
 
     Yields:
         None
@@ -61,14 +63,21 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
             outage = repo.resolve(outage_id, mttr_minutes)
             db.commit()
     """
+    if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+        raise ValueError("timeout_seconds must be a finite, non-negative number")
+
     lock_id = _lock_id_from_key(lock_key)
+    deadline = time.monotonic() + timeout_seconds
 
-    # Try to acquire the lock (non-blocking first check)
-    result = db.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
-    acquired = result.scalar()
+    while True:
+        result = db.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+        if result.scalar():
+            break
 
-    if not acquired:
-        raise ConcurrencyLockError(f"Could not acquire lock for '{lock_key}'. Another operation is in progress.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ConcurrencyLockError(f"Could not acquire lock for '{lock_key}'. Another operation is in progress.")
+        time.sleep(min(0.05, remaining))
 
     try:
         yield
