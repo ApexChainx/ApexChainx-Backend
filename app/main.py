@@ -197,9 +197,7 @@ def liveness():
 async def readiness():
     # Run the (blocking) probe work on a worker thread so a slow DB/Redis never
     # stalls the event loop.
-    report = await asyncio.to_thread(
-        build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL
-    )
+    report = await asyncio.to_thread(build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL)
     report["timestamp"] = datetime.now(UTC).isoformat()
     return report
 
