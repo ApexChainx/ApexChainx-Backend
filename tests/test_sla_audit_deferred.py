@@ -66,7 +66,7 @@ class TestComputeDeviceSlaNoAuditEvents:
         outage.id = "o-1"
         outage.site_id = "s-1"
         outage.site_name = "Site A"
-        outage.started_at = datetime(2025, 3, 5, 10, 0)
+        outage.detected_at = datetime(2025, 3, 5, 10, 0)
         outage.resolved_at = datetime(2025, 3, 5, 12, 0)
         outage.severity = "high"
         orch.get_outages_for_device.return_value = [outage]
