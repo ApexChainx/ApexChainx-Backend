@@ -2,7 +2,6 @@ const DEFAULT_API_BASE = "/api/v1";
 const DEFAULT_APP_URL = "https://app.apexchain.com";
 const DEFAULT_DEV_APP_URL = "http://localhost:3000";
 const DEFAULT_STELLAR_HORIZON = "https://horizon-testnet.stellar.org";
-const DEFAULT_SLA_CONTRACT_ID = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 const DEFAULT_STELLAR_NETWORK = "testnet";
 
 function readEnv(name: string): string | undefined {
@@ -43,9 +42,13 @@ export const env = {
   STELLAR_NETWORK:
     readEnv("NEXT_PUBLIC_STELLAR_NETWORK") || DEFAULT_STELLAR_NETWORK,
 
-  /** SLA Calculator contract ID displayed on the wallet card for audit */
-  SLA_CONTRACT_ID:
-    readEnv("NEXT_PUBLIC_SLA_CONTRACT_ID") || DEFAULT_SLA_CONTRACT_ID,
+  /**
+   * SLA Calculator contract ID displayed on the wallet card for audit.
+   * Deliberately left `undefined` when unset, so the wallet card renders an
+   * explicit "not configured" state rather than a placeholder that could be
+   * mistaken for a real Stellar contract address.
+   */
+  SLA_CONTRACT_ID: readEnv("NEXT_PUBLIC_SLA_CONTRACT_ID"),
 
   /** USDC token address used for payment escrow */
   USDC_TOKEN_ADDRESS:

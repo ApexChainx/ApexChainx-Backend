@@ -1216,30 +1216,33 @@ function SLAContractIdCard({
   contractId,
   network,
 }: {
-  contractId: string;
+  contractId?: string | undefined;
   network: string;
 }) {
   const canonicalId = CANONICAL_SLA_CONTRACT_IDS[network];
-  const isMismatch = canonicalId && contractId !== canonicalId;
+  const isConfigured = Boolean(contractId?.trim());
+  const isMismatch =
+    isConfigured && Boolean(canonicalId) && contractId !== canonicalId;
+  const isVerified = isConfigured && !isMismatch && Boolean(canonicalId);
 
   const truncatedId =
     contractId && contractId.length > 10
       ? `${contractId.slice(0, 6)}...${contractId.slice(-4)}`
-      : contractId;
+      : contractId ?? "";
 
   const canonicalTruncated =
     canonicalId && canonicalId.length > 10
       ? `${canonicalId.slice(0, 6)}...${canonicalId.slice(-4)}`
-      : canonicalId;
+      : canonicalId ?? "";
+
+  const sectionTone = isMismatch
+    ? "border-red-200 bg-red-50"
+    : isConfigured
+    ? "border-slate-200 bg-white"
+    : "border-amber-200 bg-amber-50";
 
   return (
-    <section
-      className={`rounded-2xl border p-6 shadow-sm ${
-        isMismatch
-          ? "border-red-200 bg-red-50"
-          : "border-slate-200 bg-white"
-      }`}
-    >
+    <section className={`rounded-2xl border p-6 shadow-sm ${sectionTone}`}>
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">
@@ -1249,7 +1252,7 @@ function SLAContractIdCard({
             Resolved smart contract identifier used for SLA calculation calls
           </p>
         </div>
-        {canonicalId && !isMismatch && (
+        {isVerified && (
           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">
             <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -1265,6 +1268,14 @@ function SLAContractIdCard({
             Mismatch
           </span>
         )}
+        {!isConfigured && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11v4m0 4h.01M12 3a9 9 0 100 18 9 9 0 000-18zm-1 4h2v6h-2z" />
+            </svg>
+            Not configured
+          </span>
+        )}
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-4">
@@ -1273,10 +1284,10 @@ function SLAContractIdCard({
             Resolved Contract ID
           </p>
           <p className="mt-1 font-mono text-sm font-semibold text-slate-900">
-            {truncatedId || "Not configured"}
+            {isConfigured ? truncatedId : "Not configured"}
           </p>
         </div>
-        {canonicalId && (
+        {isConfigured && canonicalId && (
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
               Expected ({network})
@@ -1287,6 +1298,17 @@ function SLAContractIdCard({
           </div>
         )}
       </div>
+
+      {!isConfigured && (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <p className="font-medium">Contract not configured</p>
+          <p className="mt-1">
+            No SLA contract is configured for this deployment. Set the
+            NEXT_PUBLIC_SLA_CONTRACT_ID environment variable to display the real
+            contract address on this card.
+          </p>
+        </div>
+      )}
 
       {isMismatch && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
