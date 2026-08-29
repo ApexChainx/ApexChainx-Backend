@@ -2,12 +2,36 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, TypeDecorator
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
+from app.services.secret_encryption import decrypt_secret, encrypt_secret
+
+
+class EncryptedSecret(TypeDecorator):
+    """Encrypts webhook signing secrets at rest (issue #266).
+
+    Writes are encrypted with a Fernet key from configuration before hitting
+    the database; reads are decrypted on load so signing and rotation code
+    keep working against the plaintext value. Legacy plaintext values are
+    returned unchanged so pre-migration rows remain readable.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        return encrypt_secret(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return decrypt_secret(value)
 
 
 class WebhookEvent(str, enum.Enum):
@@ -31,7 +55,8 @@ class Webhook(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     url = Column(String(2048), nullable=False)
-    secret = Column(String(255), nullable=True)
+    # Encrypted at rest (#266); never contains the raw signing secret.
+    secret = Column(EncryptedSecret(), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     events = Column(Text, nullable=False)  # JSON-encoded list of WebhookEvent values
     resolved_ips = Column(Text, nullable=True)  # JSON-encoded list of resolved IPs for SSRF validation

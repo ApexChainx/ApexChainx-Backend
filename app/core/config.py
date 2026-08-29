@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
+    # Fernet key (32 url-safe base64-encoded bytes) used to encrypt webhook
+    # signing secrets at rest (#266). Required in non-local environments; when
+    # unset (local/test) a key is derived from SECRET_KEY so secrets are still
+    # never stored as plaintext.
+    WEBHOOK_SECRET_ENCRYPTION_KEY: str = ""
 
     # OAuth configuration (#10)
     OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
@@ -220,6 +225,24 @@ def validate_critical_settings(config: Settings) -> None:
         if not config.PAYMENT_WEBHOOK_SECRET:
             errors.append(
                 f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+        encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
+        if not encryption_key:
+            errors.append(
+                f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+    encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
+    if encryption_key:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(encryption_key.encode("utf-8"))
+        except Exception:
+            errors.append(
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key "
+                "(32 url-safe base64-encoded bytes)."
             )
 
     try:
