@@ -45,6 +45,20 @@ describe("SettingsPage", () => {
     expect(screen.getAllByText("GABC").length).toBeGreaterThan(0);
   });
 
+  it("renders unconfigured state when NEXT_PUBLIC_SLA_CONTRACT_ID is unset", () => {
+    render(<SettingsPage />);
+
+    // The SLA contract card renders an explicit unconfigured state instead of
+    // surfacing the all-C placeholder as if it were a real Stellar contract.
+    expect(screen.getByText("SLA Contract ID")).toBeInTheDocument();
+    expect(screen.getByText("Contract not configured")).toBeInTheDocument();
+    expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
+
+    // No placeholder ever renders as an address, and nothing is claimed verified.
+    expect(screen.queryAllByText(/CCCCCCCC/).length).toBe(0);
+    expect(screen.queryByText("Verified")).not.toBeInTheDocument();
+  });
+
   it("shows error when loading wallet without user id", async () => {
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole("button", { name: /load wallet details/i }));
