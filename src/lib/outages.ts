@@ -28,7 +28,8 @@ export interface OutagesQuery {
   severity?: string | undefined;
   status?: string | undefined;
   search?: string | undefined;
-  sort?: string | undefined;
+  sort_field?: string | undefined;
+  sort_order?: "asc" | "desc" | undefined;
 }
 
 export async function fetchOutages(query: OutagesQuery): Promise<PaginatedOutages> {
@@ -39,7 +40,8 @@ export async function fetchOutages(query: OutagesQuery): Promise<PaginatedOutage
       severity: query.severity,
       status: query.status,
       search: query.search,
-      sort: query.sort,
+      sort_field: query.sort_field,
+      sort_order: query.sort_order,
     },
   });
 

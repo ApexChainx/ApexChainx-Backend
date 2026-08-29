@@ -397,14 +397,11 @@ export function SessionProvider({
       const hasReadableToken = !!getAccessToken();
       const sessionSeen = hasSessionFlag();
 
-      // Fast path: no readable token and no record of a previous session on
-      // this browser — there is nothing to validate, skip the network calls.
-      if (!hasReadableToken && !sessionSeen) {
-        if (!mountedRef.current) return;
-        setUser(null);
-        setState("unauthenticated");
-        return;
-      }
+      // A missing local flag is not proof that no cookie session exists:
+      // privacy tools and clear-site-data can remove it while httpOnly
+      // cookies remain valid. Probe the cookie-only endpoint on this path.
+      void hasReadableToken;
+      void sessionSeen;
 
       // 1) Prefer the dedicated cookie-session endpoint. It validates the
       //    httpOnly session cookies directly — without an Authorization

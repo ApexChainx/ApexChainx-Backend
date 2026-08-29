@@ -32,7 +32,34 @@ export interface SessionSseEvent {
   reason: SessionRevokeReason;
 }
 
-export type SseEventHandler = (event: SessionSseEvent) => void;
+export function parseSessionSseFrame(frame: string): SessionSseEvent | null {
+  const fields = new Map<string, string[]>();
+  for (const line of frame.replaceAll("\\r\\n", "\\n").split("\\n")) {
+    if (!line || line.startsWith(":")) continue;
+    const separator = line.indexOf(":");
+    const field = separator === -1 ? line : line.slice(0, separator);
+    let value = separator === -1 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    fields.set(field, [...(fields.get(field) ?? []), value]);
+  }
+
+  const eventType = fields.get("event")?.at(-1);
+  const dataStr = fields.get("data")?.join("\\n");
+  if (eventType !== "session_revoked" || !dataStr) return null;
+
+  try {
+    const data = JSON.parse(dataStr) as { reason?: string };
+    const reason: SessionRevokeReason =
+      data.reason === "admin_logout" ||
+      data.reason === "password_changed" ||
+      data.reason === "session_expired"
+        ? data.reason
+        : "unknown";
+    return { type: "session_revoked", reason };
+  } catch {
+    return null;
+  }
+}export type SseEventHandler = (event: SessionSseEvent) => void;
 
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
@@ -88,11 +115,15 @@ export function connectSessionSse(
       });
 
       if (!response.ok) {
-        // Non-200 — could be transient (503, 429), so retry with backoff
+        if (response.status === 401 || response.status === 403) {
+          closed = true;
+          onEvent({ type: "session_revoked", reason: "session_expired" });
+          return;
+        }
         console.warn(
           `[session-sse] /auth/events returned ${response.status} — retrying`,
         );
-        return; // triggers reconnect with backoff
+        return;
       }
 
       // Reset retry count on successful connection
@@ -118,7 +149,8 @@ export function connectSessionSse(
         buffer = frames.pop() ?? ""; // Keep incomplete frame in buffer
 
         for (const frame of frames) {
-          processFrame(frame, onEvent);
+          const event = parseSessionSseFrame(frame);
+          if (event) onEvent(event);
         }
       }
     } catch (err) {
@@ -146,36 +178,4 @@ export function connectSessionSse(
       retryTimeout = null;
     },
   };
-}
-
-/* ─── Internal ─── */
-
-function processFrame(frame: string, onEvent: SseEventHandler): void {
-  const lines = frame.split("\n");
-  let eventType = "";
-  let dataStr = "";
-
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      eventType = line.slice(6).trim();
-    } else if (line.startsWith("data:")) {
-      dataStr = line.slice(5).trim();
-    }
-  }
-
-  if (eventType === "session_revoked" && dataStr) {
-    try {
-      const data = JSON.parse(dataStr) as { reason?: string };
-      const reason: SessionRevokeReason =
-        data.reason === "admin_logout" ||
-        data.reason === "password_changed" ||
-        data.reason === "session_expired"
-          ? data.reason
-          : "unknown";
-
-      onEvent({ type: "session_revoked", reason });
-    } catch {
-      // Ignore malformed event data
-    }
-  }
 }
