@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import UTC, datetime
+
+from pydantic import BaseModel, Field, field_validator
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import require_admin
@@ -13,10 +14,64 @@ from app.services.audit_log import audit_log
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
 
+# Canonical scope registry — matches the scope table documented in docs/API.md.
+# Keys must be created with scopes from this set; anything else is a typo and
+# is rejected at creation time (422) so a mistyped scope can neither silently
+# fail everywhere nor grant an unintended permission (#270).
+KNOWN_SCOPES = frozenset(
+    {
+        "outages:read",
+        "outages:write",
+        "sla:read",
+        "sla:write",
+        "payments:read",
+        "payments:write",
+        "webhooks:read",
+        "webhooks:write",
+        "admin:full",
+    }
+)
+
+
+def _is_expired(expires_at: datetime | None) -> bool:
+    """True when the key has a past-or-present expiry (i.e. is dead)."""
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= datetime.now(UTC)
+
+
+def _key_status(revoked_at, expires_at) -> str:
+    """Effective key status: revoked > expired > active."""
+    if revoked_at is not None:
+        return "revoked"
+    if _is_expired(expires_at):
+        return "expired"
+    return "active"
+
+
 class ApiKeyCreateRequest(BaseModel):
     name: str | None = None
-    scopes: list[str] = []
+    scopes: list[str] = Field(default_factory=list)
     expires_at: datetime | None = None
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, scopes: list[str]) -> list[str]:
+        unknown = sorted(set(scopes) - KNOWN_SCOPES)
+        if unknown:
+            raise ValueError(f"Unknown API key scope(s): {', '.join(unknown)}")
+        return scopes
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expiry(cls, expires_at: datetime | None) -> datetime | None:
+        if expires_at is not None:
+            candidate = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=UTC)
+            if candidate <= datetime.now(UTC):
+                raise ValueError("expires_at must be in the future")
+        return expires_at
 
 
 class ApiKeyCreateResponse(BaseModel):
@@ -34,6 +89,7 @@ class ApiKeyItem(BaseModel):
     revoked_at: datetime | None
     created_at: datetime
     created_by: str
+    status: str
 
 
 class ApiKeyListResponse(BaseModel):
@@ -90,6 +146,7 @@ def list_api_keys_endpoint(
             revoked_at=k.revoked_at,
             created_at=k.created_at,
             created_by=k.created_by,
+            status=_key_status(k.revoked_at, k.expires_at),
         )
         for k in keys
     ]
