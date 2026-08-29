@@ -295,7 +295,7 @@ export default function PaymentsView() {
                     {payment.type}
                   </span>
                 </td>
-                <td className={`${cell} font-semibold ${payment.type === "penalty" ? "text-red-600" : "text-green-600"}`}>
+                <td className={`${cell} font-semibold ${payment.type === "penalty" ? "text-red-700" : "text-green-700"}`}>
                   {payment.type === "penalty" ? "-" : "+"}${payment.amount.toLocaleString()}
                 </td>
                 <td className={`${cell} text-gray-600`}>

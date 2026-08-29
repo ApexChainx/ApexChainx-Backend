@@ -189,7 +189,7 @@ export default function SLADashboardView() {
           <p className="text-sm text-gray-500">Live backend analytics for compliance, payouts, and trend movement.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-gray-400">Updated {lastUpdated}</span>
+          <span className="text-xs uppercase tracking-wide text-gray-600">Updated {lastUpdated}</span>
           <button
             onClick={() => setCompareMode((v) => !v)}
             disabled={!hasDateRange}

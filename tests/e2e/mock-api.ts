@@ -33,6 +33,25 @@ interface RegisteredUser {
 /** Users created via POST /auth/register; login accepts them too. */
 const registeredUsers: RegisteredUser[] = [];
 
+interface BulkImportErrorRecord {
+  row?: number;
+  field?: string;
+  message: string;
+}
+
+interface BulkImportHistoryRecord {
+  id: string;
+  filename: string;
+  imported: number;
+  skipped: number;
+  error_count: number;
+  errors: BulkImportErrorRecord[];
+  created_at: string;
+}
+
+/** Records created via POST /outages/bulk; read back by the history page. */
+const bulkImportHistory: BulkImportHistoryRecord[] = [];
+
 interface SlaRecord {
   status: "met" | "violated";
   mttr_minutes: number;
@@ -230,6 +249,53 @@ export async function mockApi(page: Page): Promise<void> {
       };
       outages.push(created);
       return json(201, created);
+    }
+
+    /* ------------------------- Bulk import ---------------------------- */
+    // Must be handled before the generic /outages/:id matcher below, since
+    // "/outages/bulk" would otherwise be treated as a single-outage lookup.
+    if (method === "POST" && path === "/api/v1/outages/bulk") {
+      const raw = request.postData() ?? "";
+      const filenameMatch = raw.match(/filename="([^"]+)"/);
+      const filename = filenameMatch?.[1] ?? "upload.csv";
+
+      // Fixtures named with "invalid" trigger a mocked server-side
+      // validation failure (e.g. a business-rule check the client can't
+      // perform), so the negative-case journey can be exercised without a
+      // real backend.
+      const isInvalidFixture = filename.toLowerCase().includes("invalid");
+
+      const errors: BulkImportErrorRecord[] = isInvalidFixture
+        ? [
+            {
+              row: 2,
+              field: "start_time",
+              message: "start_time must be before end_time.",
+            },
+          ]
+        : [];
+
+      const result = {
+        imported: isInvalidFixture ? 1 : 2,
+        skipped: isInvalidFixture ? 1 : 0,
+        errors,
+      };
+
+      bulkImportHistory.unshift({
+        id: `BULK-${bulkImportHistory.length + 1}`,
+        filename,
+        imported: result.imported,
+        skipped: result.skipped,
+        error_count: errors.length,
+        errors,
+        created_at: new Date().toISOString(),
+      });
+
+      return json(200, result);
+    }
+
+    if (method === "GET" && path === "/api/v1/outages/bulk/history") {
+      return json(200, bulkImportHistory);
     }
 
     const resolveMatch = path.match(/^\/api\/v1\/outages\/([^/]+)\/resolve$/);

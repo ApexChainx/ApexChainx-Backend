@@ -376,6 +376,7 @@ export default function OutagesPageClient({ data = [] }: Props) {
             onChange={(e) =>
               setSortBy(e.target.value as "date" | "title")
             }
+            aria-label="Sort outages"
             className="border rounded-md px-3 py-2 dark:bg-slate-800 dark:border-slate-600 dark:text-white"
           >
             <option value="date">Newest</option>
