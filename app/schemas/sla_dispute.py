@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -6,12 +7,10 @@ from app.models.sla_dispute import DisputeStatus
 
 
 class DisputeFlagRequest(BaseModel):
-    flagged_by: str = Field(..., description="Identifier of the operator flagging the dispute")
     dispute_reason: str = Field(..., min_length=10, description="Reason for disputing the SLA calculation")
 
 
 class DisputeResolveRequest(BaseModel):
-    resolved_by: str = Field(..., description="Identifier of the operator resolving the dispute")
     resolution_notes: str = Field(..., min_length=10, description="Notes explaining the resolution decision")
     status: DisputeStatus = Field(..., description="Resolution outcome: resolved or rejected")
     apply_proposed: bool = Field(
@@ -20,7 +19,7 @@ class DisputeResolveRequest(BaseModel):
 
 
 class DisputeResponse(BaseModel):
-    id: str
+    id: UUID
     sla_result_id: int
     baseline_sla_result_id: int | None = None
     proposed_sla_result_id: int | None = None
@@ -36,8 +35,8 @@ class DisputeResponse(BaseModel):
 
 
 class DisputeAuditLogResponse(BaseModel):
-    id: str
-    dispute_id: str
+    id: UUID
+    dispute_id: UUID
     action: str
     actor: str
     notes: str | None = None
@@ -47,7 +46,6 @@ class DisputeAuditLogResponse(BaseModel):
 
 
 class CreateProposedSLARequest(BaseModel):
-    created_by: str
     severity: str
     mttr_minutes: int
     policy_version: str = "1.0"

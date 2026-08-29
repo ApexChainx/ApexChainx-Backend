@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import require_admin, require_engineer
+from app.core.security import require_admin, require_engineer, require_engineer_or_admin
 from app.db.session import get_db
 from app.models.orm.sla import SLAResultORM
 from app.models.sla_dispute import DisputeAuditLog, DisputeStatus, SLADispute
@@ -74,7 +74,7 @@ def flag_dispute(
     dispute = SLADispute(
         sla_result_id=sla_result_id,
         baseline_sla_result_id=sla_result_id,
-        flagged_by=payload.flagged_by,
+        flagged_by=current_user.email,
         dispute_reason=payload.dispute_reason,
     )
     db.add(dispute)
@@ -84,7 +84,7 @@ def flag_dispute(
         DisputeAuditLog(
             dispute_id=dispute.id,
             action="flagged",
-            actor=payload.flagged_by,
+            actor=current_user.email,
             notes=payload.dispute_reason,
         )
     )
@@ -161,7 +161,7 @@ def create_proposed_sla(
         DisputeAuditLog(
             dispute_id=dispute.id,
             action="proposed_sla_created",
-            actor=payload.created_by,
+            actor=current_user.email,
             notes=audit_notes,
         )
     )
@@ -202,7 +202,7 @@ def resolve_dispute(
         )
 
     dispute.status = payload.status
-    dispute.resolved_by = payload.resolved_by
+    dispute.resolved_by = current_user.email
     dispute.resolution_notes = payload.resolution_notes
     dispute.resolved_at = datetime.now(UTC)
 
@@ -235,7 +235,7 @@ def resolve_dispute(
         DisputeAuditLog(
             dispute_id=dispute.id,
             action=payload.status.value,
-            actor=payload.resolved_by,
+            actor=current_user.email,
             notes=payload.resolution_notes,
         )
     )
@@ -253,6 +253,7 @@ def resolve_dispute(
 )
 def get_dispute(
     sla_result_id: int,
+    current_user=Depends(require_engineer_or_admin),
     db: Session = Depends(get_db),
 ):
     dispute = (
@@ -276,6 +277,7 @@ def get_dispute(
 )
 def get_dispute_history(
     sla_result_id: int,
+    current_user=Depends(require_engineer_or_admin),
     db: Session = Depends(get_db),
 ):
     dispute = (

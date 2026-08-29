@@ -146,6 +146,20 @@ require_admin = require_role(Role.admin)
 require_engineer = require_role(Role.engineer)
 
 
+def require_engineer_or_admin(current_user: AuthUser = Depends(get_current_user)) -> AuthUser:
+    """Allow either an engineer or an admin to access an endpoint.
+
+    Used by read-only dispute endpoints: engineers flag and admins resolve
+    disputes, so both roles need read access to the dispute record.
+    """
+    if current_user.role not in (Role.engineer, Role.admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions. Required role: engineer or admin",
+        )
+    return current_user
+
+
 def get_current_user_or_service(
     request: Request,
     authorization: str | None = Header(default=None),
