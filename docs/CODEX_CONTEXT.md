@@ -5,6 +5,7 @@
 This repository powers the backend API for ApexChainx, an SLA automation and outage settlement platform.
 
 It is responsible for:
+
 - managing outages and RCA
 - calculating SLA performance
 - exposing analytics and audit data
@@ -30,12 +31,14 @@ It is responsible for:
 ### 1. Outage Management
 
 Responsible for:
+
 - creating outages
 - updating outage status
 - tracking resolution
 - storing metadata (location, services, subscribers)
 
 Key endpoints:
+
 - GET /outages
 - POST /outages
 - PUT /outages/{id}
@@ -47,17 +50,20 @@ Key endpoints:
 Core business logic.
 
 Responsible for:
+
 - calculating MTTR
 - determining SLA compliance
 - triggering penalties or rewards
 - invoking smart contracts
 
 Key endpoints:
+
 - GET /sla/status/{outage_id}
 - POST /sla/calculate
 - POST /sla/execute-payment
 
 Important:
+
 - SLA depends on severity thresholds
 - Payment logic is tightly coupled with SLA
 
@@ -66,11 +72,13 @@ Important:
 ### 3. Payments
 
 Responsible for:
+
 - exposing payment records tied to SLA outcomes
 - tracking transaction status
 - storing transaction history
 
 Key endpoints:
+
 - POST /payments/process-sla
 - GET /payments/history
 
@@ -82,16 +90,19 @@ Outage → SLA Calculation → Smart Contract → Payment → Record stored
 ### 4. Wallet Management
 
 Responsible for:
+
 - creating lightweight wallet records
 - retrieving balances and status
 - linking wallets to users
 
 Key endpoints:
+
 - POST /wallets/create
 - GET /wallets/{user_id}
 - GET /wallets/{address}/balance
 
 **SECURITY CRITICAL**:
+
 - private keys are NEVER returned via API
 - private keys are NEVER logged or exposed
 - only public keys and balance information are accessible
@@ -102,11 +113,13 @@ Key endpoints:
 ### 5. Analytics
 
 Responsible for:
+
 - MTTR calculations
 - SLA compliance metrics
 - payment analytics
 
 Key endpoints:
+
 - GET `/api/v1/sla/analytics/dashboard`
 - GET `/api/v1/sla/analytics/trends`
 - GET `/api/v1/sla/performance/aggregation`
@@ -116,11 +129,13 @@ Key endpoints:
 ### 6. Audit Logging
 
 Responsible for:
+
 - recording all state-changing operations
 - correlating events via `X-Correlation-ID`
 - immutable append-only log
 
 Key endpoints:
+
 - GET /api/v1/audit
 
 ---
@@ -128,11 +143,13 @@ Key endpoints:
 ### 7. Authentication
 
 Responsible for:
+
 - login
 - registration
 - JWT issuance
 
 Key endpoints:
+
 - POST /auth/login
 - POST /auth/register
 
@@ -210,6 +227,7 @@ Treat the following as non-routed or legacy helper paths:
 - **Audit Trail**: All payment and SLA operations must be logged for audit purposes
 
 **Documentation Standards**:
+
 - Use `[REDACTED]` or `[EXAMPLE]` for sensitive placeholder values
 - Include security warnings for any blockchain or financial operations
 - Show secure patterns (environment variables, secure key management)
@@ -222,6 +240,7 @@ Treat the following as non-routed or legacy helper paths:
 Codex should focus on generating issues for:
 
 ### Backend Improvements
+
 - endpoint validation consistency
 - error handling standardization
 - docs alignment with routed runtime
@@ -267,6 +286,7 @@ This repo depends on:
 - apexchainx-contracts → executes SLA logic
 
 Important:
+
 - any change in SLA logic may affect contracts
 - any API shape change affects frontend
 
@@ -286,11 +306,13 @@ Generate a structured backlog of issues that:
 ### SLA Disputes Domain
 
 Responsible for:
+
 - filing and tracking disputes against SLA outcomes
 - linking disputes to originating SLA records
 - providing audit trail for contested settlements
 
 Key endpoints:
+
 - POST /api/v1/sla/disputes
 - GET /api/v1/sla/disputes
 - GET /api/v1/sla/disputes/{dispute_id}
@@ -299,13 +321,13 @@ Key endpoints:
 
 ## Key Terms
 
-| Term | Definition |
-|------|-----------|
-| MTTR | Mean Time to Resolve — the primary SLA compliance metric |
-| SLA | Service Level Agreement — defines penalty/reward thresholds |
-| Correlation ID | UUID injected per request for cross-system tracing |
+| Term             | Definition                                                       |
+| ---------------- | ---------------------------------------------------------------- |
+| MTTR             | Mean Time to Resolve — the primary SLA compliance metric         |
+| SLA              | Service Level Agreement — defines penalty/reward thresholds      |
+| Correlation ID   | UUID injected per request for cross-system tracing               |
 | Contract adapter | Soroban bridge activated when `CONTRACT_EXECUTION_MODE=contract` |
-| Local adapter | Default in-process SLA execution path |
+| Local adapter    | Default in-process SLA execution path                            |
 
 ---
 
@@ -499,14 +521,14 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 
 ## Quick Reference
 
-| Task | Command |
-|------|---------|
-| Start API | `uvicorn app.main:app --reload` |
-| Run migrations | `alembic upgrade head` |
-| Check migration state | `alembic current` |
-| Run all tests | `pytest tests/` |
-| Run one test file | `pytest tests/test_outage_lifecycle.py -v` |
-| Start Celery worker | `celery -A app.tasks.celery_app worker --loglevel=info` |
+| Task                  | Command                                                 |
+| --------------------- | ------------------------------------------------------- |
+| Start API             | `uvicorn app.main:app --reload`                         |
+| Run migrations        | `alembic upgrade head`                                  |
+| Check migration state | `alembic current`                                       |
+| Run all tests         | `pytest tests/`                                         |
+| Run one test file     | `pytest tests/test_outage_lifecycle.py -v`              |
+| Start Celery worker   | `celery -A app.tasks.celery_app worker --loglevel=info` |
 
 ---
 
@@ -525,6 +547,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 ## Outage Repository Methods
 
 `app/repositories/outage_repository.py` exposes:
+
 - `create(db, data)` — persist new outage
 - `get(db, outage_id)` — fetch by ID
 - `update(db, outage_id, data)` — partial update
@@ -537,6 +560,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 ## SLA Repository Methods
 
 `app/repositories/sla_repository.py` exposes:
+
 - `create(db, data)` — persist SLA result
 - `get_latest(db, outage_id)` — fetch most recent result per outage
 - `list(db, filters, limit, offset)` — paginated result list
@@ -548,6 +572,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 ## Payment Repository Methods
 
 `app/repositories/payment_repository.py` exposes:
+
 - `create(db, data)` — persist payment record
 - `get(db, payment_id)` — fetch by ID
 - `get_by_outage(db, outage_id)` — fetch payment linked to outage
@@ -558,12 +583,12 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 
 ## Services vs Repositories: Boundary Rules
 
-| Layer | Allowed | Not Allowed |
-|-------|---------|-------------|
-| Route handler | Call services, return responses | Query DB directly, business logic |
-| Service | Business logic, call repositories | Import other services' repositories |
-| Repository | SQLAlchemy queries only | Business logic, HTTP calls |
-| Utility | Pure functions, no DB/HTTP | Side effects |
+| Layer         | Allowed                           | Not Allowed                         |
+| ------------- | --------------------------------- | ----------------------------------- |
+| Route handler | Call services, return responses   | Query DB directly, business logic   |
+| Service       | Business logic, call repositories | Import other services' repositories |
+| Repository    | SQLAlchemy queries only           | Business logic, HTTP calls          |
+| Utility       | Pure functions, no DB/HTTP        | Side effects                        |
 
 ---
 
@@ -581,6 +606,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 Enums used across the API are defined in `app/models/enums.py`. Always reference the enum class, not raw strings, in service and repository code to benefit from type safety and refactoring support.
 
 Key enums:
+
 - `OutageStatus`: `open`, `resolved`
 - `SLAOutcome`: `penalty`, `reward`
 - `PaymentStatus`: `pending`, `confirmed`, `failed`
@@ -592,25 +618,26 @@ Key enums:
 
 Key event types emitted by `app/services/audit_log.py`:
 
-| Event Type | Trigger |
-|-----------|---------|
-| `outage.created` | New outage persisted |
-| `outage.resolved` | Outage resolved with MTTR |
-| `sla.computed` | SLA outcome calculated |
-| `sla.recomputed` | Bulk recompute executed |
-| `payment.initiated` | Stellar payment submitted |
+| Event Type          | Trigger                        |
+| ------------------- | ------------------------------ |
+| `outage.created`    | New outage persisted           |
+| `outage.resolved`   | Outage resolved with MTTR      |
+| `sla.computed`      | SLA outcome calculated         |
+| `sla.recomputed`    | Bulk recompute executed        |
+| `payment.initiated` | Stellar payment submitted      |
 | `payment.confirmed` | On-chain confirmation received |
-| `dispute.filed` | Dispute created |
-| `dispute.resolved` | Dispute closed |
-| `auth.login` | Successful login |
-| `auth.logout` | Session invalidated |
-| `auth.failed` | Failed login attempt |
+| `dispute.filed`     | Dispute created                |
+| `dispute.resolved`  | Dispute closed                 |
+| `auth.login`        | Successful login               |
+| `auth.logout`       | Session invalidated            |
+| `auth.failed`       | Failed login attempt           |
 
 ---
 
 ## ORM Model Conventions
 
 ORM models live in `app/models/orm/`. Each model:
+
 - extends `Base` from `app/db/base_class.py`
 - uses `__tablename__` matching the migration table name
 - defines `id` as UUID primary key
@@ -645,7 +672,7 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 
 ## Lock Module
 
-`app/core/lock.py` provides a lightweight advisory lock mechanism used to prevent concurrent SLA recompute operations on the same outage. Uses a database-level advisory lock via PostgreSQL `pg_try_advisory_lock`. Do not use Python threading primitives for cross-process synchronisation.
+`app/core/lock.py` provides lightweight transaction-scoped advisory locks used to prevent concurrent operations. `advisory_lock` polls PostgreSQL's `pg_try_advisory_xact_lock` until its bounded timeout; `advisory_lock_nowait` fails immediately. Do not use Python threading primitives for cross-process synchronisation.
 
 ---
 
@@ -658,6 +685,7 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 ## Logging
 
 `app/utils/logging.py` configures structured JSON logging. All log entries include:
+
 - `timestamp` (UTC)
 - `level`
 - `message`
