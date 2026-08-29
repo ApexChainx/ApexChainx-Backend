@@ -169,7 +169,6 @@ def _server_request_hook(span, scope):
     corr_id = get_correlation_id()
     if corr_id:
         span.set_attribute("correlation.id", corr_id)
-        span.set_attribute("trace.id", corr_id)
 
 
 def _client_response_hook(span, request, response):

@@ -4,16 +4,19 @@ Auth rate limiter implementation.
 This module provides a Redis-backed sliding-window rate limiter with a
 fallback to an in-process token bucket when Redis is unavailable or when
 `USE_REDIS_RATE_LIMITER` is disabled.
+
+Both a synchronous (`is_allowed`) and an asynchronous (`is_allowed_async`)
+path are provided so callers never need to spin up an event loop per request.
 """
 
-import asyncio
 import logging
 import random
 from collections import defaultdict
 from time import time
 from typing import ClassVar
 
-import redis.asyncio as redis
+import redis
+import redis.asyncio as redis_async
 from redis.exceptions import RedisError
 
 from app.core.config import settings
@@ -61,7 +64,10 @@ class RedisRateLimiter:
     def __init__(self) -> None:
         self.fallback = _shared_fallback
         self.disabled_until: float | None = None
-        self.client = redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+        # Shared, lazily-connected clients (sync for sync callers, async for
+        # async callers). No event loop is created per request.
+        self.client = redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+        self.async_client = redis_async.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
     def _key_namespace(self, key: str) -> str:
         return f"auth_rate_limiter:{key}"
@@ -72,33 +78,31 @@ class RedisRateLimiter:
     def _trip_circuit(self) -> None:
         self.disabled_until = time() + 30
 
-    async def _is_allowed_async(self, key: str) -> bool:
+    def _lua_args(self, key: str) -> tuple[str, int, int, int, str]:
         if not settings.CELERY_BROKER_URL.strip():
             raise RedisError("CELERY_BROKER_URL is empty")
-
         encoded_key = self._key_namespace(key)
         now_ts = int(time())
         member = f"{now_ts}-{random.random()}"  # nosec B311 - unique sorted-set member, not security
-        result = await self.client.eval(
-            RATE_LIMITER_LUA,
-            1,
+        return (
             encoded_key,
             now_ts,
             settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
             settings.AUTH_RATE_LIMIT_REQUESTS,
             member,
         )
+
+    def _eval(self, key: str) -> bool:
+        encoded_key, now_ts, window, limit, member = self._lua_args(key)
+        result = self.client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
         return bool(result)
 
-    def _run_coroutine(self, coro):
-        try:
-            return asyncio.run(coro)
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
+    async def _eval_async(self, key: str) -> bool:
+        encoded_key, now_ts, window, limit, member = self._lua_args(key)
+        result = await self.async_client.eval(
+            RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member
+        )
+        return bool(result)
 
     def is_allowed(self, key: str) -> bool:
         if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
@@ -108,8 +112,32 @@ class RedisRateLimiter:
             return self.fallback.is_allowed(key)
 
         try:
-            return self._run_coroutine(self._is_allowed_async(key))
-        except (RedisError, OSError, RuntimeError) as exc:
+            return self._eval(key)
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "Redis rate limiter unavailable, falling back to in-memory limiter: %s",
+                exc,
+            )
+            self._trip_circuit()
+            return self.fallback.is_allowed(key)
+        except Exception as exc:
+            logger.warning(
+                "Unexpected rate limiter error, falling back to in-memory limiter: %s",
+                exc,
+            )
+            self._trip_circuit()
+            return self.fallback.is_allowed(key)
+
+    async def is_allowed_async(self, key: str) -> bool:
+        if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
+            return self.fallback.is_allowed(key)
+
+        if self._is_circuit_open():
+            return self.fallback.is_allowed(key)
+
+        try:
+            return await self._eval_async(key)
+        except (RedisError, OSError) as exc:
             logger.warning(
                 "Redis rate limiter unavailable, falling back to in-memory limiter: %s",
                 exc,

@@ -82,7 +82,7 @@ class PaymentTransaction(BaseModel):
     id: str
     transaction_hash: str
     type: str
-    amount: float
+    amount: int
     asset_code: str
     from_address: str
     to_address: str

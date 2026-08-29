@@ -139,7 +139,7 @@ class PaymentRepository:
         if existing:
             return existing
 
-        normalized_amount = abs(float(sla_result.amount))
+        normalized_amount = abs(int(sla_result.amount))
         # BE-288: no real Stellar submission path exists yet, so this hash is
         # simulated. Use a genuinely random, unique value (instead of a
         # deterministic sla_result-derived string) so retries/duplicates
