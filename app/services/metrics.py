@@ -54,6 +54,8 @@ class MetricsRegistry:
         """Record a histogram value with automatic bucket tracking."""
         with self._lock:
             key = self._make_key(name, tags)
+            # Exact lifetime count/sum (never truncated); the sample window is
+            # only used for percentile computation.
             self._histogram_counts[key] += 1
             self._histogram_sums[key] += value
             self._histograms[key].append(MetricPoint(datetime.now(UTC), value, tags or {}))
@@ -70,6 +72,8 @@ class MetricsRegistry:
         """Record a timing measurement."""
         with self._lock:
             key = self._make_key(name, tags)
+            # Exact lifetime count/sum (never truncated); the sample window is
+            # only used for percentile computation.
             self._timer_counts[key] += 1
             self._timer_sums[key] += duration_ms
             self._timers[key].append(duration_ms)
@@ -115,6 +119,7 @@ class MetricsRegistry:
                         "max": max(values),
                         "avg": total / count if count else 0.0,
                         "latest": points[-1].timestamp.isoformat(),
+                        "window_samples": len(values),
                     }
                     # Include actual bucket counts for Prometheus exporter
                     if key in self._histogram_buckets:
@@ -133,6 +138,7 @@ class MetricsRegistry:
                         "avg_ms": total_ms / count if count else 0.0,
                         "p95_ms": self._percentile(timings, 95),
                         "p99_ms": self._percentile(timings, 99),
+                        "window_samples": len(timings),
                     }
 
             # Real per-bucket counts for timers (Prometheus exporter)

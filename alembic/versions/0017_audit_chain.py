@@ -43,8 +43,16 @@ def upgrade() -> None:
             "correlation_id": row.correlation_id,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
+        # Use the same canonical serialization as the writer/verifier
+        # (app.services.formatters.canonical_json) so backfilled rows verify.
         entry_hash = hashlib.sha256(
-            json.dumps(data, sort_keys=True, default=str).encode()
+            json.dumps(
+                data,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ).encode()
         ).hexdigest()
         connection.execute(
             sa.text(
