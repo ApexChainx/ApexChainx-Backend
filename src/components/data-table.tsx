@@ -398,6 +398,27 @@ export function DataTable<TData, TValue>({
 
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
+  /*
+   * Row selection is keyed by row id. The index-based default row id is only
+   * safe for static, non-paginated lists; across a pagination boundary it
+   * silently selects a different record (row 3 of page 1 becomes row 3 of
+   * page 2). Rather than ship that behavior, refuse to enable selection
+   * without a caller-provided stable id.
+   */
+  if (
+    enableRowSelection &&
+    typeof getRowId !== "function" &&
+    data.length > 0
+  ) {
+    throw new Error(
+      "DataTable: `enableRowSelection` requires a stable `getRowId`. " +
+        "Index-based row ids do not survive pagination or data changes, so " +
+        "selection would target the wrong records. Provide " +
+        "`getRowId={(row) => row.id}` (or an equivalent stable field) when " +
+        "enabling row selection."
+    );
+  }
+
   const table = useReactTable({
     data,
     columns,
