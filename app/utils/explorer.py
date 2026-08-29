@@ -58,7 +58,7 @@ def export_outages(outages: list, format: str):
                     outage.service,
                     outage.severity.value,
                     outage.status.value,
-                    outage.started_at,
+                    outage.detected_at,
                     outage.mttr_minutes,
                     sla_status,
                     sla_amount,
