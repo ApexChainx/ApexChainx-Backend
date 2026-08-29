@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_EVENTS_COUNT: int = 50  # Max webhook events per webhook
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
+    
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
     WEBHOOK_URL_ALLOWLIST: list[str] = []
@@ -105,6 +106,8 @@ class Settings(BaseSettings):
     SECURITY_HEADERS_ENABLED: bool = True
     # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
     SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
+    # ETag middleware: list of path prefixes to exclude from ETag buffering
+    ETAG_EXCLUDE_PATH_PREFIXES: list[str] = []
 
     # Circuit breaker settings for webhook delivery (#33)
     WEBHOOK_BREAKER_FAIL_THRESHOLD: int = 10

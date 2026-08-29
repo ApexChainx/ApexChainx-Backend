@@ -22,6 +22,10 @@ class GovernanceError(Exception):
     """Raised when a governance operation fails."""
 
 
+class GovernanceNotImplementedError(GovernanceError):
+    """Compatibility alias for callers expecting a more specific error."""
+
+
 def _stub_tx_hash(operation: str, address: str) -> str:
     """Return a deterministic stub transaction hash for local_adapter mode."""
     raw = f"{settings.SLA_CONTRACT_ADDRESS}:{operation}:{address}"

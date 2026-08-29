@@ -81,3 +81,14 @@ def test_streaming_response_is_not_consumed_by_etag_middleware():
 
     assert first_chunk_sent.is_set()
     assert [event.get("body") for event in events if event["type"] == "http.response.body"] == [b"first", b"second"]
+
+
+def test_etag_and_if_none_match():
+    client = TestClient(create_app())
+    r1 = client.get("/small")
+    assert r1.status_code == 200
+    assert "etag" in r1.headers
+    etag = r1.headers["etag"]
+    r2 = client.get("/small", headers={"If-None-Match": etag})
+    assert r2.status_code == 304
+    assert r2.headers.get("etag") == etag
