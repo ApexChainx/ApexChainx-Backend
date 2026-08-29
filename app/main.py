@@ -194,11 +194,18 @@ def liveness():
 async def readiness():
     # Run the (blocking) probe work on a worker thread so a slow DB/Redis never
     # stalls the event loop.
-    report = await asyncio.to_thread(
-        build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL
-    )
+    report = await asyncio.to_thread(build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL)
     report["timestamp"] = datetime.now(UTC).isoformat()
-    return report
+
+    # Map report status to HTTP status code
+    if report["status"] == "down":
+        return JSONResponse(status_code=503, content=report)
+    elif report["status"] == "warn":
+        # For warn status, return 200 to keep instance in load balancer rotation
+        # but indicate degraded performance in the response body
+        return JSONResponse(status_code=200, content=report)
+    else:  # status == "ok"
+        return JSONResponse(status_code=200, content=report)
 
 
 # Legacy health check – deprecated, redirects to /health/liveness
