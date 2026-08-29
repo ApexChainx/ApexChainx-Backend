@@ -2,7 +2,6 @@ import csv
 import hashlib
 import hmac
 import io
-import time
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -17,29 +16,23 @@ from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
 from app.services.audit_log import audit_log
+from app.services.single_use_token_store import SingleUseTokenStore
 from app.utils.cursor import CursorPage, encode_cursor, decode_cursor
 
 router = APIRouter()
 
-_SEEN_NONCES: dict[str, float] = {}
 CALLBACK_NONCE_TTL_SECONDS = 300
 
-
-def _evict_stale_nonces() -> None:
-    """Remove nonces older than the replay window (called on each callback)."""
-    cutoff = time.monotonic() - CALLBACK_NONCE_TTL_SECONDS
-    stale = [k for k, ts in _SEEN_NONCES.items() if ts < cutoff]
-    for k in stale:
-        del _SEEN_NONCES[k]
+# Replay protection is backed by a shared Redis store (#267) so a nonce
+# rejected on one worker is rejected on every worker, and the replay window
+# survives restarts. When Redis is unavailable the store fails open to a
+# bounded in-process map (documented policy in single_use_token_store.py).
+single_use_token_store = SingleUseTokenStore(ttl_seconds=CALLBACK_NONCE_TTL_SECONDS)
 
 
 def _is_replay(nonce: str) -> bool:
-    """Return True if *nonce* has been seen within the replay window."""
-    _evict_stale_nonces()
-    if nonce in _SEEN_NONCES:
-        return True
-    _SEEN_NONCES[nonce] = time.monotonic()
-    return False
+    """Return True if *nonce* was already consumed within the replay window."""
+    return single_use_token_store.consume(nonce)
 
 
 # BE-027: Schemas for reconciliation history
