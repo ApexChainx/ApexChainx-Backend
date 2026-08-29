@@ -9,7 +9,7 @@ router = APIRouter(prefix="/metrics", tags=["Metrics"])
 
 
 @router.get("")
-def get_metrics():
+def get_metrics(current_user=Depends(require_engineer)):
     """Get application metrics in JSON format."""
     metrics_data = metrics.get_metrics_summary()
     return metrics_data
@@ -44,7 +44,6 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
             "requests_total": "Total number of requests",
             "sla_recomputation_total": "Total SLA recomputations triggered",
             "sla_violation_total": "Total SLA violations detected",
-            "sla_computation_latency_seconds": "SLA computation latency in seconds",
             "webhook_delivery_total": "Total webhook deliveries dispatched",
             "sladispute_notification_attempt_total": "Total SLA dispute notification attempts",
         }

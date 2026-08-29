@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
+import socket
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+# Identifies the process/worker exporting a metric series so scrapes from
+# multiple gunicorn workers are attributable instead of silently under-reporting.
+INSTANCE_ID = f"{socket.gethostname()}-{os.getpid()}"
 
 
 @dataclass
@@ -89,9 +95,11 @@ class MetricsRegistry:
 
     def _make_key(self, name: str, tags: dict[str, str] | None = None) -> str:
         """Create a unique key for a metric with optional tags."""
-        if not tags:
-            return name
-        tag_str = ",".join(f"{k}={v}" for k, v in sorted(tags.items()))
+        merged = dict(tags or {})
+        # Attribute every series to the exporting worker so multi-worker
+        # deployments are distinguishable and never silently under-report.
+        merged["instance"] = INSTANCE_ID
+        tag_str = ",".join(f"{k}={v}" for k, v in sorted(merged.items()))
         return f"{name}{{{tag_str}}}"
 
     def get_metrics_summary(self) -> dict[str, Any]:

@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     # Days to keep outage timeline events before the scheduled cleanup removes them.
     OUTAGE_EVENT_RETENTION_DAYS: int = 90
 
+    # Audit log retention (#324)
+    # Days to keep audit entries before the scheduled task archives and removes them.
+    AUDIT_RETENTION_DAYS: int = 90
+    # Directory where archived audit entries (JSONL, hashes preserved) are written.
+    AUDIT_ARCHIVE_DIR: str = "audit_archives"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
 

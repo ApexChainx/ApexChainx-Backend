@@ -9,6 +9,7 @@ celery_app = Celery(
     include=[
         "app.tasks.auth_tasks",
         "app.tasks.outage_tasks",
+        "app.tasks.audit_tasks",
         "app.tasks.sla_tasks",
         "app.tasks.webhook_secret_housekeeping",
         "app.tasks.webhook_tasks",
@@ -42,6 +43,10 @@ celery_app.conf.update(
         },
         "cleanup-old-outage-events": {
             "task": "app.tasks.outage_tasks.cleanup_old_outage_events",
+            "schedule": 86400.0,  # every day
+        },
+        "archive-old-audit-entries": {
+            "task": "app.tasks.audit_tasks.archive_old_audit_entries",
             "schedule": 86400.0,  # every day
         },
     },
