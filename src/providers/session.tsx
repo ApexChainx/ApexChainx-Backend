@@ -19,6 +19,7 @@ import {
   setTokens,
 } from "@/lib/api";
 import { ENDPOINTS } from "@/lib/endpoints";
+import { resetPreferences } from "@/lib/preferences";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const LOGOUT_RATE_LIMIT = { maxAttempts: 5, windowMs: 60_000 };
@@ -182,6 +183,24 @@ export function SessionProvider({
     setState("unauthenticated");
     broadcastLogout();
     clearSessionFlag();
+
+    // Issue #413 — resetPreferences previously had zero callers, so a
+    // signed-out user's in-memory preferences, the
+    // `apexchain_user_preferences` localStorage entry, and the hydration
+    // flag all survived logout. On a shared/kiosk browser the next operator
+    // to sign in would inherit the previous user's table density, column
+    // visibility, and filter presets — a cross-user information leak.
+    // clearSession is the single choke point for every logout path (user-
+    // initiated logout, a definitive 401/403 during bootstrap or refresh,
+    // the `auth:logout` window event, and cross-tab/session-revoked
+    // broadcasts), so resetting preferences here covers all of them
+    // uniformly. resetPreferences() clears the whole store; the codebase
+    // does not currently declare any preference as device-level (the
+    // "theme" setting on the settings page is stored under its own
+    // `theme` localStorage key, entirely outside UserPreferences/
+    // apexchain_user_preferences, so it is already excluded and is
+    // untouched by this reset).
+    resetPreferences();
   }, []);
 
   /**

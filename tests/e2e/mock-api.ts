@@ -118,13 +118,50 @@ const payments = [
   },
 ];
 
+/**
+ * Seed fixture for a failed payment awaiting retry (Issue #412 — the
+ * payment retry-queue e2e journey). Callers of `mockApi` opt into seeding
+ * one or more of these via the `failedPayments` option; the default is an
+ * empty list so existing specs are unaffected.
+ */
+export interface FailedPaymentSeed {
+  id: string;
+  outage_id?: string;
+  amount: number;
+  asset_code: string;
+  type: "reward" | "penalty";
+  created_at: string;
+}
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Credentials": "true",
   "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-CSRF-Token",
 };
 
-export async function mockApi(page: Page): Promise<void> {
+export interface MockApiOptions {
+  /**
+   * Failed payments to seed the retry queue with. Scoped to this call's
+   * route handler closure (not module state) so tests never bleed into one
+   * another regardless of execution order. Defaults to none.
+   */
+  failedPayments?: FailedPaymentSeed[];
+}
+
+export async function mockApi(
+  page: Page,
+  options: MockApiOptions = {},
+): Promise<void> {
+  // Mutable per-call fixture list — retrying a payment splices it out, so
+  // subsequent GETs (e.g. after the retry-queue view refetches) reflect it.
+  const failedPayments = (options.failedPayments ?? []).map((seed) => ({
+    ...seed,
+    status: "failed" as const,
+    transaction_hash: "",
+    from_address: FROM_ADDRESS,
+    to_address: TO_ADDRESS,
+  }));
+
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -364,7 +401,14 @@ export async function mockApi(page: Page): Promise<void> {
     if (method === "GET" && path === "/api/v1/payments") {
       const sortBy = url.searchParams.get("sort_by") || "created_at";
       const sortDir = url.searchParams.get("sort_dir") || "desc";
-      const sorted = [...payments].sort((a, b) => {
+      const statusFilter = url.searchParams.get("status");
+
+      let combined = [...payments, ...failedPayments];
+      if (statusFilter) {
+        combined = combined.filter((p) => p.status === statusFilter);
+      }
+
+      const sorted = combined.sort((a, b) => {
         let cmp = 0;
         if (sortBy === "created_at") {
           cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
@@ -375,7 +419,20 @@ export async function mockApi(page: Page): Promise<void> {
         }
         return sortDir === "asc" ? cmp : -cmp;
       });
-      return json(200, { items: sorted, total: sorted.length, page: 1, page_size: 10 });
+      return json(200, { items: sorted, total: sorted.length, page: 1, page_size: 100 });
+    }
+
+    // Payment retry — used by the retry-queue view (Issue #412), both for
+    // the per-item "Retry" button and the bulk-retry confirmation dialog.
+    const retryMatch = path.match(/^\/api\/v1\/payments\/([^/]+)\/retry$/);
+    if (retryMatch && method === "POST") {
+      const id = retryMatch[1];
+      const index = failedPayments.findIndex((p) => p.id === id);
+      if (index === -1) return json(404, { message: "Not found" });
+
+      const [retried] = failedPayments.splice(index, 1);
+      const completed = { ...retried, status: "completed" };
+      return json(200, completed);
     }
 
     /* ------------------------------ SLA ------------------------------ */

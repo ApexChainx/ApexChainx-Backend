@@ -44,6 +44,7 @@
     "autoprefixer": "^10.5.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^29.0.1",
     "openapi-typescript": "^7.8.0",
     "postcss": "^8.5.15",
