@@ -1,25 +1,41 @@
 /** ApexChain - Network Operations Intelligence Platform */
 
+import { bytesToHex } from "@/lib/encoding";
+
 /**
  * Generate a cryptographically secure webhook secret.
  */
 export function generateWebhookSecret(): string {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
-  return Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
+  return bytesToHex(array);
 }
 
 /**
  * Verify a webhook signature using HMAC-SHA256.
  * Compares using constant-time comparison to prevent timing attacks.
+ *
+ * Requires WebCrypto (`crypto.subtle`), which is only available in secure
+ * contexts (HTTPS or localhost). On insecure origins this rejects with an
+ * explicit error instead of throwing a raw TypeError — callers should treat
+ * rejection as "signature could not be verified" (fail closed).
  */
 export async function verifyWebhookSignature(
   payload: string,
   signature: string,
   secret: string
 ): Promise<boolean> {
+  const subtle: SubtleCrypto | undefined = globalThis.crypto?.subtle;
+  if (!subtle) {
+    // Fail loud with a documented error instead of the raw TypeError from
+    // dereferencing crypto.subtle on a non-secure origin (issue #311).
+    throw new Error(
+      "verifyWebhookSignature requires WebCrypto (crypto.subtle), which is only available in secure contexts (HTTPS or localhost). The signature cannot be verified on an insecure origin."
+    );
+  }
+
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
+  const key = await subtle.importKey(
     "raw",
     encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
@@ -27,15 +43,13 @@ export async function verifyWebhookSignature(
     ["sign"]
   );
 
-  const signatureBuffer = await crypto.subtle.sign(
+  const signatureBuffer = await subtle.sign(
     "HMAC",
     key,
     encoder.encode(payload)
   );
 
-  const expectedSignature = Array.from(new Uint8Array(signatureBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const expectedSignature = bytesToHex(new Uint8Array(signatureBuffer));
 
   // Constant-time comparison
   if (expectedSignature.length !== signature.length) {
