@@ -3,6 +3,7 @@
 /** ApexChain Network Operations Intelligence Platform */
 
 import { useState } from "react";
+import { validateUrl } from "@/lib/validate-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   fetchWebhooks,
@@ -103,6 +104,8 @@ export default function WebhooksPage() {
     e.preventDefault();
     setFormError(null);
     if (!formUrl) { setFormError("URL is required."); return; }
+    const urlValidation = validateUrl(formUrl);
+    if (!urlValidation.valid) { setFormError(urlValidation.reason ?? "Invalid URL"); return; }
     if (formEvents.length === 0) { setFormError("Select at least one event."); return; }
 
     if (editingId) {

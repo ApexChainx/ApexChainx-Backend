@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { deleteOutage, getOutage, resolveOutage } from "@/services/outages";
 import { slaEventKeys } from "@/lib/query-keys";
-import { useInvalidateOnResolve } from "./useInvalidateOnResolve";
+import { useInvalidateOutageChange } from "./useInvalidateOnResolve";
 
 /**
  * Re-export slaEventKeys.outages as outageKeys so existing imports continue
@@ -24,7 +24,7 @@ export function useOutage(id: string) {
 
 export function useResolveOutage(id: string) {
   const qc = useQueryClient();
-  const invalidateAll = useInvalidateOnResolve();
+  const invalidateAll = useInvalidateOutageChange();
 
   return useMutation({
     mutationFn: (mttrMinutes: number) =>
@@ -38,11 +38,11 @@ export function useResolveOutage(id: string) {
 }
 
 export function useDeleteOutage() {
-  const qc = useQueryClient();
+  const invalidateAll = useInvalidateOutageChange();
   return useMutation({
     mutationFn: (id: string) => deleteOutage(id),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: slaEventKeys.outages.all });
+      void invalidateAll();
     },
   });
 }
