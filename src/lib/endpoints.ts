@@ -7,6 +7,11 @@ export const ENDPOINTS = {
     logout: "/auth/logout",
     logoutAll: "/auth/logout-all",
     /**
+     * Completes a login challenge for accounts that require a second factor.
+     * The TOTP code is submitted here after a successful credentials check.
+     */
+    loginTwoFactor: "/auth/login/2fa",
+    /**
      * Cookie-only session check. Reads the httpOnly session cookies directly
      * (no Authorization header) so a hard refresh — where in-memory tokens are
      * gone — can still restore the session. Falls back to `/auth/me` when the
