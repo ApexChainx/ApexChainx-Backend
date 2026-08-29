@@ -6,6 +6,10 @@ import secrets
 from copy import deepcopy
 from datetime import UTC, datetime
 
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models.orm.sla_config_history import SLAConfigHistoryORM
 from app.models.sla import SLAConfigHistoryEntry, SLAConfigUpdateRequest, SLAPolicyContent, SLASeverityConfig
 
 SLA_CONFIG: dict[str, dict[str, int]] = {
@@ -31,13 +35,19 @@ SLA_CONFIG: dict[str, dict[str, int]] = {
     },
 }
 
-# ── Policy version tracking (#37) ──────────────────────────────────────
+# ── Policy version tracking (#37, #272) ────────────────────────────────
+#
+# The sla_config_history table is the source of truth for versions and
+# publish tokens. These in-memory dicts are a per-process cache: they are
+# consulted only when no DB session is available (e.g. hot SLA-calc path)
+# and are refreshed from the latest history row on every DB-backed publish.
+# Keeping the ledger in the DB means versions never repeat after a process
+# restart and optimistic-concurrency tokens are shared across workers.
 
-# In-memory version counters — incremented on each successful publish.
-# In production these are read from sla_config_history table on startup.
+# In-memory version cache — incremented on each successful publish.
 _policy_versions: dict[str, int] = {sev: 1 for sev in SLA_CONFIG}
 
-# In-memory lock tokens for optimistic concurrency control.
+# In-memory token cache for optimistic concurrency control.
 # Each publish generates a new token; concurrent PUTs with stale tokens get 409.
 _publish_tokens: dict[str, str] = {sev: "" for sev in SLA_CONFIG}
 
@@ -62,19 +72,46 @@ def _generate_publish_token() -> str:
     return secrets.token_hex(16)
 
 
-def get_policy_version(severity: str) -> int:
-    """Return current policy version for a severity level."""
+def _latest_history_row(db: Session, severity: str) -> SLAConfigHistoryORM | None:
+    """Return the most recent persisted history row for a severity."""
+    return (
+        db.query(SLAConfigHistoryORM)
+        .filter(SLAConfigHistoryORM.severity == severity)
+        .order_by(SLAConfigHistoryORM.policy_version.desc())
+        .first()
+    )
+
+
+def get_policy_version(severity: str, db: Session | None = None) -> int:
+    """Return the current policy version for a severity level.
+
+    When a DB session is provided, the persisted history is authoritative
+    (survives restarts and multi-worker divergence, #272); otherwise the
+    in-process cache is used.
+    """
     normalized = severity.lower()
-    if normalized not in _policy_versions:
+    if normalized not in SLA_CONFIG:
         raise ValueError(f"Unknown severity level: {severity}")
+    if db is not None:
+        latest = _latest_history_row(db, normalized)
+        if latest is not None:
+            return latest.policy_version
     return _policy_versions[normalized]
 
 
-def get_current_token(severity: str) -> str:
-    """Return the current publish token (used for optimistic concurrency)."""
+def get_current_token(severity: str, db: Session | None = None) -> str:
+    """Return the current publish token (used for optimistic concurrency).
+
+    Prefers the persisted history row so a token fetched after a restart
+    matches what the DB-backed publish will compare against (#272).
+    """
     normalized = severity.lower()
-    if normalized not in _publish_tokens:
+    if normalized not in SLA_CONFIG:
         raise ValueError(f"Unknown severity level: {severity}")
+    if db is not None:
+        latest = _latest_history_row(db, normalized)
+        if latest is not None:
+            return latest.publish_token
     return _publish_tokens[normalized]
 
 
@@ -121,7 +158,7 @@ def get_config_with_hash(severity: str) -> SLAPolicyContent:
     )
 
 
-def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest) -> SLASeverityConfig:
+def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest, db: Session | None = None) -> SLASeverityConfig:
     """Update config for a severity without an expected token (#273).
 
     Delegates to publish_config_for_severity with no token check, so a
@@ -129,7 +166,7 @@ def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest) -
     content-hash consistency as a normal publish, instead of silently
     mutating SLA_CONFIG in place.
     """
-    policy, _token, _history = publish_config_for_severity(severity, payload, expected_token=None)
+    policy, _token, _history = publish_config_for_severity(severity, payload, expected_token=None, db=db)
     return SLASeverityConfig(
         threshold_minutes=policy.threshold_minutes,
         penalty_per_minute=policy.penalty_per_minute,
@@ -142,6 +179,7 @@ def publish_config_for_severity(
     payload: SLAConfigUpdateRequest,
     expected_token: str | None = None,
     published_by: str | None = None,
+    db: Session | None = None,
 ) -> tuple[SLAPolicyContent, str, SLAConfigHistoryEntry]:
     """Atomically publish a new policy version with optimistic concurrency (#37).
 
@@ -163,20 +201,64 @@ def publish_config_for_severity(
     if normalized not in SLA_CONFIG:
         raise ValueError(f"Unknown severity level: {severity}")
 
+    if db is not None:
+        # Lock the latest history row so two workers cannot both bump the
+        # same version. When no row exists yet (first publish), the unique
+        # (severity, policy_version) index is the backstop and a duplicate
+        # insert is converted to a ConcurrencyError below.
+        latest = (
+            db.query(SLAConfigHistoryORM)
+            .filter(SLAConfigHistoryORM.severity == normalized)
+            .order_by(SLAConfigHistoryORM.policy_version.desc())
+            .with_for_update()
+            .first()
+        )
+        current_version = latest.policy_version if latest else _policy_versions[normalized]
+        current_token = latest.publish_token if latest else _publish_tokens[normalized]
+    else:
+        current_version = _policy_versions[normalized]
+        current_token = _publish_tokens[normalized]
+
     # Optimistic concurrency: reject if token doesn't match
-    if expected_token is not None and expected_token != _publish_tokens[normalized]:
+    if expected_token is not None and expected_token != current_token:
         raise ConcurrencyError(
             f"Config for '{severity}' was modified by another request. " f"Re-fetch the current config and retry."
         )
 
     # Bump version and write config atomically
-    _policy_versions[normalized] += 1
-    new_version = _policy_versions[normalized]
+    new_version = current_version + 1
     new_config = payload.model_dump()
-    SLA_CONFIG[normalized] = new_config
 
     # Generate new token for next publish
     new_token = _generate_publish_token()
+
+    if db is not None:
+        db.add(
+            SLAConfigHistoryORM(
+                severity=normalized,
+                policy_version=new_version,
+                threshold_minutes=new_config["threshold_minutes"],
+                penalty_per_minute=new_config["penalty_per_minute"],
+                reward_base=new_config["reward_base"],
+                content_hash=_compute_content_hash(normalized, new_config, new_version),
+                publish_token=new_token,
+                published_at=datetime.now(UTC),
+                published_by=published_by,
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ConcurrencyError(
+                f"Config for '{severity}' was modified by another request. "
+                "Re-fetch the current config and retry."
+            ) from exc
+
+    # Commit succeeded (or no DB) — refresh the in-process cache so the
+    # hot read path agrees with the persisted ledger.
+    _policy_versions[normalized] = new_version
+    SLA_CONFIG[normalized] = new_config
     _publish_tokens[normalized] = new_token
 
     # Compute content hash
