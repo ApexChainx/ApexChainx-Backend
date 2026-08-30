@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -68,13 +68,33 @@ def _problem_response(
     )
 
 
-async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+async def http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
     """Handle all HTTPException instances as RFC 7807 problem responses."""
+    if isinstance(exc.detail, str):
+        return _problem_response(
+            status=exc.status_code,
+            title=_default_title(exc.status_code),
+            detail=exc.detail,
+        )
+
+    errors: list[dict[str, Any]]
+
+    if isinstance(exc.detail, dict):
+        errors = [exc.detail]
+    elif isinstance(exc.detail, list):
+        errors = cast(list[dict[str, Any]], exc.detail)
+    else:
+        errors = [{"detail": str(exc.detail)}]
+
     return _problem_response(
         status=exc.status_code,
         title=_default_title(exc.status_code),
-        detail=exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+        detail="Request failed.",
+        errors=errors,
     )
+
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
