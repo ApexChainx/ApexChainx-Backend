@@ -159,7 +159,7 @@ class TestAnalyticsSummaryCSV:
         assert rows, "CSV should have at least a header row"
         column_counts = {len(row) for row in rows}
         assert len(column_counts) == 1, (
-            fRows have inconsistent column counts: {sorted(column_counts)}"
+            f"Rows have inconsistent column counts: {sorted(column_counts)}"
         )
         assert not any(row and row[0].startswith("#") for row in rows), (
             "Found comment/non-standard line"

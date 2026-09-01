@@ -35,7 +35,6 @@ from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
-from app.middleware.etag import ETagMiddleware
 from app.services.health_report import build_readiness_report
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 
@@ -51,7 +50,6 @@ app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
-app.add_middleware(ETagMiddleware)
 
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)

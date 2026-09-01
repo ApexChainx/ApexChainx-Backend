@@ -34,11 +34,24 @@ class ETagMiddleware:
     Responses that already carry an ETag are left untouched.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        exclude_path_prefixes: set[str] | None = None,
+    ) -> None:
         self.app = app
+        self.exclude_path_prefixes = set(exclude_path_prefixes or ())
+
+    def _is_excluded(self, path: str) -> bool:
+        """True when the request path falls under any excluded prefix."""
+        return any(path.startswith(prefix) for prefix in self.exclude_path_prefixes)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["method"] not in ("GET", "HEAD"):
+            await self.app(scope, receive, send)
+            return
+
+        if self._is_excluded(scope.get("path", "")):
             await self.app(scope, receive, send)
             return
 
