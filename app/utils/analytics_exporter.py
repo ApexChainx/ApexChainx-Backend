@@ -124,33 +124,5 @@ def export_analytics_summary(
     if format != "csv":
         raise ValueError("Unsupported export format. Use 'json' or 'csv'.")
 
-    # For CSV, export each section with headers
-    buffer = io.StringIO()
-
-    # KPI section
-    buffer.write("# KPI Metrics\n")
-    kpi_writer = csv.DictWriter(buffer, fieldnames=summary["kpi"].keys())
-    kpi_writer.writeheader()
-    kpi_writer.writerow(summary["kpi"])
-    buffer.write("\n")
-
-    # Trends section
-    buffer.write("# Trends Data\n")
-    if trends:
-        trend_data = summary["trends"]
-        trend_writer = csv.DictWriter(buffer, fieldnames=trend_data[0].keys())
-        trend_writer.writeheader()
-        for row in trend_data:
-            trend_writer.writerow(row)
-    else:
-        buffer.write("date,total_outages,violations,rewards,penalties\n")
-    buffer.write("\n")
-
-    # Aggregation section (if available)
-    if aggregation:
-        buffer.write("# Performance Aggregation\n")
-        agg_writer = csv.DictWriter(buffer, fieldnames=summary["aggregation"].keys())
-        agg_writer.writeheader()
-        agg_writer.writerow(summary["aggregation"])
-
-    return buffer.getvalue()
+    # CSV export includes only KPI metrics; trends and aggregation are available via JSON.
+    return export_dashboard_kpi(kpi, format="csv")

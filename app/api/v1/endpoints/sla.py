@@ -334,7 +334,8 @@ def export_dashboard_kpis(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if format.lower() == "csv":
-        return Response(
+        return Response(content=exported, media_type="text/csv")
+    return Response(content=exported, media_type="application/json")esponse(
             content=exported,
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=sla_dashboard_kpi.csv"},
