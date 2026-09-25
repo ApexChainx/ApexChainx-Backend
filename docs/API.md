@@ -18,6 +18,49 @@ Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (
 - [Error Handling](#error-handling)
 
 - [CORS](#cors)
+- [API Versioning](#api-versioning)
+
+---
+
+## API Versioning
+
+Every response carries `X-API-Version` (the version this deployment serves) and
+`X-Supported-API-Versions` (the range this deployment can serve, oldest first).
+
+Clients may pin a version by sending the `X-API-Version` request header:
+
+| Request header          | Result                                                          |
+|-------------------------|-----------------------------------------------------------------|
+| absent / empty          | Served as "latest" — no negotiation, fully backwards compatible |
+| `1.0.0` (in range)      | Served normally, version echoed back                             |
+| `2.0.0` (future)        | `426 Upgrade Required`, `error_code: api_version_unsupported`    |
+| `0.9.0` (retired)       | `426 Upgrade Required`, `error_code: api_version_unsupported`    |
+| `banana` (unparseable)  | `400 Bad Request`, `error_code: api_version_unsupported`         |
+
+The supported range is configurable through `API_VERSION_MIN_SUPPORTED` and
+`API_VERSION_MAX_SUPPORTED`. The deployment refuses to start if `VERSION` falls
+outside the advertised range, so a mis-pinned range cannot silently reject every
+client.
+
+Rejection responses are RFC 7807 problem documents and repeat the negotiation
+metadata so a client can self-correct without a second request:
+
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/426",
+  "title": "Unsupported API Version",
+  "status": 426,
+  "detail": "API version 2.0.0 is not available on this deployment; ...",
+  "error_code": "api_version_unsupported",
+  "requested_version": "2.0.0",
+  "supported_versions": ["1.0.0", "1.0.0"],
+  "current_version": "1.0.0"
+}
+```
+
+Version negotiation covers routing. For *payload* compatibility, enum query
+parameters (`status`, `state`) are documented as forward-compatible: new values
+are added only in a new major API version.
 
 ---
 
@@ -152,8 +195,8 @@ Register new user account.
 The API uses a conservative CORS configuration. By default the server allows the following methods and headers from configured origins:
 
 - Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With
-- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining
+- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With, X-API-Version
+- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining, X-API-Version, X-Supported-API-Versions
 
 Origins are configured via environment variables and wildcard origins ("*") are rejected on startup for security reasons.
 
@@ -862,6 +905,24 @@ unless `include_deleted=true` is passed. `GET /api/v1/webhooks/{id}` and its
 ```
 
 Configure webhooks in the admin panel or via API.
+
+### Webhook Registration Limits
+
+Registration is capped so that one admin session cannot multiply every emitted
+event by an unbounded number of outbound HTTPS requests:
+
+| Setting | Default | Behaviour |
+|---------|---------|-----------|
+| `MAX_WEBHOOKS_PER_ACCOUNT` | `50` | `POST /api/v1/webhooks` returns `409 Conflict` with the cap in the message once this many webhooks are registered. `0` disables the cap. |
+| `WEBHOOK_FANOUT_WARN_THRESHOLD` | `200` | When the total number of event subscriptions across all webhooks exceeds this, creation and event-subscription updates log a warning and increment `webhook.fanout.threshold_exceeded`. Not enforced — per-dispatch concurrency stays bounded by `WEBHOOK_MAX_CONCURRENT_DISPATCHES`. |
+
+`409` response body:
+
+```json
+{
+  "detail": "Webhook limit reached: 50 webhooks are already registered and MAX_WEBHOOKS_PER_ACCOUNT is 50. Delete an unused webhook before creating another."
+}
+```
 
 ---
 
