@@ -455,6 +455,29 @@ MTTR boundary computation is deterministic: given the same `created_at` and `res
 
 ---
 
+## Bulk Outage Import Contract
+
+Both import paths validate rows against the same schema, `OutageCreate`
+(`app/models/outage_dto.py`), and report failures as `ImportRowResult` with
+per-field `ImportFieldError`s keyed by the row's own position in the payload
+(0-based), so an uploaded file and a streamed body are held to one contract
+(#547):
+
+- `POST /api/v1/outages/import` (`app/api/v1/endpoints/outages.py`) — CSV/JSON
+  upload, with `dry_run` and `consistency=atomic|partial`.
+- `app/services/outage_stream_import.py` — the chunked JSON path. It validates in
+  `chunk_size` batches (flat memory) and defaults to `atomic`: one invalid row
+  withholds the whole batch, so `imported` and `valid_row_ids` are both empty and
+  nothing can be persisted from a partly-wrong body. `partial` is opt-in and
+  returns the accepted ids explicitly. Rows past `max_rows` are counted in
+  `truncated` rather than dropped silently, and `failed_count` always reports the
+  true total even though `failed_rows` is capped at 50.
+
+The streaming module does not write to the database; it hands back
+`valid_row_ids` for the caller to persist through `OutageRepository`.
+
+---
+
 ## Outage Lifecycle States
 
 ```
