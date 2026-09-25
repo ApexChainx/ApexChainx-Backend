@@ -182,6 +182,23 @@ class PaginatedWebhookDeliveries(BaseModel):
     has_more: bool
 
 
+class PaginatedWebhookList(BaseModel):
+    """Envelope for `GET /webhooks` (#554).
+
+    The endpoint used to answer with a bare array, so a caller paging through
+    webhooks could not tell "end of list" from "this page happens to be short":
+    it had to request one more page to find out. The items array is still
+    present, under `items`, alongside the metadata needed to page correctly.
+    """
+
+    items: list[WebhookResponse]
+    total: int
+    page: int
+    page_size: int
+    returned: int
+    has_more: bool
+
+
 class WebhookSecretRotateResponse(BaseModel):
     webhook_id: UUID
     new_secret: str
@@ -373,7 +390,7 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
     return _serialize_webhook(webhook)
 
 
-@router.get("", response_model=list[WebhookResponse])
+@router.get("", response_model=PaginatedWebhookList)
 def list_webhooks(
     is_active: bool | None = Query(None),
     name: str | None = Query(None, description="Filter by name (case-insensitive substring match)"),  # BE-083
@@ -397,7 +414,29 @@ def list_webhooks(
     if name:
         query = query.filter(Webhook.name.ilike(f"%{name}%"))
     offset = (page - 1) * page_size
-    return [_serialize_webhook(w) for w in query.offset(offset).limit(page_size).all()]
+
+    # Single statement for total + page, matching the deliveries endpoint (#296):
+    # avoids the separate COUNT(*) scan that would otherwise run before every
+    # page request. The explicit ORDER BY is new too - without it Postgres
+    # returned rows in arbitrary order, so pages could repeat or skip webhooks
+    # and `has_more` could not be trusted.
+    paged = (
+        query.add_columns(func.count().over().label("total_count"))
+        .order_by(Webhook.created_at.desc(), Webhook.id)
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+    total = paged[0].total_count if paged else query.order_by(None).count()
+    items = [_serialize_webhook(row[0]) for row in paged]
+    return PaginatedWebhookList(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        returned=len(items),
+        has_more=offset + len(items) < total,
+    )
 
 
 @router.get("/{webhook_id}", response_model=WebhookResponse)

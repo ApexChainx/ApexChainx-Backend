@@ -393,7 +393,34 @@ GET /api/v1/webhooks
 
 Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
 
-Soft-deleted webhooks are omitted; pass `include_deleted=true` to include the tombstones (see [Deleting a Webhook](#deleting-a-webhook)).
+Query parameters: `is_active`, `name` (case-insensitive substring), `page` (1-indexed), `page_size` (1-100, default 20).
+
+The response is a paginated envelope, so a client can tell the last page from a short one without requesting an extra page (#554):
+
+```json
+{
+  "items": [
+    {
+      "id": "3f1b...-...",
+      "name": "outage-webhook",
+      "url": "https://example.com/webhook",
+      "is_active": true,
+      "events": ["sla.violation"],
+      "max_retries": 3,
+      "schema_version": "1",
+      "secret_version": 2,
+      "last_secret_rotation_at": "2026-01-01T00:00:00+00:00"
+    }
+  ],
+  "total": 45,
+  "page": 1,
+  "page_size": 20,
+  "returned": 20,
+  "has_more": true
+}
+```
+
+Stop paging when `has_more` is `false`. `total` counts the rows matching the active filters. Items are ordered by `created_at` descending, with the webhook id as a tie-breaker, so paging is stable.
 
 ## Deleting a Webhook
 
