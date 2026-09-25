@@ -15,7 +15,9 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 
 from app.services.audit_log import audit_log
 from app.services.formatters import canonical_json
+from app.services.metrics import increment_counter, set_gauge
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
+from app.utils.logging import get_structured_logger
 from app.utils.network_validation import validate_webhook_url
 from app.utils.secret_history import prune_expired_secrets
 
@@ -28,6 +30,8 @@ router = APIRouter(
     # added without authentication by omission.
     dependencies=[Depends(require_admin)],
 )
+
+logger = get_structured_logger("webhooks_api")
 
 
 # --------------------------------------------------------------------------- #
@@ -236,12 +240,97 @@ def _serialize_delivery(delivery: WebhookDelivery) -> WebhookDeliveryResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Registration limits (#517)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _count_registered_webhooks(db: Session) -> int:
+    """Number of webhooks currently registered.
+
+    The `webhooks` table has no owner column: registration is admin-scoped and
+    every row is a subscription the platform pays outbound requests for, so the
+    per-customer cap in #517 is applied to the total.
+    """
+    return db.query(func.count(Webhook.id)).scalar() or 0
+
+
+def _count_event_subscriptions(db: Session) -> int:
+    """Total (webhook, event) pairs across all webhooks.
+
+    This is the platform's webhook fan-out: one `sla.violation` emission costs
+    one HTTPS request per subscribed webhook. The events column is text-encoded
+    JSON rather than JSONB, so it is decoded here rather than in SQL to keep the
+    query portable across the SQLite test database.
+    """
+    total = 0
+    for (raw_events,) in db.query(Webhook.events).all():
+        if not raw_events:
+            continue
+        try:
+            parsed = json.loads(raw_events)
+        except (TypeError, ValueError):
+            logger.warning("Webhook events column is not valid JSON; excluded from fan-out count")
+            continue
+        if isinstance(parsed, list):
+            total += len(parsed)
+    return total
+
+
+def _enforce_webhook_registration_cap(db: Session) -> None:
+    """Reject registration once the configured cap is reached.
+
+    Unlimited registrations mean an admin session can multiply every emitted
+    event by an unbounded number of outbound requests, and each registered
+    secret is an additional Fernet ciphertext to rotate. A cap of 0 disables
+    the check for operators that manage this themselves.
+    """
+    cap = settings.MAX_WEBHOOKS_PER_ACCOUNT
+    if cap <= 0:
+        return
+    registered = _count_registered_webhooks(db)
+    if registered >= cap:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Webhook limit reached: {registered} webhooks are already registered and "
+                f"MAX_WEBHOOKS_PER_ACCOUNT is {cap}. Delete an unused webhook before creating another."
+            ),
+        )
+
+
+def _warn_on_excessive_fanout(db: Session) -> None:
+    """Log and count a warning when total fan-out crosses the threshold.
+
+    Not a hard limit: per-dispatch concurrency is already capped by
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES, so exceeding this is a signal that the
+    delivery queue is being asked to do more work than intended rather than
+    something to reject.
+    """
+    threshold = settings.WEBHOOK_FANOUT_WARN_THRESHOLD
+    if threshold <= 0:
+        return
+    fanout = _count_event_subscriptions(db)
+    if fanout <= threshold:
+        return
+    logger.warning(
+        "Webhook fan-out threshold exceeded",
+        fanout_subscriptions=fanout,
+        threshold=threshold,
+    )
+    increment_counter("webhook.fanout.threshold_exceeded", tags={"threshold": str(threshold)})
+    set_gauge("webhook.fanout.subscriptions", float(fanout))
+
+
+# --------------------------------------------------------------------------- #
 # Endpoints                                                                    #
 # --------------------------------------------------------------------------- #
 
 
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    # Checked before the SSRF lookup so a registration that is going to be
+    # rejected does not cost a DNS resolution.
+    _enforce_webhook_registration_cap(db)
     url = str(payload.url)
     resolved_ips = validate_webhook_url(url)
     webhook = Webhook(
@@ -256,6 +345,7 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
     db.add(webhook)
     db.commit()
     db.refresh(webhook)
+    _warn_on_excessive_fanout(db)
     return _serialize_webhook(webhook)
 
 
@@ -307,6 +397,10 @@ def update_webhook(
 
     db.commit()
     db.refresh(webhook)
+    if payload.events is not None:
+        # Subscribing an existing webhook to more events grows fan-out just as
+        # registering a new one does, so the #517 warning applies here too.
+        _warn_on_excessive_fanout(db)
     return _serialize_webhook(webhook)
 
 

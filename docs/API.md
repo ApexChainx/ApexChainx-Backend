@@ -897,6 +897,24 @@ APEXCHAINX can send webhooks for important events:
 
 Configure webhooks in the admin panel or via API.
 
+### Webhook Registration Limits
+
+Registration is capped so that one admin session cannot multiply every emitted
+event by an unbounded number of outbound HTTPS requests:
+
+| Setting | Default | Behaviour |
+|---------|---------|-----------|
+| `MAX_WEBHOOKS_PER_ACCOUNT` | `50` | `POST /api/v1/webhooks` returns `409 Conflict` with the cap in the message once this many webhooks are registered. `0` disables the cap. |
+| `WEBHOOK_FANOUT_WARN_THRESHOLD` | `200` | When the total number of event subscriptions across all webhooks exceeds this, creation and event-subscription updates log a warning and increment `webhook.fanout.threshold_exceeded`. Not enforced — per-dispatch concurrency stays bounded by `WEBHOOK_MAX_CONCURRENT_DISPATCHES`. |
+
+`409` response body:
+
+```json
+{
+  "detail": "Webhook limit reached: 50 webhooks are already registered and MAX_WEBHOOKS_PER_ACCOUNT is 50. Delete an unused webhook before creating another."
+}
+```
+
 ---
 
 ## Testing
