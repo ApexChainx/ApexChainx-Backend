@@ -7,6 +7,11 @@ VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
 DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
 MIN_SECRET_KEY_LENGTH = 32
 
+# #510: environments in which Celery eager mode is allowed. Everywhere else a
+# CELERY_TASK_ALWAYS_EAGER=true default silently runs every task in-process
+# while presenting a queue topology that does nothing.
+DEV_ENVIRONMENTS = {"local", "test"}
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
@@ -34,7 +39,11 @@ class Settings(BaseSettings):
     CORS_EXPOSE_HEADERS: list[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
-    CELERY_TASK_ALWAYS_EAGER: bool = True
+    # #510: defaults to False. Eager mode runs tasks inline in the request
+    # worker, which removes retry/backoff semantics and makes the breaker and
+    # dead-letter machinery inert. It is a local/test convenience, so it must be
+    # opted into explicitly and is rejected outside development.
+    CELERY_TASK_ALWAYS_EAGER: bool = False
     SLA_CONTRACT_ADDRESS: str = "local-sla-calculator"
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
@@ -205,6 +214,16 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
             errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
+
+    # #510: fail fast, in the same style as the SECRET_KEY guard. A deployment
+    # that runs every task in-process while showing a queue topology is the
+    # silent failure this catches.
+    if config.CELERY_TASK_ALWAYS_EAGER and config.ENVIRONMENT not in DEV_ENVIRONMENTS:
+        errors.append(
+            f"CELERY_TASK_ALWAYS_EAGER must be false outside development; it runs tasks "
+            f"inline and disables retry/backoff, breaker and dead-letter handling. "
+            f"ENVIRONMENT={config.ENVIRONMENT!r} is not one of {sorted(DEV_ENVIRONMENTS)}."
+        )
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")

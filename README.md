@@ -304,7 +304,7 @@ CONTRACT_EXECUTION_MODE=local
 ```
 
 ```env
-# Task Queue (required when CELERY_TASK_ALWAYS_EAGER=false)
+# Task Queue (CELERY_TASK_ALWAYS_EAGER is opt-in and only valid when ENVIRONMENT=local|test)
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 CELERY_TASK_ALWAYS_EAGER=true
@@ -423,7 +423,11 @@ Background task modules live in `app/tasks/`:
 | `sla_tasks.py` | Async SLA computation and settlement tasks |
 | `webhook_tasks.py` | Async webhook delivery with retry logic |
 
-Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. For production use set `CELERY_TASK_ALWAYS_EAGER=false` and provide Redis URLs.
+Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. The default
+is `false`, and `true` is rejected at startup unless `ENVIRONMENT` is `local` or
+`test` — eager mode silently disables retry/backoff, circuit-breaker and
+dead-letter handling, so it is opt-in for local work only. Production must leave
+it `false` and provide Redis URLs.
 
 ## Payments and Wallets
 
