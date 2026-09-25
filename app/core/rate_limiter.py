@@ -7,6 +7,10 @@ fallback to an in-process token bucket when Redis is unavailable or when
 
 Both a synchronous (`is_allowed`) and an asynchronous (`is_allowed_async`)
 path are provided so callers never need to spin up an event loop per request.
+
+Both stores are bounded: the Redis path re-arms a key's expiry on every scored
+request so the key removes itself once its window lapses, and the in-process path
+sweeps keys that are never presented again (`SimpleRateLimiter.cull_expired`).
 """
 
 import logging
@@ -36,9 +40,20 @@ if count >= limit then
     return 0
 end
 redis.call('ZADD', key, now, member)
+-- Expiry is re-armed on every scored request, so a key lives at most `window`
+-- past the last hit and then removes itself (#544). `window` needs no safety
+-- margin: the ZREMRANGEBYSCORE above can never keep a member that is older than
+-- the window, so anything older is already useless, and a margin would only
+-- extend the key's life.
 redis.call('EXPIRE', key, window)
 return 1
 """
+
+# Once the in-process map holds more keys than this, `SimpleRateLimiter` sweeps
+# expired keys on the next request instead of waiting for each key to be
+# presented again. Sweeping is O(n), so it runs only when the map has actually
+# grown, and every request still prunes its own key first.
+SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD = 1024
 
 
 class SimpleRateLimiter:
@@ -53,11 +68,32 @@ class SimpleRateLimiter:
         window_start = now - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
 
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
+        if len(self.requests) > SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD:
+            self.cull_expired(now=now)
         if len(self.requests[key]) >= settings.AUTH_RATE_LIMIT_REQUESTS:
             return False
 
         self.requests[key].append(now)
         return True
+
+    def cull_expired(self, now: float | None = None) -> int:
+        """Drop keys whose every recorded hit is older than the window.
+
+        `is_allowed` only prunes the key it was handed, so a client that stops
+        appearing — an admin key used once, a scanner that rotates addresses —
+        kept its list in `_shared` for the lifetime of the process. Nothing else
+        reclaimed it: `_shared` is class-level state, so the entries outlive both
+        the limiter instance and the request (#544).
+
+        Returns:
+            Number of keys removed.
+        """
+        current = now if now is not None else time()
+        window_start = current - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
+        expired = [key for key, hits in self.requests.items() if not hits or hits[-1] <= window_start]
+        for key in expired:
+            del self.requests[key]
+        return len(expired)
 
 
 class RedisRateLimiter:

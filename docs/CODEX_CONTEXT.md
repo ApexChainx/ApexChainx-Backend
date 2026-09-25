@@ -335,6 +335,11 @@ Key endpoints:
 
 The auth domain includes token family tracking and per-user rate limiting. Rate limit state is stored in the database via migration `0008_auth_rate_limiting`. Abuse triggers a short-lived backoff enforced in `app/core/rate_limiter.py`.
 
+Both limiter stores are bounded by the window, which matters because they sit in the auth-critical path (`app/core/rate_limiter.py`):
+
+- **Redis** (`RedisRateLimiter`): the Lua script re-arms `EXPIRE key window` on every scored request, so `auth_rate_limiter:*` keys delete themselves once their window lapses. No margin is added — `ZREMRANGEBYSCORE` can never keep a member older than the window, so a longer TTL would only extend key life.
+- **In-process** (`SimpleRateLimiter`, the fallback when Redis is unavailable, `USE_REDIS_RATE_LIMITER` is off, or Celery is eager): state is a class-level dict shared by every instance, so it outlives both the limiter and the request. `is_allowed` prunes the presented key on every call and, once the map exceeds `SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD` (1024), also runs `cull_expired()` to drop keys whose newest hit has lapsed — otherwise a client that scored once and never returned kept its list for the life of the process (#544). Call `cull_expired()` from a periodic task if you want reclamation without traffic pressure.
+
 ---
 
 ## Idempotency
