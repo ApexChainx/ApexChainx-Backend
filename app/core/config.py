@@ -7,6 +7,34 @@ VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
 DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
 MIN_SECRET_KEY_LENGTH = 32
 
+# Header clients use to pin an API version (#499)
+API_VERSION_HEADER = "X-API-Version"
+
+
+def parse_api_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a dotted API version into a 3-part comparable tuple.
+
+    Accepts ``1``, ``1.0``, ``1.0.0`` and an optional ``v`` prefix.  Missing
+    components are zero-padded so ``1`` and ``1.0.0`` compare equal.  Returns
+    ``None`` when the value is not a dotted numeric version.
+    """
+    raw = value.strip().removeprefix("v").strip()
+    if not raw:
+        return None
+    parts = raw.split(".")
+    if len(parts) > 3:
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        # isdecimal (not isdigit) so superscripts such as "²" are rejected
+        # instead of blowing up int() on an attacker-controlled header.
+        if not part.isdecimal():
+            return None
+        numbers.append(int(part))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
@@ -30,8 +58,14 @@ class Settings(BaseSettings):
         "Idempotency-Key",
         "Content-Type",
         "X-Requested-With",
+        API_VERSION_HEADER,
     ]
-    CORS_EXPOSE_HEADERS: list[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
+    CORS_EXPOSE_HEADERS: list[str] = [
+        "X-Correlation-ID",
+        "X-RateLimit-Remaining",
+        API_VERSION_HEADER,
+        "X-Supported-API-Versions",
+    ]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     CELERY_TASK_ALWAYS_EAGER: bool = True
@@ -151,6 +185,13 @@ class Settings(BaseSettings):
     # Directory where archived audit entries (JSONL, hashes preserved) are written.
     AUDIT_ARCHIVE_DIR: str = "audit_archives"
 
+    # API version negotiation (#499)
+    # Clients may pin a version with the X-API-Version request header. Requests
+    # outside the supported range are rejected instead of silently receiving the
+    # current behaviour; requests without the header are served as "latest".
+    API_VERSION_MIN_SUPPORTED: str = "1.0.0"
+    API_VERSION_MAX_SUPPORTED: str = "1.0.0"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
 
@@ -165,6 +206,24 @@ def validate_critical_settings(config: Settings) -> None:
 
     if not config.VERSION.strip():
         errors.append("VERSION must not be empty.")
+
+    # API version negotiation (#499): the served version must sit inside the
+    # advertised supported range, otherwise every pinned client is rejected.
+    min_version = parse_api_version(config.API_VERSION_MIN_SUPPORTED)
+    max_version = parse_api_version(config.API_VERSION_MAX_SUPPORTED)
+    current_version = parse_api_version(config.VERSION)
+    if min_version is None:
+        errors.append("API_VERSION_MIN_SUPPORTED must be a dotted numeric version such as 1.0.0.")
+    if max_version is None:
+        errors.append("API_VERSION_MAX_SUPPORTED must be a dotted numeric version such as 1.0.0.")
+    if current_version is None:
+        errors.append("VERSION must be a dotted numeric version such as 1.0.0.")
+    if None not in (min_version, max_version) and min_version > max_version:
+        errors.append("API_VERSION_MIN_SUPPORTED must not be greater than API_VERSION_MAX_SUPPORTED.")
+    if None not in (min_version, max_version, current_version) and not (
+        min_version <= current_version <= max_version
+    ):
+        errors.append("VERSION must fall within [API_VERSION_MIN_SUPPORTED, API_VERSION_MAX_SUPPORTED].")
 
     if not config.API_V1_PREFIX.startswith("/"):
         errors.append("API_V1_PREFIX must start with '/'.")
