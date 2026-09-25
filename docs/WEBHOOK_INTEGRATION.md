@@ -327,13 +327,32 @@ GET /api/v1/webhooks
 
 Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
 
+Soft-deleted webhooks are omitted; pass `include_deleted=true` to include the tombstones (see [Deleting a Webhook](#deleting-a-webhook)).
+
 ## Deleting a Webhook
 
 ```http
 DELETE /api/v1/webhooks/{webhook_id}
 ```
 
-Deletes the endpoint and stops all future deliveries. In-flight deliveries already queued may still complete. Returns `204 No Content` on success.
+Stops all future deliveries and returns `204 No Content`. In-flight deliveries already queued may still complete.
+
+Delete is a **soft delete** (#518). The registration is retained as a tombstone
+rather than removed, because deleting the row also cascaded to its deliveries and
+destroyed the record of what was sent and what the consumer answered. The
+response now carries `deleted_at`, and:
+
+- `GET /api/v1/webhooks` hides soft-deleted webhooks; pass `include_deleted=true`
+  to list them.
+- `GET /api/v1/webhooks/{id}` still resolves a deleted webhook, and so does
+  `GET /api/v1/webhooks/{id}/deliveries`, so history stays auditable.
+- `PATCH`, secret rotation, retry and replay against a deleted webhook are
+  refused (`409 Conflict` on the mutation endpoints; retry and replay log and
+  no-op rather than sending).
+- Delete is idempotent — deleting an already-deleted webhook is still `204`.
+
+Tombstones accumulate by design; purge them on whatever schedule your retention
+policy calls for.
 
 ## Querying Delivery History
 
