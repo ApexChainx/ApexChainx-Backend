@@ -12,37 +12,59 @@ Each webhook delivery includes explicit signature versioning metadata:
 
 ```
 X-Webhook-Signature: sha256={hex_digest}
-X-Webhook-Signature-Version: 1
+X-Webhook-Signature-Version: 2
 X-Webhook-Timestamp: 2026-04-29T14:30:45.123456
 ```
 
-### Current Signature Version (v1): HMAC-SHA256
+Always read the version header and branch on it. An unknown version must be
+rejected, not assumed to behave like the version you know.
+
+### Current Signature Version (v2): timestamped HMAC-SHA256
 
 **Algorithm:**
-- Compute: `HMAC-SHA256(secret_key, payload_json)`
+- Compute: `HMAC-SHA256(secret_key, "{X-Webhook-Timestamp}." + payload_json)`
 - Output: Hex-encoded digest string
 - Envelope: `sha256={hex_digest_value}`
+
+The timestamp is inside the signed input (#538). A captured delivery re-sent later
+carries the original timestamp, so it either fails verification outright or falls
+outside your skew window — a replay is no longer indistinguishable from a fresh
+event.
 
 **Verification Example (Python):**
 
 ```python
 import hmac
 import hashlib
-import json
+from datetime import datetime, timezone
 
-def verify_webhook(request_body: str, signature_header: str, secret: str) -> bool:
-    """Verify webhook signature using HMAC-SHA256."""
-    # Extract hex digest (remove 'sha256=' prefix)
-    provided_signature = signature_header.replace('sha256=', '')
-    
-    # Compute expected signature
+MAX_SKEW_SECONDS = 300  # 5 minutes
+
+
+def verify_webhook(
+    request_body: str,
+    signature_header: str,
+    secret: str,
+    timestamp_header: str,
+    max_skew_seconds: int = MAX_SKEW_SECONDS,
+) -> bool:
+    """Verify a v2 (timestamped) webhook signature and its freshness."""
+    provided_signature = signature_header.removeprefix('sha256=')
+
+    # 1. Freshness: a stale or unparseable timestamp is rejected outright.
+    sent_at = datetime.fromisoformat(timestamp_header)
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    if abs((datetime.now(timezone.utc) - sent_at).total_seconds()) > max_skew_seconds:
+        return False
+
+    # 2. Signature over "{timestamp}.{payload}".
     expected_signature = hmac.new(
         secret.encode(),
-        request_body.encode(),
+        f"{timestamp_header}.{request_body}".encode(),
         hashlib.sha256
     ).hexdigest()
-    
-    # Compare using constant-time comparison
+
     return hmac.compare_digest(expected_signature, provided_signature)
 ```
 
@@ -51,23 +73,54 @@ def verify_webhook(request_body: str, signature_header: str, secret: str) -> boo
 ```javascript
 const crypto = require('crypto');
 
-function verifyWebhook(requestBody, signatureHeader, secret) {
+const MAX_SKEW_SECONDS = 300;
+
+function verifyWebhook(requestBody, signatureHeader, secret, timestampHeader) {
   // Extract hex digest
   const providedSignature = signatureHeader.replace('sha256=', '');
-  
-  // Compute expected signature
+
+  // Freshness first.
+  const sentAt = Date.parse(timestampHeader);
+  if (Number.isNaN(sentAt)) return false;
+  if (Math.abs(Date.now() - sentAt) / 1000 > MAX_SKEW_SECONDS) return false;
+
+  // Signature over "{timestamp}.{payload}".
   const expectedSignature = crypto
     .createHmac('sha256', secret)
-    .update(requestBody)
+    .update(`${timestampHeader}.${requestBody}`)
     .digest('hex');
-  
-  // Compare using constant-time comparison
+
   return crypto.timingSafeEqual(
     Buffer.from(expectedSignature),
     Buffer.from(providedSignature)
   );
 }
 ```
+
+The backend ships the same helpers in `app/services/webhook_signing.py`:
+`verify_signature(secret, payload, signature, version, timestamp)` checks the
+digest, `is_timestamp_fresh(timestamp, max_skew_seconds)` checks the window, and
+`verify_delivery_signature(...)` does both.
+
+### Legacy Signature Version (v1): payload-only HMAC-SHA256
+
+Still emitted when a delivery is pinned to version 1 — a stored delivery keeps its
+original `signature_version` across retries, so deliveries created before this
+change continue to verify as v1.
+
+- Compute: `HMAC-SHA256(secret_key, payload_json)`
+
+v1 remains verifiable so no consumer breaks during rollout, but **it offers no
+replay protection**: the same signed bytes replay indistinguishably. If you receive
+v1, deduplicate on the payload timestamp or delivery id, and move to v2.
+
+### Choosing a skew window
+
+Freshness bounds the replay window; it cannot close it. Pick a window larger than
+your clock skew plus processing lag, and deduplicate on the payload timestamp
+regardless. The backend's own helpers default to 5 minutes; the window is yours to
+choose as the receiver. Retries are re-stamped with a fresh
+`X-Webhook-Timestamp`, so a legitimate retry is never rejected as stale.
 
 ## Timestamp Validation Semantics
 
@@ -78,6 +131,11 @@ function verifyWebhook(requestBody, signatureHeader, secret) {
 - **Timezone**: UTC (Zulu time implied)
 - **Immutability**: Identical across all retry attempts and signature versions
 - **Duration**: Captured when event is triggered, not when delivery is attempted
+
+This is the *event* clock. The separate `X-Webhook-Timestamp` header is the
+*attempt* clock: it is re-stamped on every retry, and under v2 it is the value
+covered by the signature. Deduplicate on the payload timestamp (or a delivery id),
+never on the header.
 
 ### Timestamp Usage Patterns
 
@@ -97,9 +155,11 @@ class DeliveredWebhookRecord:
 
 **Benefit**: If a webhook is retried due to network failure or crash recovery, receivers can identify and skip duplicates using timestamp + webhook_id.
 
-#### 2. Freshness Validation (Optional)
+#### 2. Freshness Validation (required for v2)
 
-Reject webhooks outside a configurable time window:
+Reject deliveries whose `X-Webhook-Timestamp` is outside a time window. Under v2
+this is not optional hardening: it is half of what makes a replay detectable, and
+it is checked before the signature is trusted.
 
 ```python
 from datetime import datetime, timedelta
@@ -170,17 +230,23 @@ The explicit `X-Webhook-Signature-Version` header enables safe algorithm evoluti
    Phase 4: Remove v1 code after consumers migrate
    ```
 
-3. **Algorithm Migration Example**:
+3. **Version Migration Example** (the v1 → v2 change actually shipped in #538):
    ```python
-   # Future opportunity: add v2 when needed
-   def sign_payload(secret: str, payload: str, version: int = 1) -> Tuple[str, int]:
+   def sign_payload(
+       secret: str, payload: str, version: int = 2, timestamp: str | None = None
+   ) -> tuple[str, int, str]:
        if version == 1:
-           return sign_payload_v1(secret, payload), 1
-       elif version == 2:  # Future EdDSA implementation
-           return sign_payload_v2(secret, payload), 2
-       else:
-           raise ValueError(f"Unsupported signature version: {version}")
+           return sign_payload_v1(secret, payload), version, timestamp or ""
+       if version == 2:
+           ts = timestamp or datetime.now(UTC).isoformat()
+           return sign_payload_v2(secret, payload, ts), version, ts
+       raise ValueError(f"Unsupported signature version: {version}")
    ```
+   Each delivery stores the version it was signed with (`signature_version` on the
+   delivery row), so a retry of an old delivery keeps verifying as v1 while new
+   deliveries are v2. Retiring v1 is a follow-up: drop
+   `sign_payload_v1`/`verify_signature_v1` and the `version == 1` branches once no
+   stored delivery predates the cut-over.
 
 ## Trace Context Propagation
 
