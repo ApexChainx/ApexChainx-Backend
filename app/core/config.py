@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300  # Rate limit window in seconds
     AUTH_LOCKOUT_ENTROPY_THRESHOLD: int = 20  # Unique password prefixes before credential-stuffing alert
     AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES: int = 5  # Rolling window for stuffing detection
+    # #507: credential-stuffing lockouts are scoped to (IP, account) pairs, and
+    # the account-wide scope catches a distributed spray on one account.
+    # The lockout length is a multiplier of the account lockout, capped so a
+    # longer AUTH_LOCKOUT_DURATION_MINUTES cannot silently lock out a whole
+    # shared-NAT address for hours.
+    AUTH_STUFFING_LOCKOUT_MULTIPLIER: int = 4
+    AUTH_STUFFING_LOCKOUT_MAX_MINUTES: int = 60
+    AUTH_ACCOUNT_STUFFING_ENTROPY_THRESHOLD: int = 20
     AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
     USE_REDIS_RATE_LIMITER: bool = True
 
