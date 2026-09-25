@@ -198,6 +198,7 @@ class AuthStore:
     def _get_user_for_token_with_db(cls, token: str, db: Session) -> AuthUser | None:
         session_repo = SessionRepository(db)
         user_repo = UserRepository(db)
+        token_family_repo = TokenFamilyRepository(db)
 
         hashed_token = hash_token(token)
         session = session_repo.get_session(hashed_token)
@@ -206,6 +207,23 @@ class AuthStore:
 
         if cls._is_expired(session.expires_at):
             session_repo.delete_session(hashed_token)
+            return None
+
+        # Gate on the token family, not just the session row (#535). A session can
+        # outlive its family: logout-all deletes the family, and reuse detection
+        # compromises it, while a token issued concurrently (or before the
+        # delete committed) is still presented with a live session row. Without
+        # this check the access path accepted those tokens even though refresh
+        # rejected them. Legacy sessions with no family keep their old behaviour
+        # and are migrated on their next refresh.
+        if session.family_id and token_family_repo.is_revoked(session.family_id):
+            session_repo.delete_session(hashed_token)
+            audit_log.log_event(
+                db,
+                "access_token_rejected",
+                email=session.email,
+                details={"family_id": session.family_id, "reason": "family_revoked"},
+            )
             return None
 
         stored_user = user_repo.get_by_email(session.email)

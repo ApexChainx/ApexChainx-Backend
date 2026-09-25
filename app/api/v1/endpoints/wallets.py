@@ -30,6 +30,13 @@ def create_wallet(
     db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
 ) -> WalletCreateResponse:
+    """Create the user's wallet.
+
+    Raises ``ApexWalletAlreadyExistsError`` (409) when the user already has one,
+    including when a concurrent request wins the race for the unique constraint
+    (issue #531). One user gets one wallet, and a retried registration is told
+    which address already exists instead of creating a second row.
+    """
     return WalletRegistry.create_wallet(db, payload)
 
 

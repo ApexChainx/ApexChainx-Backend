@@ -34,7 +34,7 @@ ERROR_CODE_PATTERNS: list[re.Pattern[str]] = [
 EXPECTED_CODES: set[str] = {
     "validation_error", "unauthorized", "forbidden", "not_found", "conflict",
     "payload_too_large", "unprocessable_entity", "rate_limited", "transient_error",
-    "internal_error",
+    "internal_error", "api_version_unsupported",
     "invalid_stellar_public_key", "invalid_tx_memo", "invalid_webhook_url",
     "invalid_credentials", "account_locked", "token_revoked", "token_expired",
     "refresh_token_reuse", "session_compromised", "api_key_revoked",

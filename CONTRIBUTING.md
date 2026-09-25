@@ -473,6 +473,9 @@ describe('WalletConnect', () => {
 # Run all tests
 pytest
 
+# Reject lookalike / leftover test file names (also runs in CI)
+python scripts/lint_test_filenames.py
+
 # Run specific test file
 pytest tests/test_payment_service.py
 
@@ -499,6 +502,14 @@ async def test_create_payment():
     assert result["status"] == "success"
     assert "tx_hash" in result
 ```
+
+**One canonical file per subject.** Name a test file after what it tests, and do
+not edit a file in place with a trailing marker. `scripts/lint_test_filenames.py`
+rejects filenames that end in a leftover marker (`_old`, `_copy`, `_bak`,
+`_tmp`, `_final`, `_v2`, a run of repeated characters such as `...238hhh`), two
+files whose names normalise to the same stem, and any `test_*.py` that contains
+no test function. It runs in CI (`.github/workflows/test-filename-lint.yml`) and
+locally in under a second.
 
 ### Smart Contract Tests
 
