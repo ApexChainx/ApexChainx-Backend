@@ -668,6 +668,8 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 
 `app/core/config.py` uses Pydantic Settings to load and validate all environment variables at startup. Access settings via the `get_settings()` function (cached singleton). Never read `os.environ` directly in application code — always go through `get_settings()`.
 
+`.env.example` is the documented reference for every setting: it is grouped by concern, marks the values that are required outside `ENVIRONMENT=local`/`test`, and lists the `validate_critical_settings` startup guards. `tests/test_env_example_completeness.py` fails when a setting is added to `config.py` without a matching entry, when the template documents a key that no longer exists, or when the dev profile stops booting — update the template in the same change as any new setting.
+
 ---
 
 ## Lock Module
