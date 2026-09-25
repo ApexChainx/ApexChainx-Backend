@@ -1,0 +1,174 @@
+name: PR
+
+# #525: nothing ran the test tree on pull requests. `release.yml` only fires on
+# `v*` tags and contains no test job, so `tests/` -- including
+# `tests/benchmarks`, `tests/chaos` and `tests/properties` -- was never executed
+# against new code. Regressions landed silently and the safety net was
+# decorative. `release.yml` is untouched and still owns tag deploys.
+#
+# Nightly: the property/benchmark/chaos suites, which are slow and are not the
+# gate for a PR. Both jobs are mutually exclusive on event type so a nightly run
+# does not also pay for the unit suite.
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # 03:00 UTC daily.
+    - cron: "0 3 * * *"
+
+# Read-only: a pull-request check must not be able to write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  POSTGRES_DB: apexchainx
+  # Deterministic stand-ins so the suite does not depend on a developer's .env.
+  # None of these are real credentials; the only secret on the job is
+  # postgres' own throwaway password.
+  SECRET_KEY: ci-secret-key-not-used-in-production-000000
+  JWT_SECRET_KEY: ci-jwt-secret-key-not-used-in-production-00
+  WEBHOOK_SECRET_ENCRYPTION_KEY: V5OOA_Ao70n9OxGEbj1WmRsZX6vI4IdtuJ_jYcIhNDg=
+
+jobs:
+  unit:
+    name: Unit tests
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ${{ env.POSTGRES_DB }}"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          # Single source of truth for pinned versions: pyproject pins the
+          # runtime deps and carries the dev extra (pytest, ruff, mypy,
+          # hypothesis, pytest-benchmark, ...). requirements.txt is the
+          # unpinned subset for Docker builds.
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: |
+          ruff check app tests
+          ruff format --check app tests
+
+      - name: Type check
+        run: mypy app
+
+      - name: Migration lint
+        run: python scripts/lint_migrations.py
+
+      - name: Test
+        env:
+          ENVIRONMENT: test
+          # app.main calls validate_critical_settings() at import, so every
+          # setting the startup validator enforces must be satisfiable in CI.
+          WEBHOOK_URL_VALIDATOR_BYPASS: "true"
+          CELERY_TASK_ALWAYS_EAGER: "true"
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          USE_REDIS_RATE_LIMITER: "false"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest tests \
+            --ignore=tests/benchmarks \
+            --ignore=tests/chaos \
+            --ignore=tests/properties \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=term-missing:skip-covered \
+            -ra
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 7
+
+  nightly:
+    name: Nightly (property, benchmark, chaos)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ${{ env.POSTGRES_DB }}"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Property-based tests
+        env: &ci-env
+          ENVIRONMENT: test
+          WEBHOOK_URL_VALIDATOR_BYPASS: "true"
+          CELERY_TASK_ALWAYS_EAGER: "true"
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          USE_REDIS_RATE_LIMITER: "false"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+          REDIS_URL: redis://localhost:6379/0
+        run: pytest tests/properties -ra
+
+      - name: Benchmarks
+        env: *ci-env
+        run: pytest tests/benchmarks -ra
+
+      - name: Chaos tests
+        env: *ci-env
+        run: pytest tests/chaos -ra

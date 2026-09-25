@@ -327,13 +327,32 @@ GET /api/v1/webhooks
 
 Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
 
+Soft-deleted webhooks are omitted; pass `include_deleted=true` to include the tombstones (see [Deleting a Webhook](#deleting-a-webhook)).
+
 ## Deleting a Webhook
 
 ```http
 DELETE /api/v1/webhooks/{webhook_id}
 ```
 
-Deletes the endpoint and stops all future deliveries. In-flight deliveries already queued may still complete. Returns `204 No Content` on success.
+Stops all future deliveries and returns `204 No Content`. In-flight deliveries already queued may still complete.
+
+Delete is a **soft delete** (#518). The registration is retained as a tombstone
+rather than removed, because deleting the row also cascaded to its deliveries and
+destroyed the record of what was sent and what the consumer answered. The
+response now carries `deleted_at`, and:
+
+- `GET /api/v1/webhooks` hides soft-deleted webhooks; pass `include_deleted=true`
+  to list them.
+- `GET /api/v1/webhooks/{id}` still resolves a deleted webhook, and so does
+  `GET /api/v1/webhooks/{id}/deliveries`, so history stays auditable.
+- `PATCH`, secret rotation, retry and replay against a deleted webhook are
+  refused (`409 Conflict` on the mutation endpoints; retry and replay log and
+  no-op rather than sending).
+- Delete is idempotent — deleting an already-deleted webhook is still `204`.
+
+Tombstones accumulate by design; purge them on whatever schedule your retention
+policy calls for.
 
 ## Querying Delivery History
 
@@ -369,6 +388,24 @@ Rotate a webhook secret without downtime using the `secret_version` field:
 4. After all in-flight deliveries using the old secret complete, remove the old secret from your receiver
 
 The `X-Webhook-Signature-Version` header tells receivers which version was used to sign each delivery.
+
+### Grace window retention
+
+`POST /api/v1/webhooks/{webhook_id}/rotate-secret` keeps the outgoing secret
+valid for a grace window (`WEBHOOK_SECRET_GRACE_HOURS`, 24h by default) so a
+receiver can be updated with zero downtime. The previous secret is retained
+**only as a SHA-256 hash** in the webhook's `previous_secrets` history, and only
+for that window:
+
+- every rotation first drops history entries whose grace window has already
+  closed, then appends the outgoing secret;
+- a daily Celery sweep (`app.tasks.webhook_secret_housekeeping.expire_old_secrets`)
+  applies the same rule to webhooks that are not being rotated, so a webhook's
+  history never outlives its grace windows.
+
+Receivers must be able to accept the old secret for the full grace window after
+a rotation; after it closes the old secret is dropped and deliveries signed
+with it will be rejected.
 
 ---
 

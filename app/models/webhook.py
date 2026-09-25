@@ -71,6 +71,16 @@ class Webhook(Base):
     previous_secrets = Column(JSONB, default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
     secret_grace_hours = Column(Integer, default=24, nullable=False)  # Configurable grace period per webhook
 
+    # #518: soft delete. Deleting a webhook used to delete the row, and
+    # `deliveries` cascades, so the delivery history an operator needs to answer
+    # "did we notify them, and what did they answer?" was destroyed along with
+    # the registration. The row is retained as a tombstone instead.
+    deleted_at = Column(DateTime, nullable=True)  # Set when the webhook is deleted; NULL while live
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
     deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
 
 
