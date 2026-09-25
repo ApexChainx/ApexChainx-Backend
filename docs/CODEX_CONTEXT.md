@@ -481,6 +481,8 @@ Payment deduplication is enforced at the database level via a unique constraint 
 
 The auth system uses token families to detect refresh token reuse attacks. Each refresh creates a new token family member. Using a previously rotated refresh token invalidates the entire family, forcing re-login. This is implemented in `app/repositories/token_family_repository.py`.
 
+A missing family row counts as **revoked**, not as "unknown, allow": `TokenFamilyRepository.is_revoked()` returns `True` both for a compromised family and for one that no longer exists, because families are only removed by `logout-all` or by the orphan cleanup (which only touches families with no sessions). `AuthStore.get_user_for_token` applies that gate on the **access** path too, so a session row that outlives its family — a token issued in the same tick as a `logout-all`, or committed after it was read — is rejected with `401` and its session row is deleted. Refresh already refused these; before this, the two paths disagreed. Legacy sessions with `family_id IS NULL` are exempt and are migrated to a family on their next refresh.
+
 ---
 
 ## Session Repository
