@@ -53,6 +53,22 @@ class ApexConflictError(ApexException):
         self.fields = fields or {}
 
 
+class ApexWalletAlreadyExistsError(ApexConflictError):
+    """A wallet is already registered for this user (409, issue #531).
+
+    ``wallet_id`` / ``user_id`` / ``public_key`` identify the wallet that already
+    exists so a client retrying ``POST /wallets/create`` learns which wallet to
+    use instead of only learning that its create failed.
+    """
+
+    def __init__(self, detail: str, *, wallet_id: int, user_id: str, public_key: str):
+        super().__init__(
+            detail=detail,
+            fields={"wallet_id": str(wallet_id), "user_id": user_id, "public_key": public_key},
+        )
+        self.error_code = "wallet_already_exists"
+
+
 class ApexValidationError(ApexException):
     def __init__(self, detail: str, errors: list[dict[str, Any]] | None = None):
         super().__init__(detail=detail, error_code="validation_error", status_code=422)

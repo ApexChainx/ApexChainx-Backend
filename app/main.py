@@ -136,6 +136,9 @@ app.add_middleware(ETagMiddleware, exclude_path_prefixes=settings.ETAG_EXCLUDE_P
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
     correlation_id = get_or_generate_correlation_id()
+    # Conflict subclasses carry the fields that collide; surfacing them is what
+    # lets a client act on the 409 instead of just logging it.
+    fields = getattr(exc, "fields", None)
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -146,6 +149,7 @@ async def apex_exception_handler(request: Request, exc: ApexException) -> JSONRe
             "correlation_id": correlation_id,
             "error_code": getattr(exc, "error_code", "domain_error"),
             **(getattr(exc, "extra", None) or {}),
+            **({"fields": fields} if fields else {}),
         },
         media_type="application/problem+json",
         headers={"X-Correlation-ID": correlation_id},

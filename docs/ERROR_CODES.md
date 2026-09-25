@@ -47,12 +47,14 @@ ApexException (base)
 ├── ApexValidationError    HTTP 400 — invalid input
 ├── ApexNotFoundError      HTTP 404 — resource missing
 ├── ApexConflictError      HTTP 409 — duplicate / concurrency conflict
+│   └── ApexWalletAlreadyExistsError  HTTP 409 — `wallet_already_exists`, reports the existing wallet's id/address
 └── ApexTransientError     HTTP 500 (retryable) — transient backend failure
 ```
 
 - Service code raises `ApexException` subclasses.
 - Exception handlers in `app/main.py` translate them to JSON Problem Details responses.
 - Bare `except Exception` in service code has been replaced with specific typed catches.
+- Conflict subclasses carry `fields`; the handler includes them in the response body so a client can act on the 409.
 
 ## Auth-Specific Error Codes
 
