@@ -125,10 +125,16 @@ def _build_headers(
     """
     corr_id = get_or_generate_correlation_id()
 
+    # The timestamp is part of the version 2 signed input, so the value signed and
+    # the value sent in the header must be the same string (#538). Each attempt
+    # re-stamps it: a retry is a fresh delivery of the same event, and re-using the
+    # original stamp would push it outside a receiver's skew window.
+    timestamp = datetime.now(UTC).isoformat()
+
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
+        "X-Webhook-Timestamp": timestamp,
         "X-Correlation-ID": corr_id,
     }
 
@@ -140,9 +146,13 @@ def _build_headers(
         headers["traceparent"] = traceparent
 
     if webhook.secret:
-        sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
+        sig_hex, _version, signed_timestamp = sign_payload(
+            webhook.secret, payload, signature_version, timestamp
+        )
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
         headers["X-Webhook-Signature-Version"] = str(signature_version)
+        # Version 1 ignores the timestamp; make the mismatch impossible to miss.
+        headers["X-Webhook-Timestamp"] = signed_timestamp or timestamp
     return headers
 
 
