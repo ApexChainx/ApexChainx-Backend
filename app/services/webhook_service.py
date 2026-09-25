@@ -125,10 +125,16 @@ def _build_headers(
     """
     corr_id = get_or_generate_correlation_id()
 
+    # The timestamp is part of the version 2 signed input, so the value signed and
+    # the value sent in the header must be the same string (#538). Each attempt
+    # re-stamps it: a retry is a fresh delivery of the same event, and re-using the
+    # original stamp would push it outside a receiver's skew window.
+    timestamp = datetime.now(UTC).isoformat()
+
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
+        "X-Webhook-Timestamp": timestamp,
         "X-Correlation-ID": corr_id,
     }
 
@@ -140,9 +146,13 @@ def _build_headers(
         headers["traceparent"] = traceparent
 
     if webhook.secret:
-        sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
+        sig_hex, _version, signed_timestamp = sign_payload(
+            webhook.secret, payload, signature_version, timestamp
+        )
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
         headers["X-Webhook-Signature-Version"] = str(signature_version)
+        # Version 1 ignores the timestamp; make the mismatch impossible to miss.
+        headers["X-Webhook-Timestamp"] = signed_timestamp or timestamp
     return headers
 
 
@@ -151,7 +161,10 @@ def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webh
     # The durable fix (JSONB column + SQL containment filter, or a normalized
     # webhook_events join table) needs a schema migration and is tracked
     # separately; this only stops corrupt rows from being silently dropped.
-    webhooks = db.query(Webhook).filter(Webhook.is_active).all()
+    # #518: `is_active` already excludes soft-deleted webhooks because delete
+    # clears it, but the tombstone filter is stated explicitly so a future
+    # caller that reactivates a row cannot resurrect its deliveries.
+    webhooks = db.query(Webhook).filter(Webhook.is_active).filter(Webhook.deleted_at.is_(None)).all()
     result = []
     for webhook in webhooks:
         try:
@@ -272,6 +285,22 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         return
 
     webhook = delivery.webhook
+
+    # #518: a soft-deleted webhook keeps its row and its delivery history, so a
+    # retry or replay request against it must not produce a new outbound request.
+    # The delivery is left untouched rather than deleted, which is the whole
+    # point of retaining it.
+    #
+    # Compared by identity rather than truthiness: both flags are real booleans
+    # on the model, and a stand-in object with fabricated attributes must not be
+    # able to short-circuit dispatch.
+    if webhook.is_deleted is True or webhook.is_active is False:
+        logger.info(
+            "WebhookDelivery %s belongs to deleted/inactive webhook %s; refusing to dispatch.",
+            delivery_id,
+            webhook.id,
+        )
+        return
 
     # If breaker is open, mark as breaker_open without consuming retry budget
     if not breaker.allow_request(webhook.url):

@@ -25,6 +25,22 @@ class TokenFamilyRepository:
     def get_family(self, family_id: str) -> TokenFamilyORM | None:
         return self.db.query(TokenFamilyORM).filter(TokenFamilyORM.family_id == family_id).first()
 
+    def is_revoked(self, family_id: str) -> bool:
+        """Report whether a family can no longer authorize tokens.
+
+        A **missing** row counts as revoked, not as "unknown, allow": families are
+        only deleted by ``delete_families_by_email`` (logout-all) or
+        ``delete_orphaned_families`` (which only touches families that have no
+        sessions), so a session pointing at an absent family is a token whose
+        family was revoked while the session row outlived it (#535). Treating the
+        miss as "valid" is what let a token issued in the same tick as a
+        logout-all keep working on the access path while ``refresh`` rejected it.
+        """
+        family = self.get_family(family_id)
+        if family is None:
+            return True
+        return bool(family.compromised)
+
     def increment_sequence(self, family_id: str) -> TokenFamilyORM | None:
         family = self.get_family(family_id)
         if family:

@@ -335,6 +335,11 @@ Key endpoints:
 
 The auth domain includes token family tracking and per-user rate limiting. Rate limit state is stored in the database via migration `0008_auth_rate_limiting`. Abuse triggers a short-lived backoff enforced in `app/core/rate_limiter.py`.
 
+Both limiter stores are bounded by the window, which matters because they sit in the auth-critical path (`app/core/rate_limiter.py`):
+
+- **Redis** (`RedisRateLimiter`): the Lua script re-arms `EXPIRE key window` on every scored request, so `auth_rate_limiter:*` keys delete themselves once their window lapses. No margin is added — `ZREMRANGEBYSCORE` can never keep a member older than the window, so a longer TTL would only extend key life.
+- **In-process** (`SimpleRateLimiter`, the fallback when Redis is unavailable, `USE_REDIS_RATE_LIMITER` is off, or Celery is eager): state is a class-level dict shared by every instance, so it outlives both the limiter and the request. `is_allowed` prunes the presented key on every call and, once the map exceeds `SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD` (1024), also runs `cull_expired()` to drop keys whose newest hit has lapsed — otherwise a client that scored once and never returned kept its list for the life of the process (#544). Call `cull_expired()` from a periodic task if you want reclamation without traffic pressure.
+
 ---
 
 ## Idempotency
@@ -425,6 +430,20 @@ Webhook delivery is handled by `app/tasks/webhook_tasks.py` as a Celery task. Wh
 
 ---
 
+## Webhook Retry Budget
+
+`WebhookCreate.max_retries` and `WebhookUpdate.max_retries` are bounded to
+`0..MAX_WEBHOOK_MAX_RETRIES` (default 10) and out-of-range values are rejected
+with a 422 naming the field, like the other webhook guardrails (#552). `0`
+disables retries, so a webhook fails straight to dead-letter.
+
+The stored value is an upper bound, not the attempt count: `dispatch_delivery`
+also requires `retry_index < len(WEBHOOK_RETRY_BASE_DELAYS)`, so with the
+default `30,120,600` a delivery is retried at most three times even if
+`max_retries` is 10. Raising the delay list raises the effective retry count.
+
+---
+
 ## Analytics Snapshot Backfill
 
 The migration `0012_sla_latest_backfill.py` populates the `is_latest` flag on existing SLA records. This flag allows the analytics layer to efficiently query only the most recent SLA result per outage without a subquery on every request.
@@ -455,6 +474,29 @@ MTTR boundary computation is deterministic: given the same `created_at` and `res
 
 ---
 
+## Bulk Outage Import Contract
+
+Both import paths validate rows against the same schema, `OutageCreate`
+(`app/models/outage_dto.py`), and report failures as `ImportRowResult` with
+per-field `ImportFieldError`s keyed by the row's own position in the payload
+(0-based), so an uploaded file and a streamed body are held to one contract
+(#547):
+
+- `POST /api/v1/outages/import` (`app/api/v1/endpoints/outages.py`) — CSV/JSON
+  upload, with `dry_run` and `consistency=atomic|partial`.
+- `app/services/outage_stream_import.py` — the chunked JSON path. It validates in
+  `chunk_size` batches (flat memory) and defaults to `atomic`: one invalid row
+  withholds the whole batch, so `imported` and `valid_row_ids` are both empty and
+  nothing can be persisted from a partly-wrong body. `partial` is opt-in and
+  returns the accepted ids explicitly. Rows past `max_rows` are counted in
+  `truncated` rather than dropped silently, and `failed_count` always reports the
+  true total even though `failed_rows` is capped at 50.
+
+The streaming module does not write to the database; it hands back
+`valid_row_ids` for the caller to persist through `OutageRepository`.
+
+---
+
 ## Outage Lifecycle States
 
 ```
@@ -480,6 +522,8 @@ Payment deduplication is enforced at the database level via a unique constraint 
 ## Token Family Security
 
 The auth system uses token families to detect refresh token reuse attacks. Each refresh creates a new token family member. Using a previously rotated refresh token invalidates the entire family, forcing re-login. This is implemented in `app/repositories/token_family_repository.py`.
+
+A missing family row counts as **revoked**, not as "unknown, allow": `TokenFamilyRepository.is_revoked()` returns `True` both for a compromised family and for one that no longer exists, because families are only removed by `logout-all` or by the orphan cleanup (which only touches families with no sessions). `AuthStore.get_user_for_token` applies that gate on the **access** path too, so a session row that outlives its family — a token issued in the same tick as a `logout-all`, or committed after it was read — is rejected with `401` and its session row is deleted. Refresh already refused these; before this, the two paths disagreed. Legacy sessions with `family_id IS NULL` are exempt and are migrated to a family on their next refresh.
 
 ---
 
@@ -667,6 +711,8 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 ## Settings Module
 
 `app/core/config.py` uses Pydantic Settings to load and validate all environment variables at startup. Access settings via the `get_settings()` function (cached singleton). Never read `os.environ` directly in application code — always go through `get_settings()`.
+
+`.env.example` is the documented reference for every setting: it is grouped by concern, marks the values that are required outside `ENVIRONMENT=local`/`test`, and lists the `validate_critical_settings` startup guards. `tests/test_env_example_completeness.py` fails when a setting is added to `config.py` without a matching entry, when the template documents a key that no longer exists, or when the dev profile stops booting — update the template in the same change as any new setting.
 
 ---
 

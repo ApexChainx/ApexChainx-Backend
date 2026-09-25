@@ -95,7 +95,9 @@ class TestStorageLayer:
         webhook_id = _create_webhook("sign-secret-abc")
         with SessionLocal() as db:
             loaded = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-            sig, version = sign_payload(loaded.secret, '{"event": "sla.violation"}')
+            # Pinned to version 1: this asserts which secret bytes are used, and
+            # version 1 is the payload-only input (#538 added the timestamped v2).
+            sig, version, _timestamp = sign_payload(loaded.secret, '{"event": "sla.violation"}', version=1)
         expected = hmac.new(
             b"sign-secret-abc", b'{"event": "sla.violation"}', hashlib.sha256
         ).hexdigest()
