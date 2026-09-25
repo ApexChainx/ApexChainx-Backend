@@ -635,6 +635,26 @@ Create a new Stellar wallet for a user.
 
 **⚠️ Security Note:** Private keys are NEVER returned via API. Users must manage their own keys via wallet apps (Freighter, Albedo).
 
+**Response (409 Conflict):** a user has exactly one wallet. If one is already
+registered — including when a concurrent request wins the race for the unique
+constraint — the create answers 409 and echoes the wallet that already exists, so
+a client retry proceeds with that address instead of creating a second row:
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/409",
+  "title": "wallet_already_exists",
+  "status": 409,
+  "detail": "Wallet 7 already registered for user 'user123' at address 'GXXX...'.",
+  "error_code": "wallet_already_exists",
+  "correlation_id": "…",
+  "fields": {
+    "wallet_id": "7",
+    "user_id": "user123",
+    "public_key": "GXXX..."
+  }
+}
+```
+
 ### GET `/api/v1/wallets/{user_id}`
 
 Get wallet details for a user.
