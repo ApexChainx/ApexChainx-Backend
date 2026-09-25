@@ -7,33 +7,10 @@ VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
 DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
 MIN_SECRET_KEY_LENGTH = 32
 
-# Header clients use to pin an API version (#499)
-API_VERSION_HEADER = "X-API-Version"
-
-
-def parse_api_version(value: str) -> tuple[int, int, int] | None:
-    """Parse a dotted API version into a 3-part comparable tuple.
-
-    Accepts ``1``, ``1.0``, ``1.0.0`` and an optional ``v`` prefix.  Missing
-    components are zero-padded so ``1`` and ``1.0.0`` compare equal.  Returns
-    ``None`` when the value is not a dotted numeric version.
-    """
-    raw = value.strip().removeprefix("v").strip()
-    if not raw:
-        return None
-    parts = raw.split(".")
-    if len(parts) > 3:
-        return None
-    numbers: list[int] = []
-    for part in parts:
-        # isdecimal (not isdigit) so superscripts such as "²" are rejected
-        # instead of blowing up int() on an attacker-controlled header.
-        if not part.isdecimal():
-            return None
-        numbers.append(int(part))
-    while len(numbers) < 3:
-        numbers.append(0)
-    return (numbers[0], numbers[1], numbers[2])
+# #510: environments in which Celery eager mode is allowed. Everywhere else a
+# CELERY_TASK_ALWAYS_EAGER=true default silently runs every task in-process
+# while presenting a queue topology that does nothing.
+DEV_ENVIRONMENTS = {"local", "test"}
 
 
 class Settings(BaseSettings):
@@ -68,7 +45,11 @@ class Settings(BaseSettings):
     ]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
-    CELERY_TASK_ALWAYS_EAGER: bool = True
+    # #510: defaults to False. Eager mode runs tasks inline in the request
+    # worker, which removes retry/backoff semantics and makes the breaker and
+    # dead-letter machinery inert. It is a local/test convenience, so it must be
+    # opted into explicitly and is rejected outside development.
+    CELERY_TASK_ALWAYS_EAGER: bool = False
     SLA_CONTRACT_ADDRESS: str = "local-sla-calculator"
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
@@ -272,6 +253,16 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
             errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
+
+    # #510: fail fast, in the same style as the SECRET_KEY guard. A deployment
+    # that runs every task in-process while showing a queue topology is the
+    # silent failure this catches.
+    if config.CELERY_TASK_ALWAYS_EAGER and config.ENVIRONMENT not in DEV_ENVIRONMENTS:
+        errors.append(
+            f"CELERY_TASK_ALWAYS_EAGER must be false outside development; it runs tasks "
+            f"inline and disables retry/backoff, breaker and dead-letter handling. "
+            f"ENVIRONMENT={config.ENVIRONMENT!r} is not one of {sorted(DEV_ENVIRONMENTS)}."
+        )
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")
