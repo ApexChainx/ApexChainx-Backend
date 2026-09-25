@@ -12,6 +12,7 @@ All API errors are returned as RFC 7807 Problem Details.
 | 404         | `not_found`                 | The requested resource does not exist            | No        |
 | 409         | `conflict`                  | Request conflicts with the current server state  | No        |
 | 413         | `payload_too_large`         | Request body exceeds the maximum allowed size    | No        |
+| 426         | `api_version_unsupported`   | `X-API-Version` is malformed or outside the served range | No |
 | 422         | `unprocessable_entity`      | Semantically invalid request (Pydantic validation)| No        |
 | 429         | `rate_limited`              | Too many requests — retry after `Retry-After`    | Yes       |
 | 500         | `transient_error`           | A temporary server-side failure                  | Yes       |
@@ -24,6 +25,7 @@ All API errors are returned as RFC 7807 Problem Details.
 | 400         | `invalid_stellar_public_key`      | Public key does not match Stellar G… format                    | No        |
 | 400         | `invalid_tx_memo`                 | Transaction memo validation failed (whitelist, format, length)  | No        |
 | 400         | `invalid_webhook_url`             | Webhook URL failed validation (SSRF, private network, schema)  | No        |
+| 400         | `api_version_unsupported`         | `X-API-Version` header is not a dotted numeric version         | No        |
 | 401         | `invalid_credentials`             | Email or password is incorrect                                 | No        |
 | 401         | `account_locked`                  | Account temporarily locked after too many failed attempts      | No*       |
 | 401         | `token_revoked`                   | Access or refresh token has been revoked                       | No        |
