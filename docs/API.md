@@ -871,6 +871,15 @@ GET /api/v1/outages?limit=20&offset=40
 
 APEXCHAINX can send webhooks for important events:
 
+### Deleting a Webhook
+
+`DELETE /api/v1/webhooks/{webhook_id}` is a **soft delete**: the registration is
+retained as a tombstone so its delivery history stays auditable, `deleted_at` is
+reported in the response, and the row disappears from `GET /api/v1/webhooks`
+unless `include_deleted=true` is passed. `GET /api/v1/webhooks/{id}` and its
+`/deliveries` history remain reachable. See
+[WEBHOOK_INTEGRATION.md](WEBHOOK_INTEGRATION.md#deleting-a-webhook).
+
 ### Webhook Events
 
 - `outage.created`
