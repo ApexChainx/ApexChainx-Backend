@@ -500,6 +500,30 @@ async def test_create_payment():
     assert "tx_hash" in result
 ```
 
+#### What CI runs on a pull request
+
+`.github/workflows/pr.yml` runs on every pull request (and on demand via
+`workflow_dispatch`), and it is the same set of gates listed above:
+
+| Step | Command |
+|------|---------|
+| Lint | `ruff check app tests` and `ruff format --check app tests` |
+| Types | `mypy app` |
+| Migrations | `python scripts/lint_migrations.py` |
+| Tests | `pytest tests --ignore=tests/benchmarks --ignore=tests/chaos --ignore=tests/properties` |
+
+The job provisions its own PostgreSQL 16 service, sets `ENVIRONMENT=test`, and
+installs with `pip install -e ".[dev]"` so the pinned versions in
+`pyproject.toml` are the ones CI uses. Coverage is uploaded as the
+`coverage-xml` artifact on every run, including failures.
+
+The property-based, benchmark and chaos suites are excluded from the PR gate
+because they are slow; they run nightly at 03:00 UTC in the same workflow under
+the `Nightly (property, benchmark, chaos)` job.
+
+`release.yml` is unchanged: it fires on `v*` tags and owns the image build,
+cosign signing, SBOM and GitHub Release.
+
 ### Smart Contract Tests
 
 ```bash
