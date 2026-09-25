@@ -473,6 +473,9 @@ describe('WalletConnect', () => {
 # Run all tests
 pytest
 
+# Reject lookalike / leftover test file names (also runs in CI)
+python scripts/lint_test_filenames.py
+
 # Run specific test file
 pytest tests/test_payment_service.py
 
@@ -500,29 +503,13 @@ async def test_create_payment():
     assert "tx_hash" in result
 ```
 
-#### What CI runs on a pull request
-
-`.github/workflows/pr.yml` runs on every pull request (and on demand via
-`workflow_dispatch`), and it is the same set of gates listed above:
-
-| Step | Command |
-|------|---------|
-| Lint | `ruff check app tests` and `ruff format --check app tests` |
-| Types | `mypy app` |
-| Migrations | `python scripts/lint_migrations.py` |
-| Tests | `pytest tests --ignore=tests/benchmarks --ignore=tests/chaos --ignore=tests/properties` |
-
-The job provisions its own PostgreSQL 16 service, sets `ENVIRONMENT=test`, and
-installs with `pip install -e ".[dev]"` so the pinned versions in
-`pyproject.toml` are the ones CI uses. Coverage is uploaded as the
-`coverage-xml` artifact on every run, including failures.
-
-The property-based, benchmark and chaos suites are excluded from the PR gate
-because they are slow; they run nightly at 03:00 UTC in the same workflow under
-the `Nightly (property, benchmark, chaos)` job.
-
-`release.yml` is unchanged: it fires on `v*` tags and owns the image build,
-cosign signing, SBOM and GitHub Release.
+**One canonical file per subject.** Name a test file after what it tests, and do
+not edit a file in place with a trailing marker. `scripts/lint_test_filenames.py`
+rejects filenames that end in a leftover marker (`_old`, `_copy`, `_bak`,
+`_tmp`, `_final`, `_v2`, a run of repeated characters such as `...238hhh`), two
+files whose names normalise to the same stem, and any `test_*.py` that contains
+no test function. It runs in CI (`.github/workflows/test-filename-lint.yml`) and
+locally in under a second.
 
 ### Smart Contract Tests
 
