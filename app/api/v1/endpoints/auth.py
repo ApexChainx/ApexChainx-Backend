@@ -38,15 +38,29 @@ Auth Rate Limiting and Lockout Strategy:
    - Failed attempts reset on successful login
    - Refresh tokens are also blocked for locked accounts
 
-3. Audit Logging:
+3. Credential-Stuffing Detection (#507):
+   - Password attempts are bucketed by a 4-character password prefix hash
+   - Lockout scope is (IP, account) — an IP-wide signal is recorded for
+     alerting only, so one attacker behind a shared NAT cannot lock out every
+     legitimate user on that address
+   - A separate account-scoped counter catches a distributed spray on a single
+     account, which no per-IP heuristic can see
+   - Lockout length is AUTH_LOCKOUT_DURATION_MINUTES * AUTH_STUFFING_LOCKOUT_MULTIPLIER,
+     capped at AUTH_STUFFING_LOCKOUT_MAX_MINUTES
+
+4. Audit Logging:
    - All failed attempts are logged
-   - Account lockouts are logged with duration
+   - Account lockouts are logged with duration and the scope that triggered them
 
 Configuration (in app.core.config):
 - AUTH_MAX_FAILED_ATTEMPTS: 5
 - AUTH_LOCKOUT_DURATION_MINUTES: 15
 - AUTH_RATE_LIMIT_REQUESTS: 10
 - AUTH_RATE_LIMIT_WINDOW_SECONDS: 300
+- AUTH_LOCKOUT_ENTROPY_THRESHOLD: 20
+- AUTH_ACCOUNT_STUFFING_ENTROPY_THRESHOLD: 20
+- AUTH_STUFFING_LOCKOUT_MULTIPLIER: 4
+- AUTH_STUFFING_LOCKOUT_MAX_MINUTES: 60
 """
 
 
@@ -132,23 +146,69 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     from app.services.audit_log import audit_log
 
     client_ip = _get_client_ip(request)
+    account = payload.email
 
-    # Credential stuffing detection
-    credential_stuffing_detector.record_attempt(client_ip, payload.password)
-    if credential_stuffing_detector.detect_stuffing(client_ip):
-        lockout_minutes = settings.AUTH_LOCKOUT_DURATION_MINUTES * 4
+    # Credential stuffing detection (#507). Attempts are recorded at IP, (IP,
+    # account) and account scope, but only the last two can lock a request:
+    # blocking on the IP-wide signal alone let one attacker behind a shared NAT
+    # lock out every legitimate user on that address.
+    credential_stuffing_detector.record_attempt(client_ip, payload.password, account)
+
+    if credential_stuffing_detector.detect_stuffing(client_ip, account):
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
         audit_log.log_event(
             db,
             "suspicious_login_activity",
             details={
                 "ip": client_ip,
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(client_ip),
+                "scope": "ip_account_pair",
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_pair_count(
+                    client_ip, account
+                ),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
         raise HTTPException(
             status_code=429,
-            detail=f"Too many login attempts from this IP. Account locked for {lockout_minutes} minutes.",
+            detail=(
+                f"Too many login attempts for this account from your address. "
+                f"Account locked for {lockout_minutes} minutes."
+            ),
+        )
+
+    if credential_stuffing_detector.is_account_locked(account):
+        # Distributed spray: each source IP stays under the pair threshold, so
+        # only the account-scoped counter sees it.
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "scope": "account",
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(account),
+                "action": f"account_locked_{lockout_minutes}_minutes",
+            },
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Too many login attempts for this account. "
+                f"Account locked for {lockout_minutes} minutes."
+            ),
+        )
+
+    if credential_stuffing_detector.is_ip_flagged(client_ip):
+        # Alerting only: a shared address spraying many accounts is worth a
+        # signal, but must not deny service to the innocent accounts behind it.
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "ip": client_ip,
+                "scope": "ip",
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(client_ip),
+                "action": "ip_flagged",
+            },
         )
 
     # Rate limit by IP
