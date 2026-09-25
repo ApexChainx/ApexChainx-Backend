@@ -10,6 +10,10 @@ Fix #313: Cache keys are scoped per-user by hashing the Authorization bearer
 Fix #314: Redis failures are handled with a 30-second circuit breaker. When
           the circuit is open the middleware fails-open (passes the request
           through) rather than returning a 500.
+Fix #497: A body that is not valid JSON no longer raises JSONDecodeError
+          out of the middleware. The fingerprint step rejects it with a
+          clean 400 *before* any cache read/write, so the key is left
+          untouched and a corrected retry under the same key still works.
 """
 
 import hashlib
@@ -31,8 +35,31 @@ logger = logging.getLogger(__name__)
 _CIRCUIT_OPEN_TTL = 30
 
 
+class MalformedRequestBody(ValueError):
+    """Raised when an idempotent request body cannot be parsed as JSON.
+
+    #497: fingerprinting used to call ``json.loads`` unguarded, so a client
+    that retried with a corrupt body turned an absorbable retry into a 500
+    with a stack trace.  The caller turns this into a 400 response.
+    """
+
+
 def _compute_fingerprint(method: str, path: str, body: bytes) -> str:
-    canonical = canonical_json(json.loads(body if body else b"{}")) if body else "{}"
+    """Build a payload fingerprint, normalising key order when possible.
+
+    Raises:
+        MalformedRequestBody: the body is non-empty and is not valid JSON.
+    """
+    canonical = "{}"
+    if body:
+        try:
+            decoded = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise MalformedRequestBody(
+                "Request body is not valid JSON; cannot fingerprint "
+                "Idempotency-Key"
+            ) from exc
+        canonical = canonical_json(decoded)
     raw = f"{method}:{path}:{canonical}".encode()
     return hashlib.sha256(raw).hexdigest()
 
@@ -107,7 +134,19 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         body = await request.body()
-        fingerprint = _compute_fingerprint(request.method, request.url.path, body)
+
+        # #497: a malformed body is a client error, not a server error.  This
+        # runs before any cache interaction so nothing is persisted for the
+        # key and a corrected retry under the same key is processed normally.
+        try:
+            fingerprint = _compute_fingerprint(request.method, request.url.path, body)
+        except MalformedRequestBody as exc:
+            logger.info("Idempotency middleware: rejected request: %s", exc)
+            return Response(
+                status_code=400,
+                content=json.dumps({"detail": str(exc)}),
+                media_type="application/json",
+            )
 
         # #313: scope the cache key to the authenticated user
         actor = _actor_key(request)
