@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_EVENTS_COUNT: int = 50  # Max webhook events per webhook
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
+    MAX_WEBHOOK_MAX_RETRIES: int = 10  # Max delivery retry attempts a webhook may be configured for (#552)
     
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
@@ -265,6 +266,9 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_RETRY_MAX_DELAY_SECONDS <= 0:
         errors.append("WEBHOOK_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if config.MAX_WEBHOOK_MAX_RETRIES < 0:
+        errors.append("MAX_WEBHOOK_MAX_RETRIES must be >= 0.")
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES must be > 0.")

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
@@ -52,7 +52,10 @@ class WebhookCreate(BaseModel):
     url: HttpUrl
     secret: str | None = None
     events: list[WebhookEvent]
-    max_retries: int = 3
+    # Bounded (#552): an unbounded value was accepted and stored, promising
+    # retries the dispatcher can never make — the attempt count is also capped
+    # by the number of entries in WEBHOOK_RETRY_BASE_DELAYS. 0 disables retries.
+    max_retries: int = Field(default=3, ge=0, le=settings.MAX_WEBHOOK_MAX_RETRIES)
     is_active: bool = True
 
     @field_validator("name")
@@ -86,7 +89,8 @@ class WebhookUpdate(BaseModel):
     url: HttpUrl | None = None
     secret: str | None = None
     events: list[WebhookEvent] | None = None
-    max_retries: int | None = None
+    # Same bound as create (#552); None means "leave unchanged".
+    max_retries: int | None = Field(default=None, ge=0, le=settings.MAX_WEBHOOK_MAX_RETRIES)
     is_active: bool | None = None
 
     @field_validator("name")

@@ -425,6 +425,20 @@ Webhook delivery is handled by `app/tasks/webhook_tasks.py` as a Celery task. Wh
 
 ---
 
+## Webhook Retry Budget
+
+`WebhookCreate.max_retries` and `WebhookUpdate.max_retries` are bounded to
+`0..MAX_WEBHOOK_MAX_RETRIES` (default 10) and out-of-range values are rejected
+with a 422 naming the field, like the other webhook guardrails (#552). `0`
+disables retries, so a webhook fails straight to dead-letter.
+
+The stored value is an upper bound, not the attempt count: `dispatch_delivery`
+also requires `retry_index < len(WEBHOOK_RETRY_BASE_DELAYS)`, so with the
+default `30,120,600` a delivery is retried at most three times even if
+`max_retries` is 10. Raising the delay list raises the effective retry count.
+
+---
+
 ## Analytics Snapshot Backfill
 
 The migration `0012_sla_latest_backfill.py` populates the `is_latest` flag on existing SLA records. This flag allows the analytics layer to efficiently query only the most recent SLA result per outage without a subquery on every request.
