@@ -21,7 +21,7 @@ Each asset is analysed using the **STRIDE** model (Spoofing, Tampering, Repudiat
 | # | Threat | Category | Severity | Mitigation | Status |
 |---|--------|----------|----------|------------|--------|
 | A-1 | Unauthenticated callers invoke protected endpoints | Spoofing | High | JWT Bearer auth enforced on all protected routes; `app/core/security.py` validates token signature and expiry | ✅ Mitigated |
-| A-2 | Replay of captured JWT tokens | Spoofing | Medium | Short-lived access tokens (configurable `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`); token family revocation on refresh-token reuse | ✅ Mitigated |
+| A-2 | Replay of captured JWT tokens | Spoofing | Medium | Short-lived access tokens (configurable `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`); token family revocation on refresh-token reuse, enforced on the access path as well — a compromised **or deleted** family rejects the access token (#535) | ✅ Mitigated |
 | A-3 | Oversized request bodies causing memory exhaustion | DoS | Medium | `PayloadSizeMiddleware` rejects requests exceeding the configured byte limit with HTTP 413 | ✅ Mitigated |
 | A-4 | CORS misconfiguration exposes API to hostile origins | Info Disclosure | Medium | `ALLOWED_ORIGINS` validated at startup; startup fails if non-http/https origins are present | ✅ Mitigated |
 | A-5 | Mass-assignment via Pydantic models | Tampering | Medium | Pydantic models use explicit field declarations; no catch-all `**kwargs` in ORM writes | ✅ Mitigated |
