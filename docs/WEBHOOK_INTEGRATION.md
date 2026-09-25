@@ -370,6 +370,24 @@ Rotate a webhook secret without downtime using the `secret_version` field:
 
 The `X-Webhook-Signature-Version` header tells receivers which version was used to sign each delivery.
 
+### Grace window retention
+
+`POST /api/v1/webhooks/{webhook_id}/rotate-secret` keeps the outgoing secret
+valid for a grace window (`WEBHOOK_SECRET_GRACE_HOURS`, 24h by default) so a
+receiver can be updated with zero downtime. The previous secret is retained
+**only as a SHA-256 hash** in the webhook's `previous_secrets` history, and only
+for that window:
+
+- every rotation first drops history entries whose grace window has already
+  closed, then appends the outgoing secret;
+- a daily Celery sweep (`app.tasks.webhook_secret_housekeeping.expire_old_secrets`)
+  applies the same rule to webhooks that are not being rotated, so a webhook's
+  history never outlives its grace windows.
+
+Receivers must be able to accept the old secret for the full grace window after
+a rotation; after it closes the old secret is dropped and deliveries signed
+with it will be rejected.
+
 ---
 
 ## Retry Schedule

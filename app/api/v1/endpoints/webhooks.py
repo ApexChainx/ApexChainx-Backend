@@ -17,6 +17,7 @@ from app.services.audit_log import audit_log
 from app.services.formatters import canonical_json
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.utils.network_validation import validate_webhook_url
+from app.utils.secret_history import prune_expired_secrets
 
 router = APIRouter(
     prefix="/webhooks",
@@ -385,21 +386,30 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     The previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,
     enabling zero-downtime rotation for consumers.
 
+    #502: previous_secrets entries that are past their grace window are pruned
+    on every rotation, so the JSONB history stays bounded instead of growing for
+    the lifetime of the webhook.
+
     BE-034: Emits durable audit information with timestamp and actor context.
     """
-    from datetime import datetime
-
-    from app.core.config import settings
-
     webhook = _get_webhook_or_404(db, webhook_id)
 
     # Capture old metadata for audit trail
     old_secret_version = webhook.secret_version
     old_rotation_time = webhook.last_secret_rotation_at
 
+    now = datetime.now(UTC)
+
+    # #502: prune previous_secrets that fell out of their grace window before
+    # appending the new one. The daily housekeeping task also prunes, but a
+    # webhook that rotates rarely would otherwise carry every historical entry
+    # on every read for as long as it exists.
+    kept_previous, pruned_previous = prune_expired_secrets(webhook.previous_secrets, now)
+    if pruned_previous:
+        webhook.previous_secrets = kept_previous
+
     # Store old secret in previous_secrets with expiry
     if webhook.secret:
-        now = datetime.now(UTC)
         expires_at = now + timedelta(hours=settings.WEBHOOK_SECRET_GRACE_HOURS)
         previous_entry = {
             "hashed_secret": hash_token(webhook.secret),
@@ -414,7 +424,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     new_secret = secrets.token_hex(32)
     webhook.secret = new_secret
     webhook.secret_version = old_secret_version + 1
-    webhook.last_secret_rotation_at = datetime.now(UTC)
+    webhook.last_secret_rotation_at = now
 
     db.commit()
 
@@ -429,6 +439,8 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
             "previous_rotation_at": old_rotation_time.isoformat() if old_rotation_time else None,
             "grace_hours": settings.WEBHOOK_SECRET_GRACE_HOURS,
             "rotated_by": getattr(current_user, "email", "unknown"),
+            # #502: how much history the rotation had to drop to stay bounded
+            "pruned_previous_secrets": pruned_previous,
         },
     )
 
