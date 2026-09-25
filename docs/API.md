@@ -1571,6 +1571,33 @@ Response:
 
 ---
 
+## Webhook List Endpoint
+
+### GET `/api/v1/webhooks`
+
+Paginated list of registered webhooks. Query parameters: `is_active`, `name`
+(case-insensitive substring), `page` (1-indexed, default 1), `page_size`
+(default 20, max 100).
+
+```json
+{
+  "items": [{"id": "3f1b...-...", "name": "outage-webhook", "schema_version": "1"}],
+  "total": 45,
+  "page": 1,
+  "page_size": 20,
+  "returned": 1,
+  "has_more": true
+}
+```
+
+`total` is the count of rows matching the filters; `has_more` is `false` on the
+last page, so no extra request is needed to detect the end. Ordering is
+`created_at` descending with the id as tie-breaker. Secrets are never included.
+The body was a bare array before #554 — read `items` instead of iterating the
+response directly.
+
+---
+
 ## Webhook Update Endpoint
 
 ### PATCH `/api/v1/webhooks/{webhook_id}`
