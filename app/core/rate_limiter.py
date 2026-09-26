@@ -5,9 +5,10 @@ import logging
 import random
 from collections import defaultdict
 from time import time
-from typing import Dict, List
+from typing import ClassVar
 
-import redis.asyncio as redis
+import redis
+import redis.asyncio as redis_async
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
@@ -29,14 +30,27 @@ if count >= limit then
     return 0
 end
 redis.call('ZADD', key, now, member)
+-- Expiry is re-armed on every scored request, so a key lives at most `window`
+-- past the last hit and then removes itself (#544). `window` needs no safety
+-- margin: the ZREMRANGEBYSCORE above can never keep a member that is older than
+-- the window, so anything older is already useless, and a margin would only
+-- extend the key's life.
 redis.call('EXPIRE', key, window)
 return 1
 """
 
+# Once the in-process map holds more keys than this, `SimpleRateLimiter` sweeps
+# expired keys on the next request instead of waiting for each key to be
+# presented again. Sweeping is O(n), so it runs only when the map has actually
+# grown, and every request still prunes its own key first.
+SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD = 1024
+
 
 class SimpleRateLimiter:
+    _shared: ClassVar[dict[str, list[float]]] = defaultdict(list)
+
     def __init__(self) -> None:
-        self.requests: Dict[str, List[float]] = defaultdict(list)
+        self.requests = SimpleRateLimiter._shared
 
     def is_allowed(self, key: str, db: Session | None = None) -> bool:
         """Check the persistent ledger when an authentication session is available."""
@@ -51,18 +65,42 @@ class SimpleRateLimiter:
         now = time()
         window_start = now - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
+        if len(self.requests) > SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD:
+            self.cull_expired(now=now)
         if len(self.requests[key]) >= settings.AUTH_RATE_LIMIT_REQUESTS:
             return False
 
         self.requests[key].append(now)
         return True
 
+    def cull_expired(self, now: float | None = None) -> int:
+        """Drop keys whose every recorded hit is older than the window.
+
+        `is_allowed` only prunes the key it was handed, so a client that stops
+        appearing — an admin key used once, a scanner that rotates addresses —
+        kept its list in `_shared` for the lifetime of the process. Nothing else
+        reclaimed it: `_shared` is class-level state, so the entries outlive both
+        the limiter instance and the request (#544).
+
+        Returns:
+            Number of keys removed.
+        """
+        current = now if now is not None else time()
+        window_start = current - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
+        expired = [key for key, hits in self.requests.items() if not hits or hits[-1] <= window_start]
+        for key in expired:
+            del self.requests[key]
+        return len(expired)
+
 
 class RedisRateLimiter:
     def __init__(self) -> None:
-        self.fallback = SimpleRateLimiter()
+        self.fallback = _shared_fallback
         self.disabled_until: float | None = None
-        self.client = redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+        # Shared, lazily-connected clients (sync for sync callers, async for
+        # async callers). No event loop is created per request.
+        self.client = redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+        self.async_client = redis_async.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
     def _key_namespace(self, key: str) -> str:
         bounded_key = (
@@ -78,33 +116,31 @@ class RedisRateLimiter:
     def _trip_circuit(self) -> None:
         self.disabled_until = time() + 30
 
-    async def _is_allowed_async(self, key: str) -> bool:
+    def _lua_args(self, key: str) -> tuple[str, int, int, int, str]:
         if not settings.CELERY_BROKER_URL.strip():
             raise RedisError("CELERY_BROKER_URL is empty")
-
         encoded_key = self._key_namespace(key)
         now_ts = int(time())
-        member = f"{now_ts}-{random.random()}"
-        result = await self.client.eval(
-            RATE_LIMITER_LUA,
-            1,
+        member = f"{now_ts}-{random.random()}"  # nosec B311 - unique sorted-set member, not security
+        return (
             encoded_key,
             now_ts,
             settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
             settings.AUTH_RATE_LIMIT_REQUESTS,
             member,
         )
+
+    def _eval(self, key: str) -> bool:
+        encoded_key, now_ts, window, limit, member = self._lua_args(key)
+        result = self.client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
         return bool(result)
 
-    def _run_coroutine(self, coro):
-        try:
-            return asyncio.run(coro)
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            try:
-                return loop.run_until_complete(coro)
-            finally:
-                loop.close()
+    async def _eval_async(self, key: str) -> bool:
+        encoded_key, now_ts, window, limit, member = self._lua_args(key)
+        result = await self.async_client.eval(
+            RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member
+        )
+        return bool(result)
 
     def is_allowed(self, key: str, db: Session | None = None) -> bool:
         if db is not None:
@@ -143,8 +179,32 @@ class RedisRateLimiter:
             return self.fallback.is_allowed(key)
 
         try:
-            return self._run_coroutine(self._is_allowed_async(key))
-        except (RedisError, OSError, RuntimeError) as exc:
+            return self._eval(key)
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "Redis rate limiter unavailable, falling back to in-memory limiter: %s",
+                exc,
+            )
+            self._trip_circuit()
+            return self.fallback.is_allowed(key)
+        except Exception as exc:
+            logger.warning(
+                "Unexpected rate limiter error, falling back to in-memory limiter: %s",
+                exc,
+            )
+            self._trip_circuit()
+            return self.fallback.is_allowed(key)
+
+    async def is_allowed_async(self, key: str) -> bool:
+        if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
+            return self.fallback.is_allowed(key)
+
+        if self._is_circuit_open():
+            return self.fallback.is_allowed(key)
+
+        try:
+            return await self._eval_async(key)
+        except (RedisError, OSError) as exc:
             logger.warning(
                 "Redis rate limiter unavailable, falling back to in-memory limiter: %s",
                 exc,
@@ -160,6 +220,12 @@ class RedisRateLimiter:
             return self.fallback.is_allowed(key)
 
 
+# Shared fallback for RedisRateLimiter instances so that in-memory rate-limiting
+# state is consistent across all instances when Redis is unavailable.
+_shared_fallback = SimpleRateLimiter()
+
 rate_limiter = (
-    RedisRateLimiter() if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER else SimpleRateLimiter()
+    RedisRateLimiter()
+    if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER
+    else SimpleRateLimiter()
 )

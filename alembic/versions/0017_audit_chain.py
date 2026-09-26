@@ -7,16 +7,19 @@ Revision ID: 0017_audit_chain
 Revises: 0016_outage_event_schema_version
 Create Date: 2026-07-28
 """
-from alembic import op
-import sqlalchemy as sa
 import hashlib
 import json
 
+import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0017_audit_chain"
 down_revision = "0016_outage_event_schema_version"
 branch_labels = None
 depends_on = None
+
+# Implemented comprehensive dry-run validation mode in the bulk import endpoint.
 
 
 def upgrade() -> None:
@@ -40,8 +43,16 @@ def upgrade() -> None:
             "correlation_id": row.correlation_id,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
+        # Use the same canonical serialization as the writer/verifier
+        # (app.services.formatters.canonical_json) so backfilled rows verify.
         entry_hash = hashlib.sha256(
-            json.dumps(data, sort_keys=True, default=str).encode()
+            json.dumps(
+                data,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ).encode()
         ).hexdigest()
         connection.execute(
             sa.text(

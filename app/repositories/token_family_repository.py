@@ -1,6 +1,8 @@
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
+
+from app.models.orm.session import SessionORM
 from app.models.orm.token_family import TokenFamilyORM
 
 
@@ -20,23 +22,39 @@ class TokenFamilyRepository:
         self.db.refresh(family)
         return family
 
-    def get_family(self, family_id: str) -> Optional[TokenFamilyORM]:
+    def get_family(self, family_id: str) -> TokenFamilyORM | None:
         return self.db.query(TokenFamilyORM).filter(TokenFamilyORM.family_id == family_id).first()
 
-    def increment_sequence(self, family_id: str) -> Optional[TokenFamilyORM]:
+    def is_revoked(self, family_id: str) -> bool:
+        """Report whether a family can no longer authorize tokens.
+
+        A **missing** row counts as revoked, not as "unknown, allow": families are
+        only deleted by ``delete_families_by_email`` (logout-all) or
+        ``delete_orphaned_families`` (which only touches families that have no
+        sessions), so a session pointing at an absent family is a token whose
+        family was revoked while the session row outlived it (#535). Treating the
+        miss as "valid" is what let a token issued in the same tick as a
+        logout-all keep working on the access path while ``refresh`` rejected it.
+        """
+        family = self.get_family(family_id)
+        if family is None:
+            return True
+        return bool(family.compromised)
+
+    def increment_sequence(self, family_id: str) -> TokenFamilyORM | None:
         family = self.get_family(family_id)
         if family:
             family.current_sequence += 1
-            family.updated_at = datetime.utcnow()
+            family.updated_at = datetime.now(UTC)
             self.db.commit()
             self.db.refresh(family)
         return family
 
-    def compromise_family(self, family_id: str) -> Optional[TokenFamilyORM]:
+    def compromise_family(self, family_id: str) -> TokenFamilyORM | None:
         family = self.get_family(family_id)
         if family:
             family.compromised = True
-            family.updated_at = datetime.utcnow()
+            family.updated_at = datetime.now(UTC)
             self.db.commit()
             self.db.refresh(family)
         return family
@@ -48,3 +66,24 @@ class TokenFamilyRepository:
             self.db.delete(family)
         self.db.commit()
         return count
+
+    def delete_orphaned_families(self, batch_size: int = 1000) -> int:
+        """Delete token families that no longer have any sessions. Returns total count deleted."""
+        total_deleted = 0
+        while True:
+            orphaned = (
+                self.db.query(TokenFamilyORM)
+                .outerjoin(SessionORM, SessionORM.family_id == TokenFamilyORM.family_id)
+                .filter(SessionORM.family_id.is_(None))
+                .limit(batch_size)
+                .all()
+            )
+            if not orphaned:
+                break
+            for family in orphaned:
+                self.db.delete(family)
+            self.db.commit()
+            total_deleted += len(orphaned)
+            if len(orphaned) < batch_size:
+                break
+        return total_deleted

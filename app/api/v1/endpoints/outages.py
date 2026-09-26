@@ -4,20 +4,26 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints.sla import _invalidate_analytics_cache
+from app.core.config import settings
+from app.core.lock import ConcurrencyLockError, advisory_lock_nowait
+from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models import BulkOutageCreate, Outage, OutageCreate, OutageUpdate
 from app.models.enums import OutageStatus, Severity
-from app.models.outage import PaginatedOutages, ResolveOutageRequest
+from app.models.outage import ResolveOutageRequest
 from app.models.outage_dto import (
-    OutageSortDirection,
-    OutageSortField,
     ImportConsistency,
     ImportFieldError,
-    ImportRowResult,
     ImportResponse,
+    ImportRowResult,
+    OutageSortDirection,
+    OutageSortField,
 )
 from app.models.webhook import WebhookEvent
 from app.repositories.outage_event_repository import OutageEventRepository
@@ -27,11 +33,7 @@ from app.repositories.sla_repository import SLARepository
 from app.services.audit_log import audit_log
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.webhook_service import trigger_sla_violation_webhooks
-from app.utils.exporter import export_outages
-from app.api.v1.endpoints.sla import _invalidate_analytics_cache
-from app.core.security import require_engineer, require_admin
-from app.core.config import settings
-from app.core.lock import advisory_lock_nowait, ConcurrencyLockError
+from app.utils.exporter import export_outages, stream_export_csv, stream_export_json
 
 router = APIRouter()
 
@@ -48,42 +50,56 @@ def export_outages_endpoint(
     db: Session = Depends(get_db),
 ):
     repo = OutageRepository(db)
-    data = repo.list_filtered(
+    fmt = format.lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
+
+    outage_iter = repo.iter_filtered(
         severity=severity,
         status=status,
         search=search,
         start_date=start_date,
         end_date=end_date,
     )
-    try:
-        exported = export_outages(data, format)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if format == "csv":
-        return Response(
-            content=exported,
+    if fmt == "csv":
+        return StreamingResponse(
+            stream_export_csv(outage_iter),
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=outages.csv"},
         )
-    return exported
+    return StreamingResponse(
+        stream_export_json(outage_iter),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=outages.json"},
+    )
 
 
 @router.get("/violations")
-def list_violations(current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def list_violations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
     repo = OutageRepository(db)
-    return repo.list_violations()
+    return repo.list_violations(page=page, page_size=page_size)
 
 
-@router.get("/", response_model=PaginatedOutages)
+@router.get("/")
 def list_outages(
     severity: Severity | None = None,
     status: OutageStatus | None = None,
     search: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(
+        default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
+    ),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    cursor: str | None = Query(
+        default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
+    ),
+    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
     sort_by: OutageSortField = Query(
         default=OutageSortField.detected_at,
         description="Sort field (enum). Supported: detected_at, site_name, severity, status, id. Invalid values rejected with 422.",
@@ -92,10 +108,22 @@ def list_outages(
         default=OutageSortDirection.desc,
         description="Sort direction (enum). Supported: asc, desc. Invalid values rejected with 422. Default: desc.",
     ),
+    include_total: bool = Query(
+        default=True,
+        description="Include total count in response. Set to false for faster pagination when only page navigation is needed.",
+    ),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """List outages with optional filtering, search, and sorting.
+    """List outages with optional filtering, search, sorting, and pagination.
+
+    Supports both offset-based (page/page_size) and cursor-based (cursor/limit) pagination.
+    When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
+
+    **Cursor Pagination (BE-039)**
+    - Pass ``cursor`` from the previous response's ``next_cursor`` field.
+    - O(1) per page — stable under concurrent writes.
+    - Returns ``{items, next_cursor, has_more}``.
 
     **Search (BE-011)**
     - `search`: case-insensitive substring match across `id`, `site_id`, and `site_name`
@@ -114,6 +142,20 @@ def list_outages(
     - Invalid sort values: rejected with 422 validation error
     """
     repo = OutageRepository(db)
+
+    if cursor is not None:
+        return repo.list_cursor(
+            severity=severity,
+            status=status,
+            search=search,
+            start_date=start_date,
+            end_date=end_date,
+            cursor=cursor,
+            limit=limit,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
+
     return repo.list(
         severity=severity,
         status=status,
@@ -124,6 +166,7 @@ def list_outages(
         page_size=page_size,
         sort_by=sort_by,
         sort_direction=sort_direction,
+        include_total=include_total,
     )
 
 
@@ -153,7 +196,9 @@ def create_outage(payload: OutageCreate, current_user=Depends(require_engineer),
 
 
 @router.post("/bulk", response_model=dict)
-def bulk_create_outages(payload: BulkOutageCreate, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def bulk_create_outages(
+    payload: BulkOutageCreate, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     repo = OutageRepository(db)
     items: list[Outage] = []
     persisted_count = 0
@@ -171,7 +216,11 @@ def bulk_create_outages(payload: BulkOutageCreate, current_user=Depends(require_
 # Duplicate detection is explicit and consistent for imports:
 # - same site_name, detected_at, description, and optional site_id are treated as the same outage
 # - duplicate rows are reported as duplicate and do not create additional persisted rows
-@router.post("/import", response_model=ImportResponse, summary="Bulk import outages from CSV or JSON file with optional dry-run validation and explicit consistency mode")
+@router.post(
+    "/import",
+    response_model=ImportResponse,
+    summary="Bulk import outages from CSV or JSON file with optional dry-run validation and explicit consistency mode",
+)
 async def import_outages(
     file: UploadFile = File(...),
     dry_run: bool = Query(
@@ -204,25 +253,61 @@ async def import_outages(
     content = b"".join(chunks)
 
     # --- parse into a row iterator (avoids holding two full copies in memory) ---
-    if filename.endswith(".json"):
+    # Sniff actual content type from first non-whitespace byte
+    stripped = content.lstrip()
+    actual_is_json = stripped.startswith((b"{", b"["))
+    actual_is_csv = not actual_is_json and len(stripped) > 0
+
+    declared_json = filename.endswith(".json")
+    declared_csv = filename.endswith(".csv")
+
+    # Detect mislabeled files
+    if declared_json and not actual_is_json:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File appears to be CSV or unsupported format, not JSON as declared by filename '{filename}'",
+        )
+    if declared_csv and actual_is_json:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File appears to be JSON, not CSV as declared by filename '{filename}'",
+        )
+
+    if actual_is_json:
         try:
             rows = json.loads(content)
             if not isinstance(rows, list):
                 raise HTTPException(status_code=400, detail="JSON file must contain a list of outage objects")
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
-    elif filename.endswith(".csv"):
+    elif declared_csv:
         try:
-            rows = list(csv.DictReader(io.StringIO(content.decode("utf-8"))))
-        except Exception as exc:
+            # utf-8-sig strips BOM automatically (handles Excel on Windows exports)
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                # Fallback to latin-1 for Windows-1252 / ISO-8859-1 exports
+                text = content.decode("latin-1")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"CSV encoding not supported. Please re-save as UTF-8: {exc}",
+                ) from exc
+        try:
+            rows = list(csv.DictReader(io.StringIO(text)))
+        except csv.Error as exc:
             raise HTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
     else:
-        raise HTTPException(status_code=400, detail="Unsupported file format. Use .json or .csv")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. File '{filename}' does not appear to be JSON or CSV.",
+        )
 
     if len(rows) > settings.MAX_BULK_OUTAGES_COUNT:
         raise HTTPException(
-            status_code=400,
-            detail=f"Too many rows in file. Maximum allowed is {settings.MAX_BULK_OUTAGES_COUNT}."
+            status_code=400, detail=f"Too many rows in file. Maximum allowed is {settings.MAX_BULK_OUTAGES_COUNT}."
         )
 
     repo = OutageRepository(db)
@@ -238,21 +323,25 @@ async def import_outages(
                 payload = OutageCreate(**row)  # Full field validation via Pydantic
                 duplicate = repo.check_duplicate(payload)  # Duplicate detection same as live import
                 if duplicate:
-                    row_outcomes.append(ImportRowResult(
-                        row=i, 
-                        id=payload.id, 
-                        status="ok",
-                        duplicate=True,
-                        existing_id=duplicate.id,
-                    ))
+                    row_outcomes.append(
+                        ImportRowResult(
+                            row=i,
+                            id=payload.id,
+                            status="ok",
+                            duplicate=True,
+                            existing_id=duplicate.id,
+                        )
+                    )
                 else:
-                    row_outcomes.append(ImportRowResult(
-                        row=i, 
-                        id=payload.id, 
-                        status="ok",
-                        duplicate=False,
-                    ))
-            except Exception as exc:
+                    row_outcomes.append(
+                        ImportRowResult(
+                            row=i,
+                            id=payload.id,
+                            status="ok",
+                            duplicate=False,
+                        )
+                    )
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 row_outcomes.append(_row_error(i, row, exc))
     elif consistency == ImportConsistency.atomic:
         parsed: list[OutageCreate] = []
@@ -260,12 +349,16 @@ async def import_outages(
             try:
                 parsed.append(OutageCreate(**row))
                 row_outcomes.append(ImportRowResult(row=i, id=row.get("id"), status="ok"))
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 row_outcomes.append(_row_error(i, row, exc))
 
         if any(r.status == "error" for r in row_outcomes):
             return _import_response("import", consistency, len(rows), 0, row_outcomes)
 
+        # create_or_get_existing commits per row, so a mid-batch failure would
+        # otherwise leave earlier rows persisted despite "atomic" mode (#304).
+        # Track and compensate by deleting anything this batch persisted.
+        rows_persisted_this_batch: list[str] = []
         try:
             for i, payload in enumerate(parsed):
                 created, persisted = repo.create_or_get_existing(payload)
@@ -273,51 +366,67 @@ async def import_outages(
                 row_outcomes[i].persisted = persisted
                 if persisted:
                     persisted_count += 1
+                    rows_persisted_this_batch.append(created.id)
                 else:
                     row_outcomes[i].duplicate = True
                     row_outcomes[i].existing_id = created.id
             db.commit()
+        except (IntegrityError, SQLAlchemyError) as exc:
+            db.rollback()
+            for outage_id in rows_persisted_this_batch:
+                repo.delete(outage_id)
+            raise HTTPException(status_code=500, detail=f"Transaction failed, batch rolled back: {exc}") from exc
         except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}") from exc
+            for outage_id in rows_persisted_this_batch:
+                repo.delete(outage_id)
+            raise HTTPException(status_code=500, detail=f"Unexpected import error, batch rolled back: {exc}") from exc
     else:
         for i, row in enumerate(rows):
             try:
                 payload = OutageCreate(**row)
                 created, persisted = repo.create_or_get_existing(payload)
-                row_outcomes.append(ImportRowResult(
-                    row=i,
-                    id=payload.id,
-                    status="ok",
-                    outage_id=created.id,
-                    persisted=persisted,
-                    duplicate=not persisted,
-                    existing_id=created.id if not persisted else None,
-                ))
+                row_outcomes.append(
+                    ImportRowResult(
+                        row=i,
+                        id=payload.id,
+                        status="ok",
+                        outage_id=created.id,
+                        persisted=persisted,
+                        duplicate=not persisted,
+                        existing_id=created.id if not persisted else None,
+                    )
+                )
                 if persisted:
                     persisted_count += 1
-            except Exception as exc:
+            except (ValidationError, ValueError, TypeError, KeyError) as exc:
                 db.rollback()
                 row_outcomes.append(_row_error(i, row, exc))
 
     return _import_response("dry_run" if dry_run else "import", consistency, len(rows), persisted_count, row_outcomes)
+
+
 def _row_error(index: int, raw_row: dict, exc: Exception) -> ImportRowResult:
     """Return a stable machine-readable ImportRowResult for a failed row."""
     errors: list[ImportFieldError] = []
     if hasattr(exc, "errors"):
         for e in exc.errors():  # type: ignore[union-attr]
-            errors.append(ImportFieldError(
-                field=".".join(str(loc) for loc in e["loc"]) if e.get("loc") else None,
-                type=e.get("type"),
-                message=e.get("msg", str(e)),
-            ))
+            errors.append(
+                ImportFieldError(
+                    field=".".join(str(loc) for loc in e["loc"]) if e.get("loc") else None,
+                    type=e.get("type"),
+                    message=e.get("msg", str(e)),
+                )
+            )
     else:
         errors.append(ImportFieldError(field=None, type=type(exc).__name__, message=str(exc)))
 
     return ImportRowResult(row=index, id=raw_row.get("id"), status="error", errors=errors)
 
 
-def _import_response(mode: str, consistency: ImportConsistency, total: int, persisted: int, outcomes: list[ImportRowResult]) -> ImportResponse:
+def _import_response(
+    mode: str, consistency: ImportConsistency, total: int, persisted: int, outcomes: list[ImportRowResult]
+) -> ImportResponse:
     error_rows = [r for r in outcomes if r.status == "error"]
     return ImportResponse(
         mode=mode,
@@ -332,7 +441,9 @@ def _import_response(mode: str, consistency: ImportConsistency, total: int, pers
 
 
 @router.put("/{outage_id}", response_model=Outage)
-def update_outage(outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def update_outage(
+    outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     repo = OutageRepository(db)
     existing = repo.get(outage_id)
     if not existing:
@@ -347,9 +458,11 @@ def update_outage(outage_id: str, payload: OutageUpdate, current_user=Depends(re
 
 
 @router.patch("/{outage_id}", response_model=Outage)
-def patch_outage(outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def patch_outage(
+    outage_id: str, payload: OutageUpdate, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     """Partially update an outage with status transition validation (BE-013).
-    
+
     Enforced transitions:
     - open -> open (idempotent)
     - open -> resolved (permitted)
@@ -375,31 +488,44 @@ def delete_outage(outage_id: str, current_user=Depends(require_admin), db: Sessi
     existing = repo.get(outage_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Outage not found")
-
-    repo.delete(outage_id)
+    try:
+        repo.delete(outage_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"message": "Outage deleted successfully"}
 
 
 @router.post("/{outage_id}/resolve")
-def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+def resolve_outage(
+    outage_id: str, payload: ResolveOutageRequest, current_user=Depends(require_engineer), db: Session = Depends(get_db)
+):
     """Resolve an outage, compute SLA, and create payment (BE-013).
-    
+
     Status transition validation:
     - open -> resolved (permitted)
     - resolved -> resolved (idempotent if mttr_minutes matches)
     - Other transitions: 400 Bad Request
-    
+
     Concurrency protection (BE-022):
     - Uses PostgreSQL advisory locks to prevent duplicate/concurrent resolutions
     - Returns 409 Conflict if another resolution is already in progress
-    
+
     Also calculates SLA metrics and triggers webhook notifications.
     """
     repo = OutageRepository(db)
-    
+
     # Acquire advisory lock to prevent concurrent resolutions
     try:
         with advisory_lock_nowait(db, f"resolve:{outage_id}"):
+            # Short-circuit replays: if this is already resolved with the same
+            # MTTR, skip recompute/payment/webhook side effects (#302).
+            existing = repo.get(outage_id)
+            already_resolved = (
+                existing is not None
+                and existing.status == "resolved"
+                and existing.mttr_minutes == payload.mttr_minutes
+            )
+
             try:
                 outage = repo.resolve(outage_id, payload.mttr_minutes)
             except ValueError as exc:
@@ -407,15 +533,26 @@ def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=D
             if not outage:
                 raise HTTPException(status_code=404, detail="Outage not found")
 
+            if already_resolved:
+                stored_sla = SLARepository(db).get_by_outage(outage.id)
+                payments = PaymentRepository(db).list_by_outage(outage.id)
+                payment = payments[-1] if payments else None
+                return {"outage": outage, "sla": stored_sla, "payment": payment}
+
             audit_log.log("outage_resolved", {"id": outage.id, "mttr": payload.mttr_minutes})
             OutageEventRepository(db).record(outage_id, "resolved", {"mttr_minutes": payload.mttr_minutes})
 
+            # Pass timestamps for compute_hash idempotency (#35)
+            started_at = outage.detected_at.isoformat() if outage.detected_at else ""
+            resolved_at = outage.resolved_at.isoformat() if outage.resolved_at else ""
             raw_contract_result = SLAContractAdapter.calculate_sla(
                 outage_id=outage.id,
                 severity=outage.severity,
                 mttr_minutes=payload.mttr_minutes,
                 policy_version="1.0",
                 threshold_source="config",
+                started_at=started_at,
+                resolved_at=resolved_at,
             )
             sla = translate_contract_result(raw_contract_result)
 
@@ -423,14 +560,25 @@ def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=D
             stored_sla = sla_repo.create_if_changed(sla)
             _invalidate_analytics_cache()
             OutageEventRepository(db).record(outage_id, "sla_computed", {"status": stored_sla.status})
+            # Update denormalized sla_status on the outage row
+            outage_orm = repo.get_orm(outage_id)
+            if outage_orm:
+                outage_orm.sla_status = {
+                    "status": stored_sla.status,
+                    "mttr_minutes": stored_sla.mttr_minutes,
+                    "threshold_minutes": stored_sla.threshold_minutes,
+                    "time_remaining_minutes": None,
+                }
+                db.commit()
+            outage = repo.get(outage_id)
             payment_repo = PaymentRepository(db)
             payment = payment_repo.create_for_sla_result(outage.id, stored_sla)
-            webhook_event = WebhookEvent.SLA_VIOLATION if stored_sla.status == "violated" else WebhookEvent.SLA_RESOLVED
-            trigger_sla_violation_webhooks(
-                db,
-                sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
-                event=webhook_event,
-            )
+            if stored_sla.status == "violated":
+                trigger_sla_violation_webhooks(
+                    db,
+                    sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
+                    event=WebhookEvent.SLA_VIOLATION,
+                )
 
             return {"outage": outage, "sla": stored_sla, "payment": payment}
     except ConcurrencyLockError as exc:
@@ -440,15 +588,18 @@ def resolve_outage(outage_id: str, payload: ResolveOutageRequest, current_user=D
 @router.post("/{outage_id}/recompute-sla")
 def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     """Recompute SLA for a resolved outage (BE-013, BE-009).
-    
+
+    Idempotent: uses compute_hash to detect duplicate recomputes (#35).
+    Re-running with unchanged inputs returns the prior row.
+
     Status validation:
     - Only 'resolved' outages can have SLA recomputed
     - Returns 400 if outage not resolved
-    
+
     Concurrency protection (BE-022):
     - Uses PostgreSQL advisory locks to prevent duplicate/concurrent recomputations
     - Returns 409 Conflict if another recomputation is already in progress
-    
+
     Authorization: requires engineer role
     """
     repo = OutageRepository(db)
@@ -461,34 +612,51 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
 
     # Acquire advisory lock to prevent concurrent recomputations
     try:
-        with advisory_lock_nowait(db, f"recompute:{outage_id}"):
+        with advisory_lock_nowait(db, f"sla_recompute:{outage_id}"):
             orm = repo.get_orm_locked(outage_id)
+
+            # Build compute_hash inputs from outage timestamps for idempotency (#35)
+            started_at = orm.detected_at.isoformat() if orm.detected_at else ""
+            resolved_at = orm.resolved_at.isoformat() if orm.resolved_at else ""
+
             raw_contract_result = SLAContractAdapter.calculate_sla(
                 outage_id=outage.id,
                 severity=outage.severity,
                 mttr_minutes=orm.mttr_minutes,
                 policy_version="1.0",
                 threshold_source="config",
+                started_at=started_at,
+                resolved_at=resolved_at,
             )
             sla = translate_contract_result(raw_contract_result)
 
             sla_repo = SLARepository(db)
             stored_sla = sla_repo.create_if_changed(sla)
             _invalidate_analytics_cache()
+            # Update denormalized sla_status on the outage row
+            outage_orm_recompute = repo.get_orm(outage_id)
+            if outage_orm_recompute:
+                outage_orm_recompute.sla_status = {
+                    "status": stored_sla.status,
+                    "mttr_minutes": stored_sla.mttr_minutes,
+                    "threshold_minutes": stored_sla.threshold_minutes,
+                    "time_remaining_minutes": None,
+                }
+                db.commit()
             payment_repo = PaymentRepository(db)
             payment = payment_repo.create_for_sla_result(outage.id, stored_sla)
-            webhook_event = WebhookEvent.SLA_VIOLATION if stored_sla.status == "violated" else WebhookEvent.SLA_RESOLVED
-            trigger_sla_violation_webhooks(
-                db,
-                sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
-                event=webhook_event,
-            )
+            if stored_sla.status == "violated":
+                trigger_sla_violation_webhooks(
+                    db,
+                    sla_data={"outage_id": outage.id, "sla": stored_sla.model_dump(), "payment": payment.model_dump()},
+                    event=WebhookEvent.SLA_VIOLATION,
+                )
 
             audit_log.log("sla_recomputed", {"id": outage.id})
             OutageEventRepository(db).record(outage_id, "sla_recomputed", {"status": stored_sla.status})
             return {"sla": stored_sla, "payment": payment}
-    except ConcurrencyLockError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConcurrencyLockError:
+        raise HTTPException(status_code=409, detail="SLA recomputation already in progress")
 
 
 @router.get("/{outage_id}/timeline")

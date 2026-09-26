@@ -1,11 +1,11 @@
 import json
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from app.models.orm.outage_event import OutageEventORM, CURRENT_SCHEMA_VERSION
+from app.models.orm.outage_event import CURRENT_SCHEMA_VERSION, OutageEventORM
 from app.models.outage_event import validate_event_detail
 
 
@@ -13,7 +13,7 @@ class OutageEventRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def record(self, outage_id: str, event_type: str, detail: Optional[Dict[str, Any]] = None) -> OutageEventORM:
+    def record(self, outage_id: str, event_type: str, detail: dict[str, Any] | None = None) -> OutageEventORM:
         detail = validate_event_detail(event_type, detail)
         orm = OutageEventORM(
             id=f"evt_{uuid4().hex[:12]}",
@@ -21,26 +21,46 @@ class OutageEventRepository:
             event_type=event_type,
             detail=json.dumps(detail) if detail else None,
             schema_version=CURRENT_SCHEMA_VERSION,
-            occurred_at=datetime.utcnow(),
+            occurred_at=datetime.now(UTC),
         )
         self.db.add(orm)
         self.db.commit()
         self.db.refresh(orm)
         return orm
 
+    def delete_events_older_than(self, cutoff: datetime, batch_size: int = 1000) -> int:
+        """Delete outage timeline events older than the cutoff in batches. Returns total deleted."""
+        total_deleted = 0
+        while True:
+            old_ids = [
+                row[0]
+                for row in self.db.query(OutageEventORM.id)
+                .filter(OutageEventORM.occurred_at < cutoff)
+                .limit(batch_size)
+                .all()
+            ]
+            if not old_ids:
+                break
+            self.db.query(OutageEventORM).filter(OutageEventORM.id.in_(old_ids)).delete(
+                synchronize_session=False
+            )
+            self.db.commit()
+            total_deleted += len(old_ids)
+            if len(old_ids) < batch_size:
+                break
+        return total_deleted
+
+    # Add bulk Payments state-transition endpoint with all-or-nothing semantics
     def list_for_outage(
         self,
         outage_id: str,
-        event_type: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        event_type: str | None = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> Dict[str, Any]:
-        query = (
-            self.db.query(OutageEventORM)
-            .filter(OutageEventORM.outage_id == outage_id)
-        )
+    ) -> dict[str, Any]:
+        query = self.db.query(OutageEventORM).filter(OutageEventORM.outage_id == outage_id)
         if event_type:
             query = query.filter(OutageEventORM.event_type == event_type)
         if start_date:

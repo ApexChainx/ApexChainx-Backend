@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum as PyEnum
 
 from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text
@@ -26,7 +26,7 @@ class SLADispute(Base):
     # Dispute metadata
     flagged_by = Column(String(255), nullable=False)
     dispute_reason = Column(Text, nullable=False)
-    flagged_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    flagged_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Resolution metadata
     status = Column(Enum(DisputeStatus), default=DisputeStatus.PENDING, nullable=False)
@@ -48,6 +48,6 @@ class DisputeAuditLog(Base):
     action = Column(String(50), nullable=False)  # e.g. "flagged", "resolved", "rejected"
     actor = Column(String(255), nullable=False)
     notes = Column(Text, nullable=True)
-    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    recorded_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     dispute = relationship("SLADispute", back_populates="audit_logs")

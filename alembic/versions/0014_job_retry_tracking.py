@@ -7,9 +7,9 @@ Create Date: 2026-04-29
 Adds retry_count, max_retries, and last_retried_at columns to the jobs table
 to support intentional job retry functionality with configurable retry policies.
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = '0014_job_retry_tracking'

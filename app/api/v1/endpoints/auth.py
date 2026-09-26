@@ -1,24 +1,28 @@
-from fastapi import APIRouter, Header, HTTPException, status, Depends, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.rate_limiter import rate_limiter
+from app.core.security import get_current_user, hash_token, require_admin
+from app.db.session import get_db
 from app.models.auth import (
+    AdminCreateUserRequest,
     AuthLogoutResponse,
     AuthSessionResponse,
     AuthUser,
     LoginRequest,
+    LogoutAllSessionsResponse,
     ProfileUpdateRequest,
     RegisterRequest,
-    SessionInventoryResponse,
     SessionInfo,
-    LogoutAllSessionsResponse,
+    SessionInventoryResponse,
 )
-from app.services.auth_store import AuthStore
-from app.db.session import get_db
-from app.core.security import get_current_user, require_admin, hash_token
-from app.core.rate_limiter import rate_limiter
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
-from app.utils.correlation import get_correlation_id
+from app.services.auth_store import AuthStore
+from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.token_revocation import revoke
+from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
 router = APIRouter()
 
@@ -34,20 +38,30 @@ Auth Rate Limiting and Lockout Strategy:
    - Failed attempts reset on successful login
    - Refresh tokens are also blocked for locked accounts
 
-3. Audit Logging:
+3. Credential-Stuffing Detection (#507):
+   - Password attempts are bucketed by a 4-character password prefix hash
+   - Lockout scope is (IP, account) — an IP-wide signal is recorded for
+     alerting only, so one attacker behind a shared NAT cannot lock out every
+     legitimate user on that address
+   - A separate account-scoped counter catches a distributed spray on a single
+     account, which no per-IP heuristic can see
+   - Lockout length is AUTH_LOCKOUT_DURATION_MINUTES * AUTH_STUFFING_LOCKOUT_MULTIPLIER,
+     capped at AUTH_STUFFING_LOCKOUT_MAX_MINUTES
+
+4. Audit Logging:
    - All failed attempts are logged
-   - Account lockouts are logged with duration
+   - Account lockouts are logged with duration and the scope that triggered them
 
 Configuration (in app.core.config):
 - AUTH_MAX_FAILED_ATTEMPTS: 5
 - AUTH_LOCKOUT_DURATION_MINUTES: 15
 - AUTH_RATE_LIMIT_REQUESTS: 10
 - AUTH_RATE_LIMIT_WINDOW_SECONDS: 300
+- AUTH_LOCKOUT_ENTROPY_THRESHOLD: 20
+- AUTH_ACCOUNT_STUFFING_ENTROPY_THRESHOLD: 20
+- AUTH_STUFFING_LOCKOUT_MULTIPLIER: 4
+- AUTH_STUFFING_LOCKOUT_MAX_MINUTES: 60
 """
-
-
-from app.core.config import settings
-from app.services.credential_stuffing_detector import credential_stuffing_detector
 
 
 def _get_client_ip(request: Request) -> str:
@@ -103,6 +117,30 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
+def admin_create_user(
+    payload: AdminCreateUserRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin-only endpoint to create a user with an explicit role.
+
+    Every creation is audit-logged with the approving admin's identity.
+    """
+    try:
+        return AuthStore.admin_create_user(
+            email=payload.email,
+            password=payload.password,
+            full_name=payload.full_name,
+            role=payload.role,
+            actor_id=admin_user.id,
+            actor_email=admin_user.email,
+            db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/login", response_model=AuthSessionResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.services.audit_log import audit_log
@@ -130,16 +168,54 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
         raise HTTPException(
             status_code=429,
-            detail=f"Too many login attempts from this IP. Account locked for {lockout_minutes} minutes.",
+            detail=(
+                f"Too many login attempts for this account from your address. "
+                f"Account locked for {lockout_minutes} minutes."
+            ),
+        )
+
+    if credential_stuffing_detector.is_account_locked(account):
+        # Distributed spray: each source IP stays under the pair threshold, so
+        # only the account-scoped counter sees it.
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "scope": "account",
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(account),
+                "action": f"account_locked_{lockout_minutes}_minutes",
+            },
         )
     
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
         raise HTTPException(
-            status_code=429, 
-            detail="Too many login attempts from this IP. Please try again later."
+            status_code=429,
+            detail=(
+                f"Too many login attempts for this account. "
+                f"Account locked for {lockout_minutes} minutes."
+            ),
         )
-    
+
+    if credential_stuffing_detector.is_ip_flagged(client_ip):
+        # Alerting only: a shared address spraying many accounts is worth a
+        # signal, but must not deny service to the innocent accounts behind it.
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "ip": client_ip,
+                "scope": "ip",
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(client_ip),
+                "action": "ip_flagged",
+            },
+        )
+
+    # Rate limit by IP
+    if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
+        raise HTTPException(status_code=429, detail="Too many login attempts from this IP. Please try again later.")
+
     try:
         return AuthStore.login(payload, db=db)
     except ValueError as exc:
@@ -149,7 +225,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 @router.post("/refresh", response_model=AuthSessionResponse)
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}", db=db):
         raise HTTPException(
@@ -178,6 +254,12 @@ def update_profile(
     if payload.full_name is None and payload.stellar_wallet is None:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
 
+    if payload.stellar_wallet is not None:
+        try:
+            normalize_wallet(payload.stellar_wallet)
+        except WalletAddressError as exc:
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+
     repo = UserRepository(db)
     updated = repo.update_profile(
         user_id=current_user.id,
@@ -188,16 +270,17 @@ def update_profile(
         raise HTTPException(status_code=404, detail="User not found")
 
     from app.services.audit_log import audit_log
+
     changed = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    audit_log.log_event(db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())})
+    audit_log.log_event(
+        db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())}
+    )
 
     return user_orm_to_pydantic(updated)
 
 
 @router.post("/logout", response_model=AuthLogoutResponse)
-def logout(
-    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
-):
+def logout(authorization: str | None = Header(default=None), db: Session = Depends(get_db)):
     token = _extract_bearer_token(authorization)
     AuthStore.logout(token, db=db)
     return AuthLogoutResponse(message="Logged out successfully")
@@ -210,10 +293,10 @@ def get_session_inventory(
 ):
     """Get all active sessions for the current user."""
     sessions = AuthStore.get_user_sessions(current_user.email, db=db)
-    
+
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
-    
+
     return SessionInventoryResponse(
         sessions=session_infos,
         total_count=len(session_infos),
@@ -229,10 +312,10 @@ def get_admin_session_inventory(
 ):
     """Admin endpoint to get all sessions for a specific user."""
     sessions = AuthStore.get_user_sessions(email, db=db)
-    
+
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
-    
+
     return SessionInventoryResponse(
         sessions=session_infos,
         total_count=len(session_infos),
@@ -272,6 +355,150 @@ def auth_ping():
     return {"message": "auth ok"}
 
 
+# --------------------------------------------------------------------------- #
+# GDPR Endpoints                                                              #
+# --------------------------------------------------------------------------- #
+
+
+class GDPREraseResponse(BaseModel):
+    status: str
+    job_id: str
+    message: str
+
+
+@router.post("/me/export")
+def export_my_data(
+    current_user: AuthUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Export all personal data for the authenticated user (GDPR compliance).
+
+    Returns a streaming gzip tarball containing user data and audit log entries.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from app.services.gdpr import export_user_data
+
+    repo = UserRepository(db)
+    user_orm = repo.get_by_id(current_user.id)
+    if not user_orm:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    tarball_bytes = export_user_data(db, user_orm)
+
+    def _iter():
+        yield tarball_bytes
+
+    return StreamingResponse(
+        _iter(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": "attachment; filename=gdpr_export.tar.gz"},
+    )
+
+
+@router.post("/me/erase", response_model=GDPREraseResponse, status_code=status.HTTP_202_ACCEPTED)
+def erase_my_data(
+    current_user: AuthUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete the authenticated user account (GDPR right-to-erasure).
+
+    Personal data is pseudonymised and all active sessions are revoked.
+    Returns 202 Accepted with a job id for tracking.
+    """
+    from app.services.gdpr import erase_user_data
+
+    repo = UserRepository(db)
+    user_orm = repo.get_by_id(current_user.id)
+    if not user_orm:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    result = erase_user_data(db, user_orm)
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# Impersonation Endpoint                                                      #
+# --------------------------------------------------------------------------- #
+
+
+class ImpersonateRequest(BaseModel):
+    user_id: str
+    reason: str = Field(..., min_length=1, description="Mandatory reason for impersonation")
+
+
+class ImpersonateResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = 900  # 15 minutes for impersonation tokens
+    acting_as: str
+
+
+@router.post("/impersonate", response_model=ImpersonateResponse)
+def impersonate_user(
+    payload: ImpersonateRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint to impersonate a non-admin user (audit-logged).
+
+    Returns a short-lived JWT (15 min) with an ``act`` claim set to the
+    admin's id so that every action performed during impersonation is
+    attributable.
+
+    Acceptance criteria:
+    - Cannot impersonate another admin
+    - Reason is mandatory and recorded in the audit log
+    """
+    from app.services.audit_log import audit_log
+
+    repo = UserRepository(db)
+    target = repo.get_by_id(payload.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Target user not found")
+
+    if target.role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot impersonate another admin user",
+        )
+
+    token = _generate_impersonation_token(target, admin_user)
+
+    audit_log.log_event(
+        db,
+        "impersonation_started",
+        email=admin_user.email,
+        actor_id=admin_user.id,
+        details={
+            "target_user_id": target.id,
+            "target_email": target.email,
+            "reason": payload.reason,
+        },
+    )
+
+    return ImpersonateResponse(access_token=token, acting_as=target.id)
+
+
+def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
+    """Generate a short-lived impersonation JWT using PyJWT."""
+    import time
+    import jwt
+    from app.core.config import settings as app_settings
+
+    now = int(time.time())
+    payload_dict = {
+        "sub": target_orm.id,
+        "email": target_orm.email,
+        "act": admin_user.id,
+        "iat": now,
+        "exp": now + 900,
+        "scope": "impersonate",
+    }
+    secret = app_settings.SECRET_KEY or "apexchainx-dev-secret"
+    return jwt.encode(payload_dict, secret, algorithm="HS256")
+
+
 class RevokeResponse(BaseModel):
     message: str
 
@@ -284,10 +511,11 @@ def revoke_token(
 ):
     """Revoke the current access token. Subsequent requests with this token
     will receive 401 'Token revoked' response."""
-    from app.services.token_revocation import revoke
     from app.services.auth_store import TOKEN_TTL_SECONDS
+
     token = _extract_bearer_token(authorization)
     revoke(hash_token(token), TOKEN_TTL_SECONDS)
     from app.services.audit_log import audit_log
+
     audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
     return RevokeResponse(message="Token revoked successfully")

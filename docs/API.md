@@ -18,6 +18,49 @@ Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (
 - [Error Handling](#error-handling)
 
 - [CORS](#cors)
+- [API Versioning](#api-versioning)
+
+---
+
+## API Versioning
+
+Every response carries `X-API-Version` (the version this deployment serves) and
+`X-Supported-API-Versions` (the range this deployment can serve, oldest first).
+
+Clients may pin a version by sending the `X-API-Version` request header:
+
+| Request header          | Result                                                          |
+|-------------------------|-----------------------------------------------------------------|
+| absent / empty          | Served as "latest" — no negotiation, fully backwards compatible |
+| `1.0.0` (in range)      | Served normally, version echoed back                             |
+| `2.0.0` (future)        | `426 Upgrade Required`, `error_code: api_version_unsupported`    |
+| `0.9.0` (retired)       | `426 Upgrade Required`, `error_code: api_version_unsupported`    |
+| `banana` (unparseable)  | `400 Bad Request`, `error_code: api_version_unsupported`         |
+
+The supported range is configurable through `API_VERSION_MIN_SUPPORTED` and
+`API_VERSION_MAX_SUPPORTED`. The deployment refuses to start if `VERSION` falls
+outside the advertised range, so a mis-pinned range cannot silently reject every
+client.
+
+Rejection responses are RFC 7807 problem documents and repeat the negotiation
+metadata so a client can self-correct without a second request:
+
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/426",
+  "title": "Unsupported API Version",
+  "status": 426,
+  "detail": "API version 2.0.0 is not available on this deployment; ...",
+  "error_code": "api_version_unsupported",
+  "requested_version": "2.0.0",
+  "supported_versions": ["1.0.0", "1.0.0"],
+  "current_version": "1.0.0"
+}
+```
+
+Version negotiation covers routing. For *payload* compatibility, enum query
+parameters (`status`, `state`) are documented as forward-compatible: new values
+are added only in a new major API version.
 
 ---
 
@@ -152,8 +195,8 @@ Register new user account.
 The API uses a conservative CORS configuration. By default the server allows the following methods and headers from configured origins:
 
 - Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With
-- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining
+- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With, X-API-Version
+- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining, X-API-Version, X-Supported-API-Versions
 
 Origins are configured via environment variables and wildcard origins ("*") are rejected on startup for security reasons.
 
@@ -592,6 +635,26 @@ Create a new Stellar wallet for a user.
 
 **⚠️ Security Note:** Private keys are NEVER returned via API. Users must manage their own keys via wallet apps (Freighter, Albedo).
 
+**Response (409 Conflict):** a user has exactly one wallet. If one is already
+registered — including when a concurrent request wins the race for the unique
+constraint — the create answers 409 and echoes the wallet that already exists, so
+a client retry proceeds with that address instead of creating a second row:
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/409",
+  "title": "wallet_already_exists",
+  "status": 409,
+  "detail": "Wallet 7 already registered for user 'user123' at address 'GXXX...'.",
+  "error_code": "wallet_already_exists",
+  "correlation_id": "…",
+  "fields": {
+    "wallet_id": "7",
+    "user_id": "user123",
+    "public_key": "GXXX..."
+  }
+}
+```
+
 ### GET `/api/v1/wallets/{user_id}`
 
 Get wallet details for a user.
@@ -828,6 +891,15 @@ GET /api/v1/outages?limit=20&offset=40
 
 APEXCHAINX can send webhooks for important events:
 
+### Deleting a Webhook
+
+`DELETE /api/v1/webhooks/{webhook_id}` is a **soft delete**: the registration is
+retained as a tombstone so its delivery history stays auditable, `deleted_at` is
+reported in the response, and the row disappears from `GET /api/v1/webhooks`
+unless `include_deleted=true` is passed. `GET /api/v1/webhooks/{id}` and its
+`/deliveries` history remain reachable. See
+[WEBHOOK_INTEGRATION.md](WEBHOOK_INTEGRATION.md#deleting-a-webhook).
+
 ### Webhook Events
 
 - `outage.created`
@@ -853,6 +925,24 @@ APEXCHAINX can send webhooks for important events:
 ```
 
 Configure webhooks in the admin panel or via API.
+
+### Webhook Registration Limits
+
+Registration is capped so that one admin session cannot multiply every emitted
+event by an unbounded number of outbound HTTPS requests:
+
+| Setting | Default | Behaviour |
+|---------|---------|-----------|
+| `MAX_WEBHOOKS_PER_ACCOUNT` | `50` | `POST /api/v1/webhooks` returns `409 Conflict` with the cap in the message once this many webhooks are registered. `0` disables the cap. |
+| `WEBHOOK_FANOUT_WARN_THRESHOLD` | `200` | When the total number of event subscriptions across all webhooks exceeds this, creation and event-subscription updates log a warning and increment `webhook.fanout.threshold_exceeded`. Not enforced — per-dispatch concurrency stays bounded by `WEBHOOK_MAX_CONCURRENT_DISPATCHES`. |
+
+`409` response body:
+
+```json
+{
+  "detail": "Webhook limit reached: 50 webhooks are already registered and MAX_WEBHOOKS_PER_ACCOUNT is 50. Delete an unused webhook before creating another."
+}
+```
 
 ---
 
@@ -1568,6 +1658,33 @@ Response:
   "network": "testnet"
 }
 ```
+
+---
+
+## Webhook List Endpoint
+
+### GET `/api/v1/webhooks`
+
+Paginated list of registered webhooks. Query parameters: `is_active`, `name`
+(case-insensitive substring), `page` (1-indexed, default 1), `page_size`
+(default 20, max 100).
+
+```json
+{
+  "items": [{"id": "3f1b...-...", "name": "outage-webhook", "schema_version": "1"}],
+  "total": 45,
+  "page": 1,
+  "page_size": 20,
+  "returned": 1,
+  "has_more": true
+}
+```
+
+`total` is the count of rows matching the filters; `has_more` is `false` on the
+last page, so no extra request is needed to detect the end. Ordering is
+`created_at` descending with the id as tie-breaker. Secrets are never included.
+The body was a bare array before #554 — read `items` instead of iterating the
+response directly.
 
 ---
 

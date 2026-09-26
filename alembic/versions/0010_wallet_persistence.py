@@ -1,15 +1,15 @@
 """Add wallet persistence table with uniqueness constraints (BE-032).
 
 Revision ID: 0010_wallet_persistence
-Revises: 0009_token_families
+Revises: 0009
 Create Date: 2026-04-28
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0010_wallet_persistence"
-down_revision = "0009_token_families"
+down_revision = "0009"
 branch_labels = None
 depends_on = None
 

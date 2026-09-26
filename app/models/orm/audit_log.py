@@ -1,6 +1,9 @@
-from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, String, Integer, JSON
+from datetime import UTC, datetime
+
+from sqlalchemy import JSON, Column, DateTime, Integer, String
+
 from app.db.base import Base
+
 
 class AuditLogORM(Base):
     __tablename__ = "audit_logs"
@@ -13,7 +16,7 @@ class AuditLogORM(Base):
     # BE-010: Correlation context - request correlation ID
     correlation_id = Column(String(255), index=True, nullable=True)
     details = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     # BE-007: Cryptographic chaining for tamper-evident audit logs
     prev_hash = Column(String(64), nullable=True)
     entry_hash = Column(String(64), nullable=False, unique=True)

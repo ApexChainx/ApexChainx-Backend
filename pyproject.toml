@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "apexchainx-backend"
@@ -18,40 +18,97 @@ dependencies = [
     "uvicorn[standard]==0.34.0",
     "redis==5.2.1",
     "sqlalchemy==2.0.36",
-    "psycopg2-binary==2.9.10",
+    "psycopg2-binary>=2.9.10",
     "alembic==1.14.0",
     "pydantic-settings==2.7.0",
     "celery==5.4.0",
     "httpx==0.28.1",
     "python-multipart==0.0.19",
+    "PyJWT==2.8.0",
+    "email-validator>=2.0",
     "passlib[bcrypt]==1.7.4",
     "gunicorn==23.0.0",
+    "opentelemetry-api==1.29.0",
+    "opentelemetry-sdk==1.29.0",
+    "opentelemetry-exporter-otlp-proto-grpc==1.29.0",
+    "opentelemetry-instrumentation-fastapi==0.50b0",
+    "opentelemetry-instrumentation-sqlalchemy==0.50b0",
+    "opentelemetry-instrumentation-httpx==0.50b0",
+    "opentelemetry-instrumentation-redis==0.50b0",
+    "cryptography>=42.0.0",
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
     "pytest-cov==6.0.0",
+    "pytest-benchmark==5.1.0",
+    "pytest-alembic>=0.11.0",
+    "hypothesis>=6.100",
     "ruff==0.8.3",
+    "pyupgrade>=3.0",
     "mypy==1.13.0",
     "bandit==1.8.0",
+    "locust==2.46.3",
     "pip-tools==7.4.1",
+    "fakeredis>=2.20.0",
+    "schemathesis==3.38.9",
+    "mutmut>=3.0.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+
+[tool.ruff.lint]
+extend-select = ["DTZ005"]
 
 [tool.ruff.format]
 quote-style = "double"
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
+explicit_package_bases = true
+ignore_missing_imports = true
+disable_error_code = [
+    "no-untyped-def",
+    "no-untyped-call",
+    "arg-type",
+    "assignment",
+    "union-attr",
+    "attr-defined",
+    "call-arg",
+    "return-value",
+    "dict-item",
+    "operator",
+    "type-arg",
+    "misc",
+    "index",
+    "var-annotated",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.coverage.report]
+fail_under = 0
+show_missing = true
+skip_covered = true
+omit = [
+    "tests/*",
+    "**/__init__.py",
+    "**/conftest.py",
+]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

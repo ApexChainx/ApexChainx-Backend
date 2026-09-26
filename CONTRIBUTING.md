@@ -45,6 +45,63 @@ There are many ways to contribute to ApexChainx:
 - Soroban CLI
 - Stellar CLI
 
+### ☁️ Codespaces Onboarding (recommended — zero local setup)
+
+The fastest way to contribute is via [GitHub Codespaces](https://github.com/features/codespaces).
+A pre-configured dev container starts a Python 3.11 environment with PostgreSQL 15 and Redis 7
+already running. You can be ready to run tests in under 60 seconds.
+
+#### Step 1 — Open a Codespace
+
+1. **Fork** the repository on GitHub (click the **Fork** button on the repo page).
+2. On your fork, click **Code → Codespaces → Create codespace on main**.  
+   GitHub will build the container using `.devcontainer/devcontainer.json`.
+
+#### Step 2 — Wait for postCreate to finish
+
+The `postCreateCommand` runs automatically:
+
+```bash
+pip install -e .
+# waits for Postgres to be ready, then:
+alembic upgrade head
+```
+
+You will see a ✅ in the terminal when it is done.
+
+#### Step 3 — Run the welcome check
+
+```bash
+make welcome
+```
+
+This installs all dev dependencies, verifies the app imports cleanly, and runs the full test suite.
+A clean run confirms your environment is working end-to-end.
+
+#### Step 4 — Pick an issue and create your branch
+
+```bash
+# Sync with upstream first
+git fetch upstream
+git checkout -b fix/your-issue-description upstream/main
+```
+
+#### Tips for Codespaces
+
+| Task | Command |
+|------|---------|
+| Install/refresh deps | `pip install -e ".[dev]"` |
+| Run linter | `make lint` |
+| Run type checker | `make typecheck` |
+| Run tests | `make test` |
+| Run all quality gates | `make ci` |
+| Start the API | `uvicorn app.main:app --reload` |
+| Apply migrations | `make migrate` |
+
+Port `8000` is forwarded automatically — the Swagger UI is available at the **Ports** tab.
+
+---
+
 ### Fork and Clone
 
 1. **Fork the repository** on GitHub
@@ -58,7 +115,7 @@ There are many ways to contribute to ApexChainx:
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.com/ApexChainx/ApexChainx-Frontend.git
+   git remote add upstream https://github.com/ApexChainx/ApexChainx-Backend.git
    ```
 
 ### Setup Development Environment
@@ -80,11 +137,28 @@ source .venv/bin/activate
 # On Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env — never commit it
 # Edit .env with your config
 alembic upgrade head
+
+# Seed the dev database with synthetic data
+python -m app.cli.seed --outages 100 --devices 20 --payments 50 --seed 42
+
+# Or clear existing data first (idempotent)
+python -m app.cli.seed --force --outages 100 --devices 20 --payments 50 --seed 42
+
 uvicorn app.main:app --reload
 ```
+
+### Pre-commit Setup
+
+This project uses [ruff](https://docs.astral.sh/ruff/) for fast linting and formatting.
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Now `ruff check --fix` and `ruff format` run automatically on every commit.
 
 **Smart Contracts:**
 ```bash
@@ -140,9 +214,10 @@ npm run type-check
 pytest
 pytest -v
 pytest --cov=app --cov-report=html
-black app/          # auto-format
-flake8 app/         # lint
+ruff check app/     # lint (replaces flake8)
+ruff format app/    # format (replaces black)
 mypy app/           # type-check
+python scripts/lint_migrations.py  # migration raw-SQL lint
 ```
 
 **Smart Contracts:**
@@ -398,6 +473,9 @@ describe('WalletConnect', () => {
 # Run all tests
 pytest
 
+# Reject lookalike / leftover test file names (also runs in CI)
+python scripts/lint_test_filenames.py
+
 # Run specific test file
 pytest tests/test_payment_service.py
 
@@ -424,6 +502,14 @@ async def test_create_payment():
     assert result["status"] == "success"
     assert "tx_hash" in result
 ```
+
+**One canonical file per subject.** Name a test file after what it tests, and do
+not edit a file in place with a trailing marker. `scripts/lint_test_filenames.py`
+rejects filenames that end in a leftover marker (`_old`, `_copy`, `_bak`,
+`_tmp`, `_final`, `_v2`, a run of repeated characters such as `...238hhh`), two
+files whose names normalise to the same stem, and any `test_*.py` that contains
+no test function. It runs in CI (`.github/workflows/test-filename-lint.yml`) and
+locally in under a second.
 
 ### Smart Contract Tests
 

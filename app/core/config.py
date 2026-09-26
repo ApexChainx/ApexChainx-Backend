@@ -1,39 +1,67 @@
-from typing import List, Optional
 from urllib.parse import urlparse
 
-from pydantic_settings import BaseSettings
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 VALID_STELLAR_NETWORKS = {"testnet", "mainnet", "futurenet", "standalone"}
 VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
+DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
+MIN_SECRET_KEY_LENGTH = 32
+
+# #510: environments in which Celery eager mode is allowed. Everywhere else a
+# CELERY_TASK_ALWAYS_EAGER=true default silently runs every task in-process
+# while presenting a queue topology that does nothing.
+DEV_ENVIRONMENTS = {"local", "test"}
 
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
     VERSION: str = "1.0.0"
     DEBUG: bool = False
+    SECRET_KEY: str = "apexchainx-dev-secret"
+    # Dedicated key for impersonation token signing. When unset, falls back to
+    # SECRET_KEY.  Production deployments should set this to a separate random
+    # value so that a SECRET_KEY leak does not automatically compromise
+    # impersonation tokens (and vice versa).
+    IMPERSONATION_SIGNING_KEY: str = ""
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/apexchainx"
-    DATABASE_AUDIT_URL: Optional[str] = None
+    DATABASE_AUDIT_URL: str | None = None
     API_V1_PREFIX: str = "/api/v1"
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:3001"]
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
     # CORS configuration
-    CORS_ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    CORS_ALLOWED_HEADERS: List[str] = [
+    CORS_ALLOWED_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_ALLOWED_HEADERS: list[str] = [
         "Authorization",
         "X-Correlation-ID",
         "Idempotency-Key",
         "Content-Type",
         "X-Requested-With",
+        API_VERSION_HEADER,
     ]
-    CORS_EXPOSE_HEADERS: List[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
+    CORS_EXPOSE_HEADERS: list[str] = [
+        "X-Correlation-ID",
+        "X-RateLimit-Remaining",
+        API_VERSION_HEADER,
+        "X-Supported-API-Versions",
+    ]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
-    CELERY_TASK_ALWAYS_EAGER: bool = True
+    # #510: defaults to False. Eager mode runs tasks inline in the request
+    # worker, which removes retry/backoff semantics and makes the breaker and
+    # dead-letter machinery inert. It is a local/test convenience, so it must be
+    # opted into explicitly and is rejected outside development.
+    CELERY_TASK_ALWAYS_EAGER: bool = False
     SLA_CONTRACT_ADDRESS: str = "local-sla-calculator"
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
     PAYMENT_WEBHOOK_SECRET: str = ""
     WALLET_CACHE_TTL_SECONDS: int = 60  # how long wallet data is considered fresh
+    # SLA cache TTL in seconds
+    SLA_CACHE_TTL_SECONDS: int = 60
+    # DB connection pool settings
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_RECYCLE_SECONDS: int = 1800
+    SHUTDOWN_GRACE_SECONDS: int = 30  # grace period for SIGTERM handling
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
@@ -52,8 +80,31 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300  # Rate limit window in seconds
     AUTH_LOCKOUT_ENTROPY_THRESHOLD: int = 20  # Unique password prefixes before credential-stuffing alert
     AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES: int = 5  # Rolling window for stuffing detection
+    # #507: credential-stuffing lockouts are scoped to (IP, account) pairs, and
+    # the account-wide scope catches a distributed spray on one account.
+    # The lockout length is a multiplier of the account lockout, capped so a
+    # longer AUTH_LOCKOUT_DURATION_MINUTES cannot silently lock out a whole
+    # shared-NAT address for hours.
+    AUTH_STUFFING_LOCKOUT_MULTIPLIER: int = 4
+    AUTH_STUFFING_LOCKOUT_MAX_MINUTES: int = 60
+    AUTH_ACCOUNT_STUFFING_ENTROPY_THRESHOLD: int = 20
     AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
-    USE_REDIS_RATE_LIMITER: bool = False
+    USE_REDIS_RATE_LIMITER: bool = True
+
+    # Detail keys that must always be redacted when writing audit-log entries
+    # (app/services/scrubber.py). Values under these keys are replaced with
+    # "[REDACTED]" before persistence.
+    AUDIT_SENSITIVE_FIELDS: list[str] = [
+        "password",
+        "hashed_password",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "api_key",
+        "x_api_key",
+    ]
 
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
@@ -66,9 +117,11 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_EVENTS_COUNT: int = 50  # Max webhook events per webhook
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
+    MAX_WEBHOOK_MAX_RETRIES: int = 10  # Max delivery retry attempts a webhook may be configured for (#552)
+    
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
-    WEBHOOK_URL_ALLOWLIST: List[str] = []
+    WEBHOOK_URL_ALLOWLIST: list[str] = []
     WEBHOOK_URL_VALIDATOR_BYPASS: bool = False
     # Environment name used for conditional behaviours (e.g. HSTS disabled in local)
     ENVIRONMENT: str = "local"
@@ -77,6 +130,13 @@ class Settings(BaseSettings):
     SECURITY_HEADERS_ENABLED: bool = True
     # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
     SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
+    # ETag middleware: list of path prefixes to exclude from ETag buffering
+    ETAG_EXCLUDE_PATH_PREFIXES: list[str] = []
+
+    # Circuit breaker settings for webhook delivery (#33)
+    WEBHOOK_BREAKER_FAIL_THRESHOLD: int = 10
+    WEBHOOK_BREAKER_WINDOW_SECONDS: int = 300
+    WEBHOOK_BREAKER_RESET_SECONDS: int = 600
 
     # Webhook retry backoff policy (#236)
     # Comma-separated base delay seconds for each retry attempt.
@@ -84,19 +144,45 @@ class Settings(BaseSettings):
     WEBHOOK_RETRY_BASE_DELAYS: str = "30,120,600"
     # Hard cap on any single computed delay (seconds) to prevent retry storms.
     WEBHOOK_RETRY_MAX_DELAY_SECONDS: int = 3600
+    # Jitter mode for webhook retry backoff: "none", "equal", or "full"
+    WEBHOOK_RETRY_JITTER: str = "full"
+    # Concurrency caps for webhook dispatch attempts.
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
+    WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
+    # Fernet key (32 url-safe base64-encoded bytes) used to encrypt webhook
+    # signing secrets at rest (#266). Required in non-local environments; when
+    # unset (local/test) a key is derived from SECRET_KEY so secrets are still
+    # never stored as plaintext.
+    WEBHOOK_SECRET_ENCRYPTION_KEY: str = ""
 
     # OAuth configuration (#10)
     OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
     OAUTH_STATE_TTL_SECONDS: int = 600
 
-    class Config:
-        env_file = ".env"
+    # Outage event timeline retention (#329)
+    # Days to keep outage timeline events before the scheduled cleanup removes them.
+    OUTAGE_EVENT_RETENTION_DAYS: int = 90
+
+    # Audit log retention (#324)
+    # Days to keep audit entries before the scheduled task archives and removes them.
+    AUDIT_RETENTION_DAYS: int = 90
+    # Directory where archived audit entries (JSONL, hashes preserved) are written.
+    AUDIT_ARCHIVE_DIR: str = "audit_archives"
+
+    # API version negotiation (#499)
+    # Clients may pin a version with the X-API-Version request header. Requests
+    # outside the supported range are rejected instead of silently receiving the
+    # current behaviour; requests without the header are served as "latest".
+    API_VERSION_MIN_SUPPORTED: str = "1.0.0"
+    API_VERSION_MAX_SUPPORTED: str = "1.0.0"
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
 
 settings = Settings()
@@ -110,6 +196,24 @@ def validate_critical_settings(config: Settings) -> None:
 
     if not config.VERSION.strip():
         errors.append("VERSION must not be empty.")
+
+    # API version negotiation (#499): the served version must sit inside the
+    # advertised supported range, otherwise every pinned client is rejected.
+    min_version = parse_api_version(config.API_VERSION_MIN_SUPPORTED)
+    max_version = parse_api_version(config.API_VERSION_MAX_SUPPORTED)
+    current_version = parse_api_version(config.VERSION)
+    if min_version is None:
+        errors.append("API_VERSION_MIN_SUPPORTED must be a dotted numeric version such as 1.0.0.")
+    if max_version is None:
+        errors.append("API_VERSION_MAX_SUPPORTED must be a dotted numeric version such as 1.0.0.")
+    if current_version is None:
+        errors.append("VERSION must be a dotted numeric version such as 1.0.0.")
+    if None not in (min_version, max_version) and min_version > max_version:
+        errors.append("API_VERSION_MIN_SUPPORTED must not be greater than API_VERSION_MAX_SUPPORTED.")
+    if None not in (min_version, max_version, current_version) and not (
+        min_version <= current_version <= max_version
+    ):
+        errors.append("VERSION must fall within [API_VERSION_MIN_SUPPORTED, API_VERSION_MAX_SUPPORTED].")
 
     if not config.API_V1_PREFIX.startswith("/"):
         errors.append("API_V1_PREFIX must start with '/'.")
@@ -132,38 +236,34 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("ALLOWED_ORIGINS must not contain wildcard '*' origins for security reasons.")
 
         invalid_origins = [
-            origin
-            for origin in config.ALLOWED_ORIGINS
-            if not origin.startswith(("http://", "https://"))
+            origin for origin in config.ALLOWED_ORIGINS if not origin.startswith(("http://", "https://"))
         ]
         if invalid_origins:
-            errors.append(
-                "ALLOWED_ORIGINS must contain valid http or https origins."
-            )
+            errors.append("ALLOWED_ORIGINS must contain valid http or https origins.")
 
     if config.STELLAR_NETWORK not in VALID_STELLAR_NETWORKS:
-        errors.append(
-            "STELLAR_NETWORK must be one of: "
-            + ", ".join(sorted(VALID_STELLAR_NETWORKS))
-            + "."
-        )
+        errors.append("STELLAR_NETWORK must be one of: " + ", ".join(sorted(VALID_STELLAR_NETWORKS)) + ".")
 
     if config.CONTRACT_EXECUTION_MODE not in VALID_CONTRACT_EXECUTION_MODES:
         errors.append(
-            "CONTRACT_EXECUTION_MODE must be one of: "
-            + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES))
-            + "."
+            "CONTRACT_EXECUTION_MODE must be one of: " + ", ".join(sorted(VALID_CONTRACT_EXECUTION_MODES)) + "."
         )
 
     if not config.CELERY_TASK_ALWAYS_EAGER:
         if not config.CELERY_BROKER_URL.strip():
-            errors.append(
-                "CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
-            errors.append(
-                "CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false."
-            )
+            errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
+
+    # #510: fail fast, in the same style as the SECRET_KEY guard. A deployment
+    # that runs every task in-process while showing a queue topology is the
+    # silent failure this catches.
+    if config.CELERY_TASK_ALWAYS_EAGER and config.ENVIRONMENT not in DEV_ENVIRONMENTS:
+        errors.append(
+            f"CELERY_TASK_ALWAYS_EAGER must be false outside development; it runs tasks "
+            f"inline and disables retry/backoff, breaker and dead-letter handling. "
+            f"ENVIRONMENT={config.ENVIRONMENT!r} is not one of {sorted(DEV_ENVIRONMENTS)}."
+        )
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")
@@ -174,6 +274,44 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.TRUSTED_PROXY_COUNT < 0:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
+
+    if config.ENVIRONMENT not in {"local", "test"}:
+        if not config.SECRET_KEY or config.SECRET_KEY == DEFAULT_SECRET_KEY or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH:
+            errors.append(
+                f"SECRET_KEY must be set to a secure, non-default value in non-local environments. "
+                f"Current value is the development default or too short (< {MIN_SECRET_KEY_LENGTH} chars). "
+                f"ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+        imp_key = config.IMPERSONATION_SIGNING_KEY
+        if imp_key and len(imp_key) < MIN_SECRET_KEY_LENGTH:
+            errors.append(
+                f"IMPERSONATION_SIGNING_KEY is set but too short (< {MIN_SECRET_KEY_LENGTH} chars) "
+                f"for ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+        if not config.PAYMENT_WEBHOOK_SECRET:
+            errors.append(
+                f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+        encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
+        if not encryption_key:
+            errors.append(
+                f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
+            )
+
+    encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
+    if encryption_key:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(encryption_key.encode("utf-8"))
+        except Exception:
+            errors.append(
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key "
+                "(32 url-safe base64-encoded bytes)."
+            )
 
     try:
         delays = [int(d.strip()) for d in config.WEBHOOK_RETRY_BASE_DELAYS.split(",") if d.strip()]
@@ -186,6 +324,15 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_RETRY_MAX_DELAY_SECONDS <= 0:
         errors.append("WEBHOOK_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if config.MAX_WEBHOOK_MAX_RETRIES < 0:
+        errors.append("MAX_WEBHOOK_MAX_RETRIES must be >= 0.")
+
+    if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES <= 0:
+        errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES must be > 0.")
+
+    if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
+        errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))

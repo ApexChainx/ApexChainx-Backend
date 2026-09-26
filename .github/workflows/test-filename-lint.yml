@@ -1,0 +1,40 @@
+name: Test Filename Lint
+
+# #526: `tests/` collected near-identical file names, so it was ambiguous which
+# file was canonical -- and a truncated leftover (`test_be_205_228_236_238hhh.py`,
+# referencing three fixtures that do not exist) looked like coverage while
+# erroring on every run. `test_be_205_228_236_238.py` is the canonical file for
+# that BE issue prefix.
+#
+# This guard is deliberately its own workflow: it needs no dependency install,
+# so it runs in a couple of seconds and cannot be blocked by the suite job.
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-filename-lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  filenames:
+    name: Lookalike / leftover test filenames
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Lint test filenames
+        run: python scripts/lint_test_filenames.py

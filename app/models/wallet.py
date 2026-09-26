@@ -1,11 +1,9 @@
-from datetime import datetime
-from typing import Dict, Optional
 import re
+from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-
-_STELLAR_PUBLIC_KEY_RE = re.compile(r'^G[A-Z2-7]{55}$')
+_STELLAR_PUBLIC_KEY_RE = re.compile(r"^G[A-Z2-7]{55}$")
 
 
 class Wallet(BaseModel):
@@ -16,7 +14,7 @@ class Wallet(BaseModel):
     funded: bool = False
     active: bool = True
     trustline_ready: bool = False
-    cached_at: Optional[datetime] = None  # when data was last cached; None means never refreshed
+    cached_at: datetime | None = None  # when data was last cached; None means never refreshed
     # BE-033: Cache freshness indicator
     cache_status: str = "fresh"  # "fresh", "stale", or "live"
 
@@ -48,13 +46,13 @@ class WalletCreateResponse(Wallet):
 class AssetBalance(BaseModel):
     balance: str
     asset_type: str
-    asset_code: Optional[str] = None
-    asset_issuer: Optional[str] = None
+    asset_code: str | None = None
+    asset_issuer: str | None = None
 
 
 class WalletBalanceResponse(BaseModel):
     address: str
-    balances: Dict[str, AssetBalance]
+    balances: dict[str, AssetBalance]
     last_updated: datetime
     # BE-033: Cache metadata
     cache_status: str = "fresh"
@@ -80,7 +78,7 @@ class WalletTrustlineResponse(BaseModel):
     user_id: str
     public_key: str
     trustline_ready: bool
-    trustline_error: Optional[str] = None
+    trustline_error: str | None = None
     # BE-033: Cache metadata
     cache_status: str = "fresh"
     cached_at: datetime | None = None
@@ -90,7 +88,7 @@ class WalletFundingStateResponse(BaseModel):
     user_id: str
     public_key: str
     funded: bool
-    funding_error: Optional[str] = None
+    funding_error: str | None = None
     # BE-033: Cache metadata
     cache_status: str = "fresh"
     cached_at: datetime | None = None

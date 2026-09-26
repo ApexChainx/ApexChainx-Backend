@@ -1,11 +1,14 @@
 """Tests for the Stellar network-key separation guard script."""
-import pytest
+
 from scripts.check_stellar_networks import check_network_key_separation
 
 
 class TestCheckStellarNetworks:
     def test_testnet_with_testnet_key(self):
-        env = {"STELLAR_NETWORK": "testnet", "STELLAR_POOL_SECRET_KEY": "SABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUV"}
+        env = {
+            "STELLAR_NETWORK": "testnet",
+            "STELLAR_POOL_SECRET_KEY": "SABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUV",
+        }
         errors = check_network_key_separation(env)
         assert errors == []
 
@@ -14,7 +17,10 @@ class TestCheckStellarNetworks:
         assert any("STELLAR_NETWORK is not set" in e for e in errors)
 
     def test_key_not_starting_with_s(self):
-        env = {"STELLAR_NETWORK": "testnet", "STELLAR_POOL_SECRET_KEY": "TABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUV"}
+        env = {
+            "STELLAR_NETWORK": "testnet",
+            "STELLAR_POOL_SECRET_KEY": "TABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUV",
+        }
         errors = check_network_key_separation(env)
         assert any("must start with 'S'" in e for e in errors)
 
@@ -37,6 +43,9 @@ class TestCheckStellarNetworks:
         assert any("HORIZON_URL points to testnet" in e for e in errors)
 
     def test_unknown_network(self):
-        env = {"STELLAR_NETWORK": "unknown", "STELLAR_POOL_SECRET_KEY": "SABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUV"}
+        env = {
+            "STELLAR_NETWORK": "unknown",
+            "STELLAR_POOL_SECRET_KEY": "SABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUV",
+        }
         errors = check_network_key_separation(env)
         assert any("Unknown" in e for e in errors)

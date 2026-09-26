@@ -9,7 +9,6 @@ Create Date: 2026-04-28
 """
 from alembic import op
 
-
 revision = "0011_sla_latest_uniqueness"
 down_revision = "0010_wallet_persistence"
 branch_labels = None

@@ -6,11 +6,12 @@ Usage:
     cache.set("key", value)
     cache.invalidate("key")   # call after writes that affect cached data
 """
+
 from __future__ import annotations
 
 import time
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 
 
 class TTLCache:
@@ -27,7 +28,7 @@ class TTLCache:
         self._store: dict[str, tuple[Any, float]] = {}
         self._lock = Lock()
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         with self._lock:
             entry = self._store.get(key)
             if entry is None:

@@ -1,14 +1,15 @@
 """Add resolved IPs to webhooks for SSRF protection.
 
 Revision ID: 0017_webhook_resolved_ips
-Revises: 0016_webhook_signature_versioning
+Revises: 0016_webhook_sig_versioning
 Create Date: 2026-07-28
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
+
 revision = "0017_webhook_resolved_ips"
-down_revision = "0016_webhook_signature_versioning"
+down_revision = "0016_webhook_sig_versioning"
 branch_labels = None
 depends_on = None
 

@@ -5,6 +5,7 @@
 This repository powers the backend API for ApexChainx, an SLA automation and outage settlement platform.
 
 It is responsible for:
+
 - managing outages and RCA
 - calculating SLA performance
 - exposing analytics and audit data
@@ -30,12 +31,14 @@ It is responsible for:
 ### 1. Outage Management
 
 Responsible for:
+
 - creating outages
 - updating outage status
 - tracking resolution
 - storing metadata (location, services, subscribers)
 
 Key endpoints:
+
 - GET /outages
 - POST /outages
 - PUT /outages/{id}
@@ -47,17 +50,20 @@ Key endpoints:
 Core business logic.
 
 Responsible for:
+
 - calculating MTTR
 - determining SLA compliance
 - triggering penalties or rewards
 - invoking smart contracts
 
 Key endpoints:
+
 - GET /sla/status/{outage_id}
 - POST /sla/calculate
 - POST /sla/execute-payment
 
 Important:
+
 - SLA depends on severity thresholds
 - Payment logic is tightly coupled with SLA
 
@@ -66,11 +72,13 @@ Important:
 ### 3. Payments
 
 Responsible for:
+
 - exposing payment records tied to SLA outcomes
 - tracking transaction status
 - storing transaction history
 
 Key endpoints:
+
 - POST /payments/process-sla
 - GET /payments/history
 
@@ -82,16 +90,19 @@ Outage → SLA Calculation → Smart Contract → Payment → Record stored
 ### 4. Wallet Management
 
 Responsible for:
+
 - creating lightweight wallet records
 - retrieving balances and status
 - linking wallets to users
 
 Key endpoints:
+
 - POST /wallets/create
 - GET /wallets/{user_id}
 - GET /wallets/{address}/balance
 
 **SECURITY CRITICAL**:
+
 - private keys are NEVER returned via API
 - private keys are NEVER logged or exposed
 - only public keys and balance information are accessible
@@ -102,11 +113,13 @@ Key endpoints:
 ### 5. Analytics
 
 Responsible for:
+
 - MTTR calculations
 - SLA compliance metrics
 - payment analytics
 
 Key endpoints:
+
 - GET `/api/v1/sla/analytics/dashboard`
 - GET `/api/v1/sla/analytics/trends`
 - GET `/api/v1/sla/performance/aggregation`
@@ -116,11 +129,13 @@ Key endpoints:
 ### 6. Audit Logging
 
 Responsible for:
+
 - recording all state-changing operations
 - correlating events via `X-Correlation-ID`
 - immutable append-only log
 
 Key endpoints:
+
 - GET /api/v1/audit
 
 ---
@@ -128,11 +143,13 @@ Key endpoints:
 ### 7. Authentication
 
 Responsible for:
+
 - login
 - registration
 - JWT issuance
 
 Key endpoints:
+
 - POST /auth/login
 - POST /auth/register
 
@@ -210,6 +227,7 @@ Treat the following as non-routed or legacy helper paths:
 - **Audit Trail**: All payment and SLA operations must be logged for audit purposes
 
 **Documentation Standards**:
+
 - Use `[REDACTED]` or `[EXAMPLE]` for sensitive placeholder values
 - Include security warnings for any blockchain or financial operations
 - Show secure patterns (environment variables, secure key management)
@@ -222,6 +240,7 @@ Treat the following as non-routed or legacy helper paths:
 Codex should focus on generating issues for:
 
 ### Backend Improvements
+
 - endpoint validation consistency
 - error handling standardization
 - docs alignment with routed runtime
@@ -267,6 +286,7 @@ This repo depends on:
 - apexchainx-contracts → executes SLA logic
 
 Important:
+
 - any change in SLA logic may affect contracts
 - any API shape change affects frontend
 
@@ -286,11 +306,13 @@ Generate a structured backlog of issues that:
 ### SLA Disputes Domain
 
 Responsible for:
+
 - filing and tracking disputes against SLA outcomes
 - linking disputes to originating SLA records
 - providing audit trail for contested settlements
 
 Key endpoints:
+
 - POST /api/v1/sla/disputes
 - GET /api/v1/sla/disputes
 - GET /api/v1/sla/disputes/{dispute_id}
@@ -299,19 +321,24 @@ Key endpoints:
 
 ## Key Terms
 
-| Term | Definition |
-|------|-----------|
-| MTTR | Mean Time to Resolve — the primary SLA compliance metric |
-| SLA | Service Level Agreement — defines penalty/reward thresholds |
-| Correlation ID | UUID injected per request for cross-system tracing |
+| Term             | Definition                                                       |
+| ---------------- | ---------------------------------------------------------------- |
+| MTTR             | Mean Time to Resolve — the primary SLA compliance metric         |
+| SLA              | Service Level Agreement — defines penalty/reward thresholds      |
+| Correlation ID   | UUID injected per request for cross-system tracing               |
 | Contract adapter | Soroban bridge activated when `CONTRACT_EXECUTION_MODE=contract` |
-| Local adapter | Default in-process SLA execution path |
+| Local adapter    | Default in-process SLA execution path                            |
 
 ---
 
 ## Rate Limiting
 
 The auth domain includes token family tracking and per-user rate limiting. Rate limit state is stored in the database via migration `0008_auth_rate_limiting`. Abuse triggers a short-lived backoff enforced in `app/core/rate_limiter.py`.
+
+Both limiter stores are bounded by the window, which matters because they sit in the auth-critical path (`app/core/rate_limiter.py`):
+
+- **Redis** (`RedisRateLimiter`): the Lua script re-arms `EXPIRE key window` on every scored request, so `auth_rate_limiter:*` keys delete themselves once their window lapses. No margin is added — `ZREMRANGEBYSCORE` can never keep a member older than the window, so a longer TTL would only extend key life.
+- **In-process** (`SimpleRateLimiter`, the fallback when Redis is unavailable, `USE_REDIS_RATE_LIMITER` is off, or Celery is eager): state is a class-level dict shared by every instance, so it outlives both the limiter and the request. `is_allowed` prunes the presented key on every call and, once the map exceeds `SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD` (1024), also runs `cull_expired()` to drop keys whose newest hit has lapsed — otherwise a client that scored once and never returned kept its list for the life of the process (#544). Call `cull_expired()` from a periodic task if you want reclamation without traffic pressure.
 
 ---
 
@@ -403,6 +430,20 @@ Webhook delivery is handled by `app/tasks/webhook_tasks.py` as a Celery task. Wh
 
 ---
 
+## Webhook Retry Budget
+
+`WebhookCreate.max_retries` and `WebhookUpdate.max_retries` are bounded to
+`0..MAX_WEBHOOK_MAX_RETRIES` (default 10) and out-of-range values are rejected
+with a 422 naming the field, like the other webhook guardrails (#552). `0`
+disables retries, so a webhook fails straight to dead-letter.
+
+The stored value is an upper bound, not the attempt count: `dispatch_delivery`
+also requires `retry_index < len(WEBHOOK_RETRY_BASE_DELAYS)`, so with the
+default `30,120,600` a delivery is retried at most three times even if
+`max_retries` is 10. Raising the delay list raises the effective retry count.
+
+---
+
 ## Analytics Snapshot Backfill
 
 The migration `0012_sla_latest_backfill.py` populates the `is_latest` flag on existing SLA records. This flag allows the analytics layer to efficiently query only the most recent SLA result per outage without a subquery on every request.
@@ -433,6 +474,29 @@ MTTR boundary computation is deterministic: given the same `created_at` and `res
 
 ---
 
+## Bulk Outage Import Contract
+
+Both import paths validate rows against the same schema, `OutageCreate`
+(`app/models/outage_dto.py`), and report failures as `ImportRowResult` with
+per-field `ImportFieldError`s keyed by the row's own position in the payload
+(0-based), so an uploaded file and a streamed body are held to one contract
+(#547):
+
+- `POST /api/v1/outages/import` (`app/api/v1/endpoints/outages.py`) — CSV/JSON
+  upload, with `dry_run` and `consistency=atomic|partial`.
+- `app/services/outage_stream_import.py` — the chunked JSON path. It validates in
+  `chunk_size` batches (flat memory) and defaults to `atomic`: one invalid row
+  withholds the whole batch, so `imported` and `valid_row_ids` are both empty and
+  nothing can be persisted from a partly-wrong body. `partial` is opt-in and
+  returns the accepted ids explicitly. Rows past `max_rows` are counted in
+  `truncated` rather than dropped silently, and `failed_count` always reports the
+  true total even though `failed_rows` is capped at 50.
+
+The streaming module does not write to the database; it hands back
+`valid_row_ids` for the caller to persist through `OutageRepository`.
+
+---
+
 ## Outage Lifecycle States
 
 ```
@@ -458,6 +522,8 @@ Payment deduplication is enforced at the database level via a unique constraint 
 ## Token Family Security
 
 The auth system uses token families to detect refresh token reuse attacks. Each refresh creates a new token family member. Using a previously rotated refresh token invalidates the entire family, forcing re-login. This is implemented in `app/repositories/token_family_repository.py`.
+
+A missing family row counts as **revoked**, not as "unknown, allow": `TokenFamilyRepository.is_revoked()` returns `True` both for a compromised family and for one that no longer exists, because families are only removed by `logout-all` or by the orphan cleanup (which only touches families with no sessions). `AuthStore.get_user_for_token` applies that gate on the **access** path too, so a session row that outlives its family — a token issued in the same tick as a `logout-all`, or committed after it was read — is rejected with `401` and its session row is deleted. Refresh already refused these; before this, the two paths disagreed. Legacy sessions with `family_id IS NULL` are exempt and are migrated to a family on their next refresh.
 
 ---
 
@@ -499,14 +565,14 @@ The auth system uses token families to detect refresh token reuse attacks. Each 
 
 ## Quick Reference
 
-| Task | Command |
-|------|---------|
-| Start API | `uvicorn app.main:app --reload` |
-| Run migrations | `alembic upgrade head` |
-| Check migration state | `alembic current` |
-| Run all tests | `pytest tests/` |
-| Run one test file | `pytest tests/test_outage_lifecycle.py -v` |
-| Start Celery worker | `celery -A app.tasks.celery_app worker --loglevel=info` |
+| Task                  | Command                                                 |
+| --------------------- | ------------------------------------------------------- |
+| Start API             | `uvicorn app.main:app --reload`                         |
+| Run migrations        | `alembic upgrade head`                                  |
+| Check migration state | `alembic current`                                       |
+| Run all tests         | `pytest tests/`                                         |
+| Run one test file     | `pytest tests/test_outage_lifecycle.py -v`              |
+| Start Celery worker   | `celery -A app.tasks.celery_app worker --loglevel=info` |
 
 ---
 
@@ -525,6 +591,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 ## Outage Repository Methods
 
 `app/repositories/outage_repository.py` exposes:
+
 - `create(db, data)` — persist new outage
 - `get(db, outage_id)` — fetch by ID
 - `update(db, outage_id, data)` — partial update
@@ -537,6 +604,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 ## SLA Repository Methods
 
 `app/repositories/sla_repository.py` exposes:
+
 - `create(db, data)` — persist SLA result
 - `get_latest(db, outage_id)` — fetch most recent result per outage
 - `list(db, filters, limit, offset)` — paginated result list
@@ -548,6 +616,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 ## Payment Repository Methods
 
 `app/repositories/payment_repository.py` exposes:
+
 - `create(db, data)` — persist payment record
 - `get(db, payment_id)` — fetch by ID
 - `get_by_outage(db, outage_id)` — fetch payment linked to outage
@@ -558,12 +627,12 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 
 ## Services vs Repositories: Boundary Rules
 
-| Layer | Allowed | Not Allowed |
-|-------|---------|-------------|
-| Route handler | Call services, return responses | Query DB directly, business logic |
-| Service | Business logic, call repositories | Import other services' repositories |
-| Repository | SQLAlchemy queries only | Business logic, HTTP calls |
-| Utility | Pure functions, no DB/HTTP | Side effects |
+| Layer         | Allowed                           | Not Allowed                         |
+| ------------- | --------------------------------- | ----------------------------------- |
+| Route handler | Call services, return responses   | Query DB directly, business logic   |
+| Service       | Business logic, call repositories | Import other services' repositories |
+| Repository    | SQLAlchemy queries only           | Business logic, HTTP calls          |
+| Utility       | Pure functions, no DB/HTTP        | Side effects                        |
 
 ---
 
@@ -581,6 +650,7 @@ Requires `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` to be set. Set `CELERY_
 Enums used across the API are defined in `app/models/enums.py`. Always reference the enum class, not raw strings, in service and repository code to benefit from type safety and refactoring support.
 
 Key enums:
+
 - `OutageStatus`: `open`, `resolved`
 - `SLAOutcome`: `penalty`, `reward`
 - `PaymentStatus`: `pending`, `confirmed`, `failed`
@@ -592,25 +662,26 @@ Key enums:
 
 Key event types emitted by `app/services/audit_log.py`:
 
-| Event Type | Trigger |
-|-----------|---------|
-| `outage.created` | New outage persisted |
-| `outage.resolved` | Outage resolved with MTTR |
-| `sla.computed` | SLA outcome calculated |
-| `sla.recomputed` | Bulk recompute executed |
-| `payment.initiated` | Stellar payment submitted |
+| Event Type          | Trigger                        |
+| ------------------- | ------------------------------ |
+| `outage.created`    | New outage persisted           |
+| `outage.resolved`   | Outage resolved with MTTR      |
+| `sla.computed`      | SLA outcome calculated         |
+| `sla.recomputed`    | Bulk recompute executed        |
+| `payment.initiated` | Stellar payment submitted      |
 | `payment.confirmed` | On-chain confirmation received |
-| `dispute.filed` | Dispute created |
-| `dispute.resolved` | Dispute closed |
-| `auth.login` | Successful login |
-| `auth.logout` | Session invalidated |
-| `auth.failed` | Failed login attempt |
+| `dispute.filed`     | Dispute created                |
+| `dispute.resolved`  | Dispute closed                 |
+| `auth.login`        | Successful login               |
+| `auth.logout`       | Session invalidated            |
+| `auth.failed`       | Failed login attempt           |
 
 ---
 
 ## ORM Model Conventions
 
 ORM models live in `app/models/orm/`. Each model:
+
 - extends `Base` from `app/db/base_class.py`
 - uses `__tablename__` matching the migration table name
 - defines `id` as UUID primary key
@@ -641,11 +712,13 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 
 `app/core/config.py` uses Pydantic Settings to load and validate all environment variables at startup. Access settings via the `get_settings()` function (cached singleton). Never read `os.environ` directly in application code — always go through `get_settings()`.
 
+`.env.example` is the documented reference for every setting: it is grouped by concern, marks the values that are required outside `ENVIRONMENT=local`/`test`, and lists the `validate_critical_settings` startup guards. `tests/test_env_example_completeness.py` fails when a setting is added to `config.py` without a matching entry, when the template documents a key that no longer exists, or when the dev profile stops booting — update the template in the same change as any new setting.
+
 ---
 
 ## Lock Module
 
-`app/core/lock.py` provides a lightweight advisory lock mechanism used to prevent concurrent SLA recompute operations on the same outage. Uses a database-level advisory lock via PostgreSQL `pg_try_advisory_lock`. Do not use Python threading primitives for cross-process synchronisation.
+`app/core/lock.py` provides lightweight transaction-scoped advisory locks used to prevent concurrent operations. `advisory_lock` polls PostgreSQL's `pg_try_advisory_xact_lock` until its bounded timeout; `advisory_lock_nowait` fails immediately. Do not use Python threading primitives for cross-process synchronisation.
 
 ---
 
@@ -658,6 +731,7 @@ Sessions are committed and closed automatically by the dependency. Do not call `
 ## Logging
 
 `app/utils/logging.py` configures structured JSON logging. All log entries include:
+
 - `timestamp` (UTC)
 - `level`
 - `message`

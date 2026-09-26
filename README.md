@@ -18,6 +18,37 @@ ApexChainx is a 3-repo monorepo split across frontend, backend, and smart contra
 
 The frontend never calls contracts directly. The backend is the sole bridge between the UI and on-chain execution. All Soroban interactions are brokered exclusively through `apexchainx-be`.
 
+### System Diagram
+
+```mermaid
+graph TD
+    User([👤 User])
+    FE[apexchainx-fe\nFrontend UI]
+    BE[apexchainx-be\nBackend API]
+    DB[(PostgreSQL)]
+    Redis[(Redis)]
+    Celery[Celery Workers]
+    SorobanAdapter[Soroban Adapter]
+    Contract[apexchainx-contracts\nSoroban Smart Contracts]
+    Stellar[Stellar Network]
+
+    User -->|HTTP/S| FE
+    FE -->|REST API| BE
+    BE -->|SQLAlchemy ORM| DB
+    BE -->|Cache / Rate limit| Redis
+    BE -->|Enqueue tasks| Celery
+    Celery -->|Read/Write| DB
+    BE -->|SLA settlement| SorobanAdapter
+    SorobanAdapter -->|XDR invoke| Contract
+    Contract -->|On-chain tx| Stellar
+    Stellar -->|Tx result| SorobanAdapter
+    SorobanAdapter -->|Settlement result| BE
+    BE -->|Response| FE
+    FE -->|UI update| User
+```
+
+For detailed sub-diagrams (SLA compute flow, webhook delivery, auth token flow, middleware stack, component dependency map) see [docs/DIAGRAMS.md](docs/DIAGRAMS.md).
+
 ## Overview
 
 ApexChainx is a 3-repo
@@ -273,7 +304,7 @@ CONTRACT_EXECUTION_MODE=local
 ```
 
 ```env
-# Task Queue (required when CELERY_TASK_ALWAYS_EAGER=false)
+# Task Queue (CELERY_TASK_ALWAYS_EAGER is opt-in and only valid when ENVIRONMENT=local|test)
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 CELERY_TASK_ALWAYS_EAGER=true
@@ -392,7 +423,11 @@ Background task modules live in `app/tasks/`:
 | `sla_tasks.py` | Async SLA computation and settlement tasks |
 | `webhook_tasks.py` | Async webhook delivery with retry logic |
 
-Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. For production use set `CELERY_TASK_ALWAYS_EAGER=false` and provide Redis URLs.
+Tasks run eagerly (in-process) when `CELERY_TASK_ALWAYS_EAGER=true`. The default
+is `false`, and `true` is rejected at startup unless `ENVIRONMENT` is `local` or
+`test` — eager mode silently disables retry/backoff, circuit-breaker and
+dead-letter handling, so it is opt-in for local work only. Production must leave
+it `false` and provide Redis URLs.
 
 ## Payments and Wallets
 

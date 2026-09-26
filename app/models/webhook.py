@@ -1,12 +1,37 @@
-from sqlalchemy.dialects.postgresql import JSONB
-import uuid
-from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey, Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
 import enum
+import uuid
+from datetime import UTC, datetime
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, TypeDecorator
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
+from app.services.secret_encryption import decrypt_secret, encrypt_secret
+
+
+class EncryptedSecret(TypeDecorator):
+    """Encrypts webhook signing secrets at rest (issue #266).
+
+    Writes are encrypted with a Fernet key from configuration before hitting
+    the database; reads are decrypted on load so signing and rotation code
+    keep working against the plaintext value. Legacy plaintext values are
+    returned unchanged so pre-migration rows remain readable.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        return encrypt_secret(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return decrypt_secret(value)
 
 
 class WebhookEvent(str, enum.Enum):
@@ -22,6 +47,7 @@ class WebhookDeliveryStatus(str, enum.Enum):
     FAILED = "failed"
     RETRYING = "retrying"
     DEAD_LETTER = "dead_letter"  # BE-086: Dead-letter status for permanently failed deliveries
+    BREAKER_OPEN = "breaker_open"  # Circuit breaker open, delivery deferred
 
 
 class Webhook(Base):
@@ -30,20 +56,31 @@ class Webhook(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     url = Column(String(2048), nullable=False)
-    secret = Column(String(255), nullable=True)
+    # Encrypted at rest (#266); never contains the raw signing secret.
+    secret = Column(EncryptedSecret(), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     events = Column(Text, nullable=False)  # JSON-encoded list of WebhookEvent values
     resolved_ips = Column(Text, nullable=True)  # JSON-encoded list of resolved IPs for SSRF validation
     max_retries = Column(Integer, default=3, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
+
     # BE-034: Secret lifecycle metadata
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
     secret_version = Column(Integer, default=1, nullable=False)  # Incremented on each rotation
     # BE-009: Grace period overlap window
     previous_secrets = Column(JSONB, default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
     secret_grace_hours = Column(Integer, default=24, nullable=False)  # Configurable grace period per webhook
+
+    # #518: soft delete. Deleting a webhook used to delete the row, and
+    # `deliveries` cascades, so the delivery history an operator needs to answer
+    # "did we notify them, and what did they answer?" was destroyed along with
+    # the registration. The row is retained as a tombstone instead.
+    deleted_at = Column(DateTime, nullable=True)  # Set when the webhook is deleted; NULL while live
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
     deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
 
@@ -74,7 +111,7 @@ class WebhookDelivery(Base):
     delivered_at = Column(DateTime, nullable=True)
     dead_lettered_at = Column(DateTime, nullable=True)  # BE-086: When delivery was marked as dead-letter
     signature_version = Column(Integer, default=1, nullable=False)  # BE-087: Explicit signature algorithm version
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
 
     webhook = relationship("Webhook", back_populates="deliveries")

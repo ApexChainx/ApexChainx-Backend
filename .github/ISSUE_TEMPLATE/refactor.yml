@@ -1,0 +1,28 @@
+name: "♻️ Refactor / Technical Debt"
+description: "Propose a code refactor, cleanup, or architectural improvement."
+title: "[REFACTOR]: "
+labels: ["refactor", "tech-debt"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to suggest code refactoring or tech debt cleanup.
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current Implementation
+      description: Describe the current code structure or tech debt issue.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-refactor
+    attributes:
+      label: Proposed Refactor
+      description: Describe the proposed changes and architectural benefits.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Impacted Components
+      description: List components, modules, or services affected by this change.
