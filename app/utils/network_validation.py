@@ -59,6 +59,16 @@ def _validate_ip_address(ip_str: str) -> None:
 def validate_webhook_url(url: str) -> list[str]:
     parsed = urlparse(url)
 
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise NetworkValidationError("Webhook URL contains an invalid port.") from exc
+
+    if port is not None and port not in {80, 443}:
+        raise NetworkValidationError("Webhook URL must use port 80 or 443.")
+    if parsed.fragment:
+        raise NetworkValidationError("Webhook URL must not contain a fragment.")
+
     if parsed.scheme not in {"http", "https"}:
         raise NetworkValidationError("Webhook URL must use http or https.")
 

@@ -217,6 +217,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         delivery.event,
         delivery.signature_version,
     )
+    headers["X-Webhook-Delivery-ID"] = str(delivery.id)
 
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
     current_ips = validate_webhook_url(webhook.url)
@@ -275,6 +276,27 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
 
 @traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
+    claimed = (
+        db.query(WebhookDelivery)
+        .filter(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.status.in_(
+                [WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]
+            ),
+        )
+        .update(
+            {
+                WebhookDelivery.status: WebhookDeliveryStatus.SENDING,
+                WebhookDelivery.attempt_count: WebhookDelivery.attempt_count + 1,
+                WebhookDelivery.updated_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        return
+
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
         logger.error("WebhookDelivery %s not found.", delivery_id)
@@ -285,44 +307,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         return
 
     webhook = delivery.webhook
-
-    # #518: a soft-deleted webhook keeps its row and its delivery history, so a
-    # retry or replay request against it must not produce a new outbound request.
-    # The delivery is left untouched rather than deleted, which is the whole
-    # point of retaining it.
-    #
-    # Compared by identity rather than truthiness: both flags are real booleans
-    # on the model, and a stand-in object with fabricated attributes must not be
-    # able to short-circuit dispatch.
-    if webhook.is_deleted is True or webhook.is_active is False:
-        logger.info(
-            "WebhookDelivery %s belongs to deleted/inactive webhook %s; refusing to dispatch.",
-            delivery_id,
-            webhook.id,
-        )
-        return
-
-    # If breaker is open, mark as breaker_open without consuming retry budget
-    if not breaker.allow_request(webhook.url):
-        delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
-        delivery.error_message = "Circuit breaker open, delivery deferred"
-        delivery.next_retry_at = datetime.now(UTC) + timedelta(seconds=settings.WEBHOOK_BREAKER_RESET_SECONDS)
-        delivery.updated_at = datetime.now(UTC)
-        db.commit()
-        logger.warning(
-            "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
-            delivery.id,
-            webhook.id,
-        )
-        return
-
-    delivery.attempt_count += 1
-    delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.now(UTC)
-    db.commit()
-
-    with dispatch_limiter.acquire(str(webhook.id)):
-        success = _attempt_delivery(delivery, webhook)
+    success = _attempt_delivery(delivery, webhook)
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS

@@ -14,6 +14,7 @@ Each webhook delivery includes explicit signature versioning metadata:
 X-Webhook-Signature: sha256={hex_digest}
 X-Webhook-Signature-Version: 2
 X-Webhook-Timestamp: 2026-04-29T14:30:45.123456
+X-Webhook-Delivery-ID: 6cb39f3c-bf7b-4e02-a313-a5ecaf8df5f4
 ```
 
 Always read the version header and branch on it. An unknown version must be
@@ -264,6 +265,15 @@ traceparent: 00-{trace_id}-{span_id}-01
 This enables end-to-end request tracing across systems. Receivers can propagate the `traceparent` header to downstream services for full distributed trace visibility.
 
 ## Webhook Delivery Contract
+
+### Delivery identity and retries
+
+`X-Webhook-Delivery-ID` is a stable UUID for one stored delivery and is reused
+for every retry. Delivery is at least once: a receiver may see the same ID more
+than once if a request reached it but the sender did not receive or persist the
+response. Consumers should deduplicate processing by this ID. A delivery is
+claimed in the database before sending; a process crash after the claim leaves
+it in `sending` rather than automatically replaying an ambiguous request.
 
 ### Request Format
 

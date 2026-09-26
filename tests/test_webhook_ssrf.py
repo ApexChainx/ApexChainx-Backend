@@ -49,3 +49,19 @@ def test_webhook_url_rejects_http_outside_local(monkeypatch):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     with pytest.raises(NetworkValidationError):
         validate_webhook_url("http://example.com/webhook")
+
+
+@pytest.mark.parametrize("port", [6379, 9000, 9229])
+def test_webhook_url_rejects_custom_ports(port):
+    with pytest.raises(NetworkValidationError, match="port 80 or 443"):
+        validate_webhook_url(f"https://allowed.example.com:{port}/webhook")
+
+
+def test_webhook_url_rejects_invalid_port():
+    with pytest.raises(NetworkValidationError, match="invalid port"):
+        validate_webhook_url("https://allowed.example.com:invalid/webhook")
+
+
+def test_webhook_url_rejects_fragments():
+    with pytest.raises(NetworkValidationError, match="fragment"):
+        validate_webhook_url("https://allowed.example.com/webhook#fragment")

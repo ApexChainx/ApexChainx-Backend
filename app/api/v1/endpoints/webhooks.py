@@ -666,6 +666,11 @@ def retry_delivery(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Delivery already succeeded; retry not needed.",
         )
+    if delivery.status == WebhookDeliveryStatus.SENDING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery is already being sent.",
+        )
 
     from app.services.webhook_service import dispatch_delivery
 

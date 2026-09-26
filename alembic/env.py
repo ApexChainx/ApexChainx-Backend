@@ -21,6 +21,7 @@ import app.models.orm.sla     # noqa: F401
 import app.models.orm.payment  # noqa: F401
 import app.models.job  # noqa: F401
 import app.models.webhook  # noqa: F401
+import app.models.auth_attempt  # noqa: F401
 import app.models.sla_dispute  # noqa: F401
 
 from app.core.config import settings
