@@ -1,7 +1,17 @@
-from redis import Redis
+import hashlib
+import logging
 from time import time
+
+from redis import Redis
+from sqlalchemy.orm import Session
+
 from app.core.config import settings
-from app.services.audit_log import audit_log
+from app.services.auth_attempt_ledger import (
+    get_credential_prefix_count,
+    record_credential_prefix,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class CredentialStuffingDetector:
@@ -9,28 +19,73 @@ class CredentialStuffingDetector:
         self.redis = redis_client or Redis.from_url(settings.CELERY_BROKER_URL)
 
     def _prefix_key(self, ip: str) -> str:
-        return f"cred_stuffing:{ip}"
+        bounded_ip = (
+            ip
+            if len(ip) <= 64
+            else hashlib.sha256(ip.encode("utf-8")).hexdigest()
+        )
+        return f"cred_stuffing:{bounded_ip}"
 
-    def record_attempt(self, ip: str, password: str) -> None:
+    def record_attempt(
+        self,
+        ip: str,
+        password: str,
+        db: Session | None = None,
+        account: str | None = None,
+    ) -> None:
+        if db is not None:
+            record_credential_prefix(
+                db,
+                (account or ip).strip().lower(),
+                password,
+                settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD + 1,
+            )
+
         prefix = password[:4]
         now = time()
         key = self._prefix_key(ip)
         window = settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES * 60
-        self.redis.zadd(key, {prefix: now})
-        self.redis.zremrangebyscore(key, "-inf", now - window)
-        self.redis.expire(key, int(window) + 60)
+        try:
+            self.redis.zadd(key, {prefix: now})
+            self.redis.zremrangebyscore(key, "-inf", now - window)
+            self.redis.expire(key, int(window) + 60)
+        except Exception as exc:
+            logger.warning("Credential-stuffing Redis counter unavailable: %s", exc)
 
-    def detect_stuffing(self, ip: str) -> bool:
-        count = self.get_suspicious_ip_count(ip)
+    def detect_stuffing(
+        self,
+        ip: str,
+        db: Session | None = None,
+        account: str | None = None,
+    ) -> bool:
+        count = self.get_suspicious_ip_count(ip, db, account)
         return count > settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD
 
-    def get_suspicious_ip_count(self, ip: str) -> int:
-        now = time()
+    def get_suspicious_ip_count(
+        self,
+        ip: str,
+        db: Session | None = None,
+        account: str | None = None,
+    ) -> int:
         window = settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES * 60
+        persistent_count = 0
+        if db is not None:
+            persistent_count = get_credential_prefix_count(
+                db,
+                (account or ip).strip().lower(),
+                window,
+            )
+
+        now = time()
         key = self._prefix_key(ip)
-        self.redis.zremrangebyscore(key, "-inf", now - window)
-        unique = self.redis.zrangebyscore(key, now - window, "+inf")
-        return len(set(u.decode() if isinstance(u, bytes) else u for u in unique))
+        try:
+            self.redis.zremrangebyscore(key, "-inf", now - window)
+            unique = self.redis.zrangebyscore(key, now - window, "+inf")
+            redis_count = len(set(u.decode() if isinstance(u, bytes) else u for u in unique))
+            return max(persistent_count, redis_count)
+        except Exception as exc:
+            logger.warning("Credential-stuffing Redis counter unavailable: %s", exc)
+            return persistent_count
 
 
 credential_stuffing_detector = CredentialStuffingDetector()

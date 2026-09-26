@@ -17,6 +17,7 @@ class WebhookEvent(str, enum.Enum):
 
 class WebhookDeliveryStatus(str, enum.Enum):
     PENDING = "pending"
+    SENDING = "sending"
     SUCCESS = "success"
     FAILED = "failed"
     RETRYING = "retrying"
@@ -52,9 +53,19 @@ class WebhookDelivery(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     webhook_id = Column(UUID(as_uuid=True), ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False)
-    event = Column(SAEnum(WebhookEvent), nullable=False)
+    event = Column(
+        SAEnum(WebhookEvent, values_callable=lambda members: [member.value for member in members]),
+        nullable=False,
+    )
     payload = Column(Text, nullable=False)  # JSON-encoded payload
-    status = Column(SAEnum(WebhookDeliveryStatus), default=WebhookDeliveryStatus.PENDING, nullable=False)
+    status = Column(
+        SAEnum(
+            WebhookDeliveryStatus,
+            values_callable=lambda members: [member.value for member in members],
+        ),
+        default=WebhookDeliveryStatus.PENDING,
+        nullable=False,
+    )
     attempt_count = Column(Integer, default=0, nullable=False)
     next_retry_at = Column(DateTime, nullable=True)
     response_status_code = Column(Integer, nullable=True)

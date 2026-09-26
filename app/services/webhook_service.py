@@ -114,6 +114,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         delivery.event,
         delivery.signature_version,
     )
+    headers["X-Webhook-Delivery-ID"] = str(delivery.id)
 
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
     validate_webhook_url(webhook.url)
@@ -141,17 +142,33 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
 
 
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
+    claimed = (
+        db.query(WebhookDelivery)
+        .filter(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.status.in_(
+                [WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]
+            ),
+        )
+        .update(
+            {
+                WebhookDelivery.status: WebhookDeliveryStatus.SENDING,
+                WebhookDelivery.attempt_count: WebhookDelivery.attempt_count + 1,
+                WebhookDelivery.updated_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        return
+
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
         logger.error("WebhookDelivery %s not found.", delivery_id)
         return
 
     webhook = delivery.webhook
-    delivery.attempt_count += 1
-    delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.utcnow()
-    db.commit()
-
     success = _attempt_delivery(delivery, webhook)
 
     if success:

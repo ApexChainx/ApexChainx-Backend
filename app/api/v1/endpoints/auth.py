@@ -91,7 +91,7 @@ class RefreshRequest(BaseModel):
 @router.post("/register", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
-    if not rate_limiter.is_allowed(f"register_ip_{client_ip}"):
+    if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
         raise HTTPException(
             status_code=429,
             detail="Too many registration attempts from this IP. Please try again later.",
@@ -110,15 +110,21 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     client_ip = _get_client_ip(request)
     
     # Credential stuffing detection
-    credential_stuffing_detector.record_attempt(client_ip, payload.password)
-    if credential_stuffing_detector.detect_stuffing(client_ip):
+    credential_stuffing_detector.record_attempt(
+        client_ip, payload.password, db, account=payload.email
+    )
+    if credential_stuffing_detector.detect_stuffing(
+        client_ip, db, account=payload.email
+    ):
         lockout_minutes = settings.AUTH_LOCKOUT_DURATION_MINUTES * 4
         audit_log.log_event(
             db,
             "suspicious_login_activity",
             details={
                 "ip": client_ip,
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(client_ip),
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(
+                    client_ip, db, account=payload.email
+                ),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
@@ -128,7 +134,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
     
     # Rate limit by IP
-    if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
+    if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
         raise HTTPException(
             status_code=429, 
             detail="Too many login attempts from this IP. Please try again later."
@@ -145,7 +151,7 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
     client_ip = _get_client_ip(request)
     
     # Rate limit by IP
-    if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}"):
+    if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}", db=db):
         raise HTTPException(
             status_code=429, 
             detail="Too many refresh attempts from this IP. Please try again later."

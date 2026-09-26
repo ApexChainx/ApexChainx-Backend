@@ -1,11 +1,6 @@
-﻿"""
-Auth rate limiter implementation.
-
-This module provides a Redis-backed sliding-window rate limiter with a
-fallback to an in-process token bucket when Redis is unavailable or when
-`USE_REDIS_RATE_LIMITER` is disabled.
-"""
+﻿"""Auth rate limiting with Redis and persistent database enforcement."""
 import asyncio
+import hashlib
 import logging
 import random
 from collections import defaultdict
@@ -14,8 +9,10 @@ from typing import Dict, List
 
 import redis.asyncio as redis
 from redis.exceptions import RedisError
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services.auth_attempt_ledger import record_rate_limit_attempt
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +38,18 @@ class SimpleRateLimiter:
     def __init__(self) -> None:
         self.requests: Dict[str, List[float]] = defaultdict(list)
 
-    def is_allowed(self, key: str) -> bool:
-        """Check if the key is allowed based on rate limits."""
+    def is_allowed(self, key: str, db: Session | None = None) -> bool:
+        """Check the persistent ledger when an authentication session is available."""
+        if db is not None:
+            return record_rate_limit_attempt(
+                db,
+                key,
+                settings.AUTH_RATE_LIMIT_REQUESTS,
+                settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+            )
+
         now = time()
         window_start = now - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
-
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
         if len(self.requests[key]) >= settings.AUTH_RATE_LIMIT_REQUESTS:
             return False
@@ -61,7 +65,12 @@ class RedisRateLimiter:
         self.client = redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
     def _key_namespace(self, key: str) -> str:
-        return f"auth_rate_limiter:{key}"
+        bounded_key = (
+            key
+            if len(key) <= 128
+            else hashlib.sha256(key.encode("utf-8")).hexdigest()
+        )
+        return f"auth_rate_limiter:{bounded_key}"
 
     def _is_circuit_open(self) -> bool:
         return self.disabled_until is not None and time() < self.disabled_until
@@ -97,10 +106,39 @@ class RedisRateLimiter:
             finally:
                 loop.close()
 
-    def is_allowed(self, key: str) -> bool:
+    def is_allowed(self, key: str, db: Session | None = None) -> bool:
+        if db is not None:
+            if not record_rate_limit_attempt(
+                db,
+                key,
+                settings.AUTH_RATE_LIMIT_REQUESTS,
+                settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+            ):
+                return False
+            if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
+                return True
+            if self._is_circuit_open():
+                return True
+
+            try:
+                return self._run_coroutine(self._is_allowed_async(key))
+            except (RedisError, OSError, RuntimeError) as exc:
+                logger.warning(
+                    "Redis rate limiter unavailable; using persistent attempt ledger: %s",
+                    exc,
+                )
+                self._trip_circuit()
+                return True
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected rate limiter error; using persistent attempt ledger: %s",
+                    exc,
+                )
+                self._trip_circuit()
+                return True
+
         if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
             return self.fallback.is_allowed(key)
-
         if self._is_circuit_open():
             return self.fallback.is_allowed(key)
 
