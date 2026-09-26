@@ -1,10 +1,14 @@
+import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from celery import Task
+from celery.result import AsyncResult
 
 from app.core.exceptions import ApexTransientError
+from app.core.lock import advisory_lock
 from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent
@@ -15,6 +19,9 @@ from app.utils.logging import get_structured_logger
 
 logger = logging.getLogger(__name__)
 task_logger = get_structured_logger("sla_tasks")
+
+# Celery states that mean "hasn't finished yet" (#575).
+_INFLIGHT_CELERY_STATES = {"PENDING", "STARTED", "RETRY"}
 
 
 class DatabaseTask(Task):
@@ -322,6 +329,57 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: list[str], period: str) -> 
         db.close()
 
 
+def _find_inflight_sla_job(db, job_type: JobType, matches: Callable[[dict[str, Any]], bool]) -> Job | None:
+    """Return an already-enqueued Job of this type that hasn't finished yet, or None.
+
+    Two admins triggering a recompute for the same SLA at nearly the same time
+    — or a beat tick racing a manual run — must not enqueue two Celery tasks
+    for it: that doubles compute and can race on the unique sla_result_id
+    (#575). ``matches`` decides whether a candidate Job's payload is "the same
+    request" (e.g. same device_id + period).
+
+    The Job.status column is checked first as a cheap filter, then confirmed
+    against Celery's own state for that task. This second check matters: if
+    the DB row's status never got updated to a terminal value (for example,
+    under CELERY_TASK_ALWAYS_EAGER the task finishes before the Job row even
+    exists to be updated), we don't want a permanently-stale "in flight" row
+    to block every future recompute for that SLA.
+    """
+    candidates = (
+        db.query(Job)
+        .filter(Job.job_type == job_type, Job.status.in_((JobStatus.PENDING, JobStatus.STARTED)))
+        .order_by(Job.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    for job in candidates:
+        payload = _coerce_job_payload(job.payload)
+        if not matches(payload):
+            continue
+        state = AsyncResult(job.celery_task_id, app=celery_app).state
+        if state in _INFLIGHT_CELERY_STATES:
+            return job
+    return None
+
+
+def _coerce_job_payload(value: Any) -> dict[str, Any]:
+    """Normalize a Job.payload value to a dict for comparison.
+
+    Mirrors the defensive handling in app.api.v1.endpoints.jobs._parse_job_json:
+    the payload column has held plain JSON text for some rows in the past, so
+    a value can come back as a JSON string as well as a native dict.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return value
+
+
 def enqueue_sla_computation(
     db,
     device_id: str,
@@ -332,6 +390,10 @@ def enqueue_sla_computation(
     """
     Enqueue an SLA computation task and create a Job record for tracking.
     Returns the Job before the Celery task ID is known — updated after dispatch.
+
+    Deduped per (device_id, period): if a job for the same pair is still in
+    flight, that existing Job is returned instead of enqueueing a second
+    Celery task (#575).
     """
     from app.models.job import Job  # local import avoids circular deps
 
@@ -339,35 +401,59 @@ def enqueue_sla_computation(
     if correlation_id:
         payload["correlation_id"] = correlation_id
 
-    task_result = compute_sla_for_device.apply_async(kwargs=payload)
+    with advisory_lock(db, f"sla-enqueue:{job_type.value}:{device_id}:{period}"):
+        existing = _find_inflight_sla_job(
+            db, job_type, lambda p: p.get("device_id") == device_id and p.get("period") == period
+        )
+        if existing:
+            return existing
 
-    job = Job(
-        celery_task_id=task_result.id,
-        job_type=job_type,
-        payload=payload,
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+        task_result = compute_sla_for_device.apply_async(kwargs=payload)
+
+        job = Job(
+            celery_task_id=task_result.id,
+            job_type=job_type,
+            payload=payload,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job
 
 
 def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correlation_id: str | None = None) -> Job:
-    """Enqueue a bulk SLA computation task and return the tracking Job."""
+    """Enqueue a bulk SLA computation task and return the tracking Job.
+
+    Deduped per (sorted device_ids, period): a bulk recompute already in
+    flight for the same set of devices is returned instead of enqueueing a
+    duplicate (#575).
+    """
     from app.models.job import Job, JobType
 
     payload = {"device_ids": device_ids, "period": period}
     if correlation_id:
         payload["correlation_id"] = correlation_id
 
-    task_result = compute_bulk_sla.apply_async(kwargs=payload)
+    sorted_ids = sorted(device_ids)
+    dedup_key = ",".join(sorted_ids)
 
-    job = Job(
-        celery_task_id=task_result.id,
-        job_type=JobType.BULK_SLA_COMPUTATION,
-        payload=payload,
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+    with advisory_lock(db, f"sla-enqueue:{JobType.BULK_SLA_COMPUTATION.value}:{dedup_key}:{period}"):
+        existing = _find_inflight_sla_job(
+            db,
+            JobType.BULK_SLA_COMPUTATION,
+            lambda p: sorted(p.get("device_ids") or []) == sorted_ids and p.get("period") == period,
+        )
+        if existing:
+            return existing
+
+        task_result = compute_bulk_sla.apply_async(kwargs=payload)
+
+        job = Job(
+            celery_task_id=task_result.id,
+            job_type=JobType.BULK_SLA_COMPUTATION,
+            payload=payload,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job
