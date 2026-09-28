@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.exceptions import ApexWalletAlreadyExistsError
@@ -29,8 +30,18 @@ CREATE_PATH = "/api/v1/wallets/create"
 
 @pytest.fixture(scope="function")
 def db() -> Session:
-    """In-memory SQLite session, like the other wallet persistence tests."""
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    """In-memory SQLite session, like the other wallet persistence tests.
+
+    check_same_thread=False: the HTTP tests run the app in the TestClient's
+    worker thread, so the shared in-memory engine must accept cross-thread
+    use (StaticPool keeps a single connection alive for it).
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        echo=False,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
     try:

@@ -8,16 +8,32 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.security import get_current_user
 from app.main import app
 
 
 client = TestClient(app)
 
 
+class _AdminUser:
+    email = "gov-admin@example.com"
+    role = "admin"
+
+
 @pytest.fixture
 def admin_headers():
-    """Bypass auth for testing — return minimal headers that pass require_admin."""
+    """Auth is handled by the admin_auth override; headers are unused."""
     return {}
+
+
+@pytest.fixture(autouse=True)
+def admin_auth():
+    """Bypass authentication: governance endpoints sit behind require_admin,
+    which resolves via get_current_user. Overriding that dependency lets the
+    tests exercise endpoint behaviour rather than auth plumbing."""
+    app.dependency_overrides[get_current_user] = lambda: _AdminUser()
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 class TestProposeAdminEndpoint:

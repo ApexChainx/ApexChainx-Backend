@@ -39,6 +39,8 @@ def _webhook(name: str = "outage-webhook", is_active: bool = True):
         max_retries=3,
         secret_version=1,
         last_secret_rotation_at=None,
+        # #518 soft delete: tombstones carry a deletion timestamp.
+        deleted_at=None,
     )
 
 
@@ -180,7 +182,12 @@ class TestQuery:
 
         client.get("/api/v1/webhooks")
 
-        assert query.order_by.call_args[0] == (Webhook.created_at.desc(), Webhook.id)
+        # Compare stringified clauses: SQLAlchemy expression __eq__ builds a SQL
+        # clause (not a bool), so tuple equality against live expressions lies.
+        assert tuple(map(str, query.order_by.call_args[0])) == (
+            str(Webhook.created_at.desc()),
+            str(Webhook.id),
+        )
 
     def test_total_comes_from_the_page_statement(self, admin_override):
         """The #296 single-statement pattern: no second COUNT(*) per request."""
@@ -205,18 +212,22 @@ class TestQuery:
 
         client.get("/api/v1/webhooks?is_active=false")
 
-        query.filter.assert_called_once()
+        # One filter for the caller-supplied is_active plus the #518 tombstone
+        # filter the endpoint always applies when include_deleted is unset.
+        assert query.filter.call_count == 2
 
     def test_name_filter_is_applied(self, admin_override):
         query = _install([], 0)
 
         client.get("/api/v1/webhooks?name=outage")
 
-        query.filter.assert_called_once()
+        # Caller filter plus the always-on #518 tombstone filter.
+        assert query.filter.call_count == 2
 
     def test_both_filters_combine(self, admin_override):
         query = _install([], 0)
 
         client.get("/api/v1/webhooks?is_active=true&name=outage")
 
-        assert query.filter.call_count == 2
+        # Both caller filters plus the always-on #518 tombstone filter.
+        assert query.filter.call_count == 3

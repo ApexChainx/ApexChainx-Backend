@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import LimitParams, OffsetParams
 from app.core.security import require_admin, require_engineer, require_engineer_or_admin
 from app.db.session import get_db
 from app.models.orm.sla import SLAResultORM
@@ -31,13 +32,17 @@ router = APIRouter()
 )
 def list_disputes(
     status_filter: DisputeStatus | None = Query(default=None, alias="status"),
+    # #564: this list was previously uncapped — an authenticated client could
+    # pull the whole table in one request. It now pages like every other list.
+    limit: int = LimitParams,
+    offset: int = OffsetParams,
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
     query = db.query(SLADispute).order_by(SLADispute.flagged_at.desc())
     if status_filter is not None:
         query = query.filter(SLADispute.status == status_filter)
-    return query.all()
+    return query.offset(offset).limit(limit).all()
 
 
 @router.post(

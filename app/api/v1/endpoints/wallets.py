@@ -6,6 +6,7 @@ All handlers now pass a request-scoped database session to WalletRegistry.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import LimitParams, OffsetParams
 from app.core.exceptions import ApexConflictError
 from app.core.security import require_engineer
 from app.db.session import get_db
@@ -55,6 +56,18 @@ def link_wallet(
 @router.get("/ping")
 def wallets_ping() -> dict[str, str]:
     return {"message": "wallets ok"}
+
+
+@router.get("", response_model=list[Wallet])
+def list_wallets(
+    # #564: wallet enumeration with the shared list cap; declared before the
+    # "/{user_id}" routes so it is not shadowed by them.
+    limit: int = LimitParams,
+    offset: int = OffsetParams,
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+) -> list[Wallet]:
+    return WalletRegistry.list_wallets(db, limit=limit, offset=offset)
 
 
 @router.get("/{user_id}", response_model=Wallet)

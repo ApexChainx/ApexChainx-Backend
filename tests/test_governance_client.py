@@ -4,7 +4,6 @@ Validates that governance operations return correct response shapes
 and that audit events are logged for each action.
 """
 
-from unittest.mock import patch
 
 import pytest
 
@@ -18,6 +17,14 @@ from app.services.contracts.governance_client import (
     propose_operator,
     renounce_admin,
 )
+
+
+@pytest.fixture(autouse=True)
+def _governance_enabled(monkeypatch):
+    """These tests exercise the local_adapter stub shapes, which only run when
+    the governance gate (#BE-governance) is explicitly enabled."""
+    monkeypatch.setattr(settings, "GOVERNANCE_ENABLED", True)
+    monkeypatch.setattr(settings, "CONTRACT_EXECUTION_MODE", "local_adapter")
 
 
 class TestProposeAdmin:

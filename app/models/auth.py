@@ -43,13 +43,17 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(LoginRequest):
     model_config = ConfigDict(
+        # Public registration must be a privilege boundary: an extra `role`
+        # field in the payload is rejected with 422 rather than silently
+        # ignored, so a client cannot self-escalate by adding fields.
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "email": "user@example.com",
                 "password": "Password123!",
                 "full_name": "Example User",
             }
-        }
+        },
     )
 
     full_name: str = Field(..., min_length=1)

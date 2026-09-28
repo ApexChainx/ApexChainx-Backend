@@ -30,8 +30,9 @@ class Job(Base):
     celery_task_id = Column(String(255), unique=True, nullable=False, index=True)
     job_type = Column(SAEnum(JobType), nullable=False)
     status = Column(SAEnum(JobStatus), default=JobStatus.PENDING, nullable=False)
-    payload = Column(JSONB, nullable=True)  # JSON input params
-    result = Column(JSONB, nullable=True)  # JSON result
+    # JSONB on Postgres, plain JSON elsewhere (SQLite test schemas).
+    payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)  # JSON input params
+    result = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)  # JSON result
     error = Column(Text, nullable=True)
     progress = Column(Float, default=0.0)  # 0.0 – 100.0
     progress_details = Column(JSON, nullable=True)  # Structured progress information

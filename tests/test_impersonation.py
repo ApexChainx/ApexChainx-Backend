@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.db.session import SessionLocal
 from app.main import app
 from app.models.auth import LoginRequest, RegisterRequest
+from app.models.enums import Role
 from app.models.orm.user import UserORM
 from app.services.auth_store import AuthStore
 
@@ -23,13 +24,15 @@ def admin_headers(client):
     try:
         email = f"imp-admin-{id(object())}@example.com"
         password = "Admin123!"
-        AuthStore.register(
-            RegisterRequest(
-                email=email,
-                password=password,
-                full_name="Admin User",
-                role="admin",
-            ),
+        # Role assignment is an admin action (public registration forbids a
+        # role field), so the admin user is created through the admin path.
+        AuthStore.admin_create_user(
+            email=email,
+            password=password,
+            full_name="Admin User",
+            role=Role.admin,
+            actor_id="user_test",
+            actor_email="test-admin@example.com",
             db=db,
         )
         session = AuthStore.login(LoginRequest(email=email, password=password), db=db)
@@ -55,7 +58,6 @@ def regular_user_headers(client):
                 email=email,
                 password=password,
                 full_name="Regular User",
-                role="engineer",
             ),
             db=db,
         )
@@ -112,13 +114,13 @@ class TestImpersonation:
         db = SessionLocal()
         try:
             admin2_email = f"imp-admin2-{id(object())}@example.com"
-            AuthStore.register(
-                RegisterRequest(
-                    email=admin2_email,
-                    password="Admin123!",
-                    full_name="Admin Two",
-                    role="admin",
-                ),
+            AuthStore.admin_create_user(
+                email=admin2_email,
+                password="Admin123!",
+                full_name="Admin Two",
+                role=Role.admin,
+                actor_id="user_test",
+                actor_email="test-admin@example.com",
                 db=db,
             )
             admin2 = db.query(UserORM).filter(UserORM.email == admin2_email).first()

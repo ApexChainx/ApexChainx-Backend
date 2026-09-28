@@ -1,7 +1,7 @@
 """Bounded, batched enqueueing for the failed-payment retry endpoint,
 replacing an unbounded full-table load into memory.
 """
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple
 
 DEFAULT_BATCH_SIZE = 200
 

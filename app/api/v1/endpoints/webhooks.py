@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import LimitParams, PageParams, PageSizeParams
 from app.core.config import settings
 from app.core.security import hash_token, require_admin
 from app.db.session import get_db
@@ -401,8 +402,8 @@ def list_webhooks(
             "so operators need a way to find the tombstones."
         ),
     ),
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),  # BE-083
-    page_size: int = Query(20, ge=1, le=100, description="Items per page"),  # BE-083
+    page: int = PageParams,
+    page_size: int = PageSizeParams,  # #564: shared cap (was le=100)
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -427,7 +428,7 @@ def list_webhooks(
         .limit(page_size)
         .all()
     )
-    total = paged[0].total_count if paged else query.order_by(None).count()
+    total = paged[0][1] if paged else query.order_by(None).count()
     items = [_serialize_webhook(row[0]) for row in paged]
     return PaginatedWebhookList(
         items=items,
@@ -515,7 +516,7 @@ def list_webhook_deliveries(
     created_before: datetime | None = Query(None, description="Return deliveries created before this timestamp."),
     delivered_after: datetime | None = Query(None, description="Return deliveries delivered after this timestamp."),
     delivered_before: datetime | None = Query(None, description="Return deliveries delivered before this timestamp."),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = LimitParams,  # #564: shared default+cap (was default=50, le=200)
     offset: int = Query(0, ge=0, description="Number of records to skip"),  # BE-083
     db: Session = Depends(get_db),
 ):
@@ -555,7 +556,7 @@ def list_webhook_deliveries(
         .limit(limit)
         .all()
     )
-    total = paged[0].total_count if paged else query.order_by(None).count()
+    total = paged[0][1] if paged else query.order_by(None).count()
     items = [_serialize_delivery(row[0]) for row in paged]
     return PaginatedWebhookDeliveries(
         items=items,
@@ -688,7 +689,7 @@ def retry_delivery(
 @router.get("/{webhook_id}/dead-letter-deliveries", response_model=list[WebhookDeliveryResponse])
 def list_dead_letter_deliveries(
     webhook_id: UUID,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = LimitParams,  # #564: shared default+cap (was default=50, le=200)
     db: Session = Depends(get_db),
 ):
     """List dead-lettered deliveries for a webhook."""

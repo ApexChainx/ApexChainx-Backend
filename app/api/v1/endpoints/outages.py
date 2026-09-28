@@ -3,12 +3,13 @@ import io
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import LimitParams, PageParams, PageSizeParams
 from app.api.v1.endpoints.sla import _invalidate_analytics_cache
 from app.core.config import settings
 from app.core.lock import ConcurrencyLockError, advisory_lock_nowait
@@ -33,7 +34,7 @@ from app.repositories.sla_repository import SLARepository
 from app.services.audit_log import audit_log
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.webhook_service import trigger_sla_violation_webhooks
-from app.utils.exporter import export_outages, stream_export_csv, stream_export_json
+from app.utils.exporter import stream_export_csv, stream_export_json
 
 router = APIRouter()
 
@@ -76,8 +77,8 @@ def export_outages_endpoint(
 
 @router.get("/violations")
 def list_violations(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page: int = PageParams,
+    page_size: int = PageSizeParams,  # #564: shared cap (was le=100)
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
@@ -92,14 +93,12 @@ def list_outages(
     search: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    page: int = Query(
-        default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
-    ),
-    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    page: int = PageParams,
+    page_size: int = PageSizeParams,  # #564: shared cap (was le=100)
     cursor: str | None = Query(
         default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
     ),
-    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
+    limit: int = LimitParams,  # #564: shared cap (was le=100)
     sort_by: OutageSortField = Query(
         default=OutageSortField.detected_at,
         description="Sort field (enum). Supported: detected_at, site_name, severity, status, id. Invalid values rejected with 422.",
@@ -256,7 +255,6 @@ async def import_outages(
     # Sniff actual content type from first non-whitespace byte
     stripped = content.lstrip()
     actual_is_json = stripped.startswith((b"{", b"["))
-    actual_is_csv = not actual_is_json and len(stripped) > 0
 
     declared_json = filename.endswith(".json")
     declared_csv = filename.endswith(".csv")
@@ -665,8 +663,8 @@ def get_outage_timeline(
     event_type: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page: int = PageParams,
+    page_size: int = PageSizeParams,  # #564: shared cap (was le=100)
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):

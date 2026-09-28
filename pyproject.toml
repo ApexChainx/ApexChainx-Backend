@@ -27,6 +27,9 @@ dependencies = [
     "PyJWT==2.8.0",
     "email-validator>=2.0",
     "passlib[bcrypt]==1.7.4",
+    # passlib 1.7.4's backend self-test hashes a >72-byte probe, which bcrypt
+    # >= 4.1 rejects with ValueError; pin below that until passlib 1.8 ships.
+    "bcrypt==4.0.1",
     "gunicorn==23.0.0",
     "opentelemetry-api==1.29.0",
     "opentelemetry-sdk==1.29.0",

@@ -1,12 +1,13 @@
+# raw-sql-allowed
 """Convert outages.updated_at from naive timestamp to timezone-aware timestamptz.
 
-Revision ID: 0026b_outage_updated_at_timestamptz
+Revision ID: 0026b_outage_updated_at_tz
 Revises: 0025_merge_branches
 Create Date: 2026-08-26
 """
 from alembic import op
 
-revision = "0026b_outage_updated_at_timestamptz"
+revision = "0026b_outage_updated_at_tz"
 down_revision = "0025_merge_branches"
 depends_on = None
 branch_labels = None

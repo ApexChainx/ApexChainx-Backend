@@ -139,7 +139,7 @@ class AuthStore:
                     db,
                     "account_locked",
                     email=payload.email,
-                    actor_id=stored_user.user_id,
+                    actor_id=stored_user.id,
                     details={
                         "lockout_duration_minutes": settings.AUTH_LOCKOUT_DURATION_MINUTES,
                         "failed_attempts": stored_user.failed_login_attempts,
@@ -153,7 +153,7 @@ class AuthStore:
                 db,
                 "login_failed",
                 email=payload.email,
-                actor_id=stored_user.user_id if stored_user else None,
+                actor_id=stored_user.id if stored_user else None,
                 details={"reason": "invalid_credentials"},
             )
             raise ValueError("Invalid credentials")
@@ -178,7 +178,7 @@ class AuthStore:
             expires_at=expires_at,
         )
 
-        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.user_id)
+        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.id)
 
         return AuthSessionResponse(
             access_token=access_token,
@@ -275,7 +275,7 @@ class AuthStore:
                 db,
                 "refresh_failed_compromised",
                 email=email,
-                actor_id=stored_user.user_id if stored_user else None,
+                actor_id=stored_user.id if stored_user else None,
                 details={"family_id": family_id, "reason": "compromised_family"},
             )
             raise ValueError("Session family has been compromised")
@@ -289,7 +289,7 @@ class AuthStore:
                 db,
                 "refresh_token_reuse",
                 email=email,
-                actor_id=stored_user.user_id if stored_user else None,
+                actor_id=stored_user.id if stored_user else None,
                 details={
                     "family_id": family_id,
                     "sequence": old_session.sequence,
@@ -323,7 +323,7 @@ class AuthStore:
             db,
             "refresh",
             email=email,
-            actor_id=stored_user.user_id,
+            actor_id=stored_user.id,
             details={"family_id": family_id, "event": "token_rotation"},
         )
 

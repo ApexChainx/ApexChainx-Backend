@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy import and_, or_
 
+from app.api.dependencies import LimitParams
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.job import Job, JobStatus, JobType
@@ -277,7 +278,7 @@ def submit_bulk_sla_computation(
 def list_jobs(
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = LimitParams,  # #564: shared cap (was le=100)
     cursor: str | None = Query(None),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),

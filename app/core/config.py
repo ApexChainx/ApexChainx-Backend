@@ -12,6 +12,34 @@ MIN_SECRET_KEY_LENGTH = 32
 # while presenting a queue topology that does nothing.
 DEV_ENVIRONMENTS = {"local", "test"}
 
+# Header clients use to pin an API version (#499)
+API_VERSION_HEADER = "X-API-Version"
+
+
+def parse_api_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a dotted API version into a 3-part comparable tuple.
+
+    Accepts ``1``, ``1.0``, ``1.0.0`` and an optional ``v`` prefix.  Missing
+    components are zero-padded so ``1`` and ``1.0.0`` compare equal.  Returns
+    ``None`` when the value is not a dotted numeric version.
+    """
+    raw = value.strip().removeprefix("v").strip()
+    if not raw:
+        return None
+    parts = raw.split(".")
+    if len(parts) > 3:
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        # isdecimal (not isdigit) so superscripts such as "²" are rejected
+        # instead of blowing up int() on an attacker-controlled header.
+        if not part.isdecimal():
+            return None
+        numbers.append(int(part))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
@@ -118,6 +146,17 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
     MAX_WEBHOOK_MAX_RETRIES: int = 10  # Max delivery retry attempts a webhook may be configured for (#552)
+    # Registration cap per account (0 disables the check). Bounds fan-out and
+    # the number of secrets that must be rotated.
+    MAX_WEBHOOKS_PER_ACCOUNT: int = 20
+    # Warn (never block) when a single registration event fans out to more
+    # webhook deliveries than this.
+    WEBHOOK_FANOUT_WARN_THRESHOLD: int = 20
+    # Governance client gate (#BE-governance). The local_adapter client cannot
+    # execute real Soroban transactions; with this flag off (the default) every
+    # governance op raises instead of returning a fabricated success payload.
+    # When on in local_adapter mode, responses carry "simulated": true.
+    GOVERNANCE_ENABLED: bool = False
     
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False

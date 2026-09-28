@@ -82,10 +82,22 @@ class AuditLogService:
             db.commit()
         self._last_hash = entry_hash
 
-    def list(self) -> list[dict[str, Any]]:
+    def list(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Return the newest audit entries, newest first (#564).
+
+        The list was previously unbounded — an admin request pulled the whole
+        table. It now pages with the same defaults/caps as every other list
+        endpoint.
+        """
         factory = AuditSessionLocal if settings.DATABASE_AUDIT_URL else self.db_session_factory
         with factory() as db:
-            entries = db.query(AuditLogORM).order_by(desc(AuditLogORM.id)).all()
+            entries = (
+                db.query(AuditLogORM)
+                .order_by(desc(AuditLogORM.id))
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
             return [
                 {
                     "id": entry.id,

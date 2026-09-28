@@ -158,6 +158,10 @@ class TestProductionGuards:
             IMPERSONATION_SIGNING_KEY="i" * 48,
             PAYMENT_WEBHOOK_SECRET="w" * 48,
             WEBHOOK_SECRET_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+            # The template ships eager mode for local dev; the #510 guard
+            # refuses it outside development, so a real deployment must turn
+            # it off here as well.
+            CELERY_TASK_ALWAYS_EAGER=False,
         )
 
         validate_critical_settings(config)

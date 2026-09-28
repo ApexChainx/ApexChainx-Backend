@@ -2,6 +2,11 @@
 
 Provides REST API for two-step admin and operator transfers on the
 Soroban SLA calculator contract.  All endpoints require admin role.
+
+Governance ops raise ``GovernanceNotImplementedError`` while there is no
+real Soroban execution path (``GOVERNANCE_ENABLED`` off); the API surfaces
+that as 501 with a ``not_implemented`` problem detail rather than a
+fabricated success payload.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +16,7 @@ from app.core.security import require_admin
 from app.services.audit_log import audit_log
 from app.services.contracts.governance_client import (
     GovernanceError,
+    GovernanceNotImplementedError,
     accept_admin,
     accept_operator,
     cancel_admin_proposal,
@@ -38,6 +44,8 @@ def api_propose_admin(
     """Initiate a two-step admin transfer on the SLA contract."""
     try:
         result = propose_admin(payload.new_admin_address)
+    except GovernanceNotImplementedError as exc:
+        raise HTTPException(status_code=501, detail={"error": "not_implemented", "message": str(exc)}) from exc
     except GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -59,6 +67,8 @@ def api_accept_admin(
     """Complete an admin transfer (called by the proposed new admin)."""
     try:
         result = accept_admin()
+    except GovernanceNotImplementedError as exc:
+        raise HTTPException(status_code=501, detail={"error": "not_implemented", "message": str(exc)}) from exc
     except GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -79,6 +89,8 @@ def api_cancel_admin_proposal(
     """Cancel a pending admin proposal."""
     try:
         result = cancel_admin_proposal()
+    except GovernanceNotImplementedError as exc:
+        raise HTTPException(status_code=501, detail={"error": "not_implemented", "message": str(exc)}) from exc
     except GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -99,6 +111,8 @@ def api_renounce_admin(
     """Renounce admin role permanently."""
     try:
         result = renounce_admin()
+    except GovernanceNotImplementedError as exc:
+        raise HTTPException(status_code=501, detail={"error": "not_implemented", "message": str(exc)}) from exc
     except GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -120,6 +134,8 @@ def api_propose_operator(
     """Initiate a two-step operator transfer on the SLA contract."""
     try:
         result = propose_operator(payload.new_operator_address)
+    except GovernanceNotImplementedError as exc:
+        raise HTTPException(status_code=501, detail={"error": "not_implemented", "message": str(exc)}) from exc
     except GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -141,6 +157,8 @@ def api_accept_operator(
     """Complete an operator transfer (called by the proposed new operator)."""
     try:
         result = accept_operator()
+    except GovernanceNotImplementedError as exc:
+        raise HTTPException(status_code=501, detail={"error": "not_implemented", "message": str(exc)}) from exc
     except GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

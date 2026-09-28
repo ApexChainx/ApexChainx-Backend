@@ -55,10 +55,16 @@ def _session(webhook):
         if entity is Webhook:
             query.filter.return_value.first.return_value = webhook
         else:
-            # list_webhook_deliveries pages with a window-count column.
-            paged = query.filter.return_value.add_columns.return_value
-            paged.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-            paged.order_by.return_value.count.return_value = 0
+            # list_webhook_deliveries pages with a window-count column; the
+            # chain must be self-returning so the configured empty page and
+            # count() fallback apply to the exact query the endpoint builds.
+            query.filter.return_value = query
+            query.add_columns.return_value = query
+            query.order_by.return_value = query
+            query.offset.return_value = query
+            query.limit.return_value = query
+            query.all.return_value = []
+            query.count.return_value = 0
         return query
 
     mock_db.query.side_effect = _query
@@ -191,11 +197,27 @@ class TestTombstonesStayReadable:
 class TestListHidesTombstones:
     def _list_session(self):
         mock_db = MagicMock()
-        mock_db.query.return_value.offset.return_value.limit.return_value.all.return_value = []
+        # list_webhooks chains filter -> add_columns -> order_by -> offset ->
+        # limit -> all(); every link must return the same query mock so the
+        # configured empty page (and the count() fallback) applies.
+        query = mock_db.query.return_value
+        query.filter.return_value = query
+        query.add_columns.return_value = query
+        query.order_by.return_value = query
+        query.offset.return_value = query
+        query.limit.return_value = query
+        query.all.return_value = []
+        query.count.return_value = 0
         return mock_db
 
     def _applied_filters(self, mock_db) -> str:
-        return " ".join(str(call) for call in mock_db.query.return_value.filter.call_args_list)
+        # stringify each filter's argument; str(BinaryExpression) renders the
+        # SQL (e.g. "webhooks.deleted_at IS NULL"), so column names are visible.
+        query = mock_db.query.return_value
+        return " ".join(
+            " ".join(str(arg) for arg in call.args)
+            for call in query.filter.call_args_list
+        )
 
     def test_list_excludes_deleted_by_default(self, admin_override):
         mock_db = self._list_session()

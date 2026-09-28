@@ -3,6 +3,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.pagination import MAX_PAGE_SIZE
+
 
 class PaymentStatus(str, Enum):
     pending = "pending"
@@ -99,4 +101,5 @@ class PaginatedPayments(BaseModel):
     items: list[PaymentTransaction]
     total: int
     page: int = Field(..., ge=1)
-    page_size: int = Field(..., ge=1, le=100)
+    # #564: envelope cap follows the shared pagination cap, not an ad-hoc 100.
+    page_size: int = Field(..., ge=1, le=MAX_PAGE_SIZE)

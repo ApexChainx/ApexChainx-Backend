@@ -242,4 +242,10 @@ instrument_app(app)
 
 # Wrap the FastAPI ASGI app with the payload size guard so it runs outside
 # the BaseHTTPMiddleware stack and can short-circuit large request bodies.
-app = PayloadSizeMiddleware(app)
+#
+# The wrapper MUST NOT rebind the module-level `app` name: `from app.main import
+# app` is the documented extension point (tests use `app.dependency_overrides`,
+# uvicorn/gunicorn entry points import it too), and PayloadSizeMiddleware is a
+# plain ASGI wrapper with no such attribute. Keep the FastAPI instance under
+# `app` and expose the guarded ASGI callable separately.
+asgi_app = PayloadSizeMiddleware(app)

@@ -10,7 +10,6 @@ Exit code 0 when all codes are documented; non-zero otherwise.
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path

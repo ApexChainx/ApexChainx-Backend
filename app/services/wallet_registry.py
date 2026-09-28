@@ -243,6 +243,28 @@ class WalletRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
+    def list_wallets(
+        cls,
+        db: Session,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[Wallet]:
+        """List wallets page-wise (#564).
+
+        There was no way to enumerate wallets at all, so the wallets area had
+        no list endpoint to cap; this gives operators one that follows the
+        shared pagination contract instead of an unbounded dump.
+        """
+        rows = (
+            db.query(WalletORM)
+            .order_by(WalletORM.id.asc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return [_orm_to_pydantic(row) for row in rows]
+
+    @classmethod
     def get_wallet(
         cls,
         db: Session,

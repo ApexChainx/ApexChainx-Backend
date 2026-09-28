@@ -14,7 +14,11 @@ class ConfigValidationTests(unittest.TestCase):
             "ALLOWED_ORIGINS": ["http://localhost:3000"],
             "CELERY_BROKER_URL": "redis://localhost:6379/0",
             "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-            "CELERY_TASK_ALWAYS_EAGER": True,
+            # #510: eager mode is only legal in local/test. Several tests below
+            # override ENVIRONMENT to production/staging, so the fixture
+            # default must keep eager off or the startup validator (correctly)
+            # rejects the fixture before the behaviour under test is reached.
+            "CELERY_TASK_ALWAYS_EAGER": False,
             "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
             "STELLAR_NETWORK": "testnet",
             "CONTRACT_EXECUTION_MODE": "local_adapter",

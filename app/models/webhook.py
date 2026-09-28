@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, TypeDecorator
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import JSON
 from sqlalchemy.orm import relationship
 
 from app.db.base_class import Base
@@ -68,7 +69,8 @@ class Webhook(Base):
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
     secret_version = Column(Integer, default=1, nullable=False)  # Incremented on each rotation
     # BE-009: Grace period overlap window
-    previous_secrets = Column(JSONB, default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
+    # JSONB on Postgres, plain JSON elsewhere (SQLite test schemas).
+    previous_secrets = Column(JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
     secret_grace_hours = Column(Integer, default=24, nullable=False)  # Configurable grace period per webhook
 
     # #518: soft delete. Deleting a webhook used to delete the row, and

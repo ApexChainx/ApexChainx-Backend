@@ -38,8 +38,11 @@ def admin_override():
 
     app.dependency_overrides[require_admin] = _fake_admin
     # A rejected body never reaches the handler, but FastAPI resolves `get_db`
-    # while building the request, so keep it off the real database.
-    app.dependency_overrides[get_db] = MagicMock()
+    # while building the request, so keep it off the real database. The override
+    # must be a plain callable: a bare MagicMock instance makes FastAPI's
+    # dependency introspection invent phantom `args`/`kwargs` query params and
+    # 422 every request.
+    app.dependency_overrides[get_db] = lambda: MagicMock()
     yield
     app.dependency_overrides.pop(require_admin, None)
     app.dependency_overrides.pop(get_db, None)
@@ -83,7 +86,8 @@ class TestCreateReturns422:
         resp = client.post("/api/v1/webhooks", json=VALID_BODY | {"max_retries": 1_000_000})
 
         assert resp.status_code == 422
-        assert any(detail["loc"][-1] == "max_retries" for detail in resp.json()["detail"])
+        # RFC 7807 envelope: field errors live under errors[].pointer.
+        assert any(error["pointer"].endswith("max_retries") for error in resp.json()["errors"])
 
     def test_negative_max_retries_is_rejected(self, admin_override):
         resp = client.post("/api/v1/webhooks", json=VALID_BODY | {"max_retries": -1})
@@ -109,7 +113,7 @@ class TestUpdateReturns422:
         resp = client.patch(f"/api/v1/webhooks/{uuid4()}", json={"max_retries": 1_000_000})
 
         assert resp.status_code == 422
-        assert any(detail["loc"][-1] == "max_retries" for detail in resp.json()["detail"])
+        assert any(error["pointer"].endswith("max_retries") for error in resp.json()["errors"])
 
     def test_negative_max_retries_is_rejected(self, admin_override):
         resp = client.patch(f"/api/v1/webhooks/{uuid4()}", json={"max_retries": -2})

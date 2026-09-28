@@ -29,7 +29,15 @@ class SLADispute(Base):
     flagged_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Resolution metadata
-    status = Column(Enum(DisputeStatus), default=DisputeStatus.PENDING, nullable=False)
+    # values_callable: store/compare the enum *values* ("pending"), matching
+    # the lowercase labels the disputestatus PG enum type was created with.
+    # The SQLAlchemy default binds enum *names* ("PENDING"), which Postgres
+    # rejects with InvalidTextRepresentation.
+    status = Column(
+        Enum(DisputeStatus, values_callable=lambda e: [m.value for m in e]),
+        default=DisputeStatus.PENDING,
+        nullable=False,
+    )
     resolved_by = Column(String(255), nullable=True)
     resolution_notes = Column(Text, nullable=True)
     resolved_at = Column(DateTime, nullable=True)

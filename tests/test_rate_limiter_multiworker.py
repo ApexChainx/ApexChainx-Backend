@@ -4,10 +4,9 @@ Validates that USE_REDIS_RATE_LIMITER defaults to True so that
 Redis-backed rate limiting is used across multiple Gunicorn workers.
 """
 
-import pytest
 
 from app.core.config import settings
-from app.core.rate_limiter import RedisRateLimiter, SimpleRateLimiter, rate_limiter
+from app.core.rate_limiter import RedisRateLimiter, SimpleRateLimiter
 
 
 class TestRateLimiterDefault:

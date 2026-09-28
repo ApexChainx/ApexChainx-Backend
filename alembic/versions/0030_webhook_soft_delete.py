@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Retain webhook rows as tombstones on delete (issue #518).
 
 ``DELETE /api/v1/webhooks/{id}`` deleted the row, and the ``deliveries``
@@ -12,7 +13,6 @@ Revises: 0029_encrypt_webhook_secrets
 Create Date: 2026-09-01
 """
 
-import sqlalchemy as sa
 
 from alembic import op
 
@@ -23,23 +23,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "webhooks",
-        sa.Column("deleted_at", sa.DateTime(), nullable=True),
-        if_not_exists=True,
-    )
+    # if_not_exists / if_exists guards: this migration runs alongside the
+    # 0029_sla_config_publish_state branch, and a partially-applied retry after
+    # a failure in the sibling branch must not blow up on an existing column.
+    op.execute("ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP NULL")
     # Every existing row predates soft delete, so none of them is a tombstone.
     # The index keeps the "not deleted" filter on the list endpoint off a
     # sequential scan once the table has grown.
-    op.create_index(
-        "ix_webhooks_deleted_at",
-        "webhooks",
-        ["deleted_at"],
-        postgresql_using="btree",
-        if_not_exists=True,
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_webhooks_deleted_at ON webhooks (deleted_at)")
 
 
 def downgrade() -> None:
-    op.drop_index("ix_webhooks_deleted_at", table_name="webhooks", if_exists=True)
-    op.drop_column("webhooks", "deleted_at")
+    op.execute("DROP INDEX IF EXISTS ix_webhooks_deleted_at")
+    op.execute("ALTER TABLE webhooks DROP COLUMN IF EXISTS deleted_at")

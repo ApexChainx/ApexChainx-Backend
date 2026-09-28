@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import LimitParams, PageParams, PageSizeParams
 from app.core.config import settings
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
@@ -70,14 +71,12 @@ class PaymentSortDirection(str, Enum):
 
 @router.get("/")
 def list_payments(
-    page: int = Query(
-        default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
-    ),
-    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    page: int = PageParams,
+    page_size: int = PageSizeParams,  # #564: shared cap (was le=100)
     cursor: str | None = Query(
         default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
     ),
-    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
+    limit: int = LimitParams,  # #564: shared cap (was le=100)
     status: str | None = None,
     type: str | None = None,
     outage_id: str | None = None,
@@ -142,6 +141,8 @@ def export_payments(
         raise HTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
 
     repo = PaymentRepository(db)
+    # Export is a full-dump endpoint, not a paged list: it uses its own
+    # oversized window on purpose and is not part of the #564 page-size cap.
     items, _ = repo.list(
         page=1, page_size=10_000, status=status, outage_id=outage_id, type=type, date_from=date_from, date_to=date_to
     )
@@ -165,6 +166,140 @@ def export_payments(
 @router.get("/ping")
 def payments_ping():
     return {"message": "payments ok"}
+
+
+# ---------------------------------------------------------------------------
+# Retry queue with backoff visibility (#240)
+# ---------------------------------------------------------------------------
+
+# Exponential backoff: base 30s, doubles each attempt, capped at 1 hour.
+_RETRY_BASE_SECONDS = 30
+_RETRY_MAX_SECONDS = 3600
+
+# Captured at import time so test patches of the PaymentRepository class do
+# not shadow the retry-exhaustion threshold with a Mock.
+_PAYMENT_MAX_RETRIES = PaymentRepository.MAX_RETRIES
+
+
+def _retry_delay_seconds(retry_count: int) -> int:
+    """Exponential backoff delay: base 30s, doubling, capped at 1 hour."""
+    return min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
+
+
+def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -> datetime | None:
+    """Return the datetime when the next retry should occur, or None if at max.
+
+    A payment at ``MAX_RETRIES`` attempts is exhausted — no next retry is
+    scheduled regardless of the delay math.
+    """
+    if retry_count >= _PAYMENT_MAX_RETRIES:
+        return None
+    anchor = last_retried_at or datetime.now(UTC)
+    return anchor + timedelta(seconds=_retry_delay_seconds(retry_count))
+
+
+class PaymentRetryQueueItem(BaseModel):
+    """A payment in the retry queue with backoff metadata."""
+
+    id: str
+    transaction_hash: str
+    type: str
+    amount: float
+    status: str
+    outage_id: str
+    attempt_count: int
+    next_retry_at: datetime | None
+    backoff_seconds: int
+    created_at: datetime
+    last_retried_at: datetime | None
+
+
+@router.get("/retry-queue", response_model=CursorPage)
+def list_retry_queue(
+    cursor: str | None = Query(default=None, description="Cursor for pagination."),
+    limit: int = LimitParams,  # #564: shared cap (was le=100)
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
+    """Return payments eligible for retry with computed backoff metadata.
+
+    Supports cursor-based pagination. The cursor encodes
+    ``(created_at, id)`` of the last item on the previous page.
+    """
+    repo = PaymentRepository(db)
+    items, _ = repo.list(status="failed")
+
+    decoded = decode_cursor(cursor)
+    if decoded is not None:
+        cursor_id, cursor_created_at_str = decoded
+        items = [p for p in items if (p.created_at.isoformat(), p.id) < (cursor_created_at_str, cursor_id)]
+
+    page_items = items[:limit]
+    has_more = len(items) > limit
+
+    result: list[PaymentRetryQueueItem] = []
+    for p in page_items:
+        next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
+        backoff = min(_RETRY_BASE_SECONDS * (2**p.retry_count), _RETRY_MAX_SECONDS)
+        result.append(
+            PaymentRetryQueueItem(
+                id=p.id,
+                transaction_hash=p.transaction_hash,
+                type=p.type,
+                amount=p.amount,
+                status=p.status,
+                outage_id=p.outage_id,
+                attempt_count=p.retry_count,
+                next_retry_at=next_at,
+                backoff_seconds=backoff,
+                created_at=p.created_at,
+                last_retried_at=p.last_retried_at,
+            )
+        )
+
+    next_cursor = None
+    if has_more and result:
+        last = result[-1]
+        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+    return CursorPage(items=result, next_cursor=next_cursor, has_more=has_more)
+
+
+@router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
+def retry_now(
+    transaction_id: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: trigger an immediate retry, bypassing exponential backoff."""
+    repo = PaymentRepository(db)
+    existing = repo.get(transaction_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    try:
+        payment = repo.retry(transaction_id)
+    except PaymentTransitionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "current_status": exc.current,
+                "requested_status": exc.next_status,
+                "allowed_transitions": list(exc.allowed),
+            },
+        )
+    if not payment:
+        raise HTTPException(status_code=409, detail="Max retries reached")
+    audit_log.log(
+        "payment_retried",
+        {
+            "id": transaction_id,
+            "retry_count": payment.retry_count,
+            "actor": current_user.email,
+            "override": True,
+        },
+    )
+    return payment
 
 
 @router.get("/{transaction_id}/history", response_model=list[dict[str, Any]])
@@ -269,128 +404,6 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
     audit_log.log(
         "payment_retried",
         {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
-    )
-    return payment
-
-
-# ---------------------------------------------------------------------------
-# Retry queue with backoff visibility (#240)
-# ---------------------------------------------------------------------------
-
-# Exponential backoff: base 30s, doubles each attempt, capped at 1 hour.
-_RETRY_BASE_SECONDS = 30
-_RETRY_MAX_SECONDS = 3600
-
-
-def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -> datetime | None:
-    """Return the datetime when the next retry should occur, or None if at max."""
-    if retry_count >= PaymentRepository.MAX_RETRIES:
-        return None
-    delay = min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
-    anchor = last_retried_at or datetime.now(UTC)
-    return anchor + timedelta(seconds=delay)
-
-
-class PaymentRetryQueueItem(BaseModel):
-    """A payment in the retry queue with backoff metadata."""
-
-    id: str
-    transaction_hash: str
-    type: str
-    amount: float
-    status: str
-    outage_id: str
-    attempt_count: int
-    next_retry_at: datetime | None
-    backoff_seconds: int
-    created_at: datetime
-    last_retried_at: datetime | None
-
-
-@router.get("/retry-queue", response_model=CursorPage)
-def list_retry_queue(
-    cursor: str | None = Query(default=None, description="Cursor for pagination."),
-    limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
-    current_user=Depends(require_engineer),
-    db: Session = Depends(get_db),
-):
-    """Return payments eligible for retry with computed backoff metadata.
-
-    Supports cursor-based pagination. The cursor encodes
-    ``(created_at, id)`` of the last item on the previous page.
-    """
-    repo = PaymentRepository(db)
-    items, _ = repo.list(status="failed")
-
-    decoded = decode_cursor(cursor)
-    if decoded is not None:
-        cursor_id, cursor_created_at_str = decoded
-        items = [p for p in items if (p.created_at.isoformat(), p.id) < (cursor_created_at_str, cursor_id)]
-
-    page_items = items[:limit]
-    has_more = len(items) > limit
-
-    result: list[PaymentRetryQueueItem] = []
-    for p in page_items:
-        next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
-        backoff = min(_RETRY_BASE_SECONDS * (2**p.retry_count), _RETRY_MAX_SECONDS)
-        result.append(
-            PaymentRetryQueueItem(
-                id=p.id,
-                transaction_hash=p.transaction_hash,
-                type=p.type,
-                amount=p.amount,
-                status=p.status,
-                outage_id=p.outage_id,
-                attempt_count=p.retry_count,
-                next_retry_at=next_at,
-                backoff_seconds=backoff,
-                created_at=p.created_at,
-                last_retried_at=p.last_retried_at,
-            )
-        )
-
-    next_cursor = None
-    if has_more and result:
-        last = result[-1]
-        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
-
-    return CursorPage(items=result, next_cursor=next_cursor, has_more=has_more)
-
-
-@router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
-def retry_now(
-    transaction_id: str,
-    current_user=Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin endpoint: trigger an immediate retry, bypassing exponential backoff."""
-    repo = PaymentRepository(db)
-    existing = repo.get(transaction_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
-    try:
-        payment = repo.retry(transaction_id)
-    except PaymentTransitionError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": str(exc),
-                "current_status": exc.current,
-                "requested_status": exc.next_status,
-                "allowed_transitions": list(exc.allowed),
-            },
-        )
-    if not payment:
-        raise HTTPException(status_code=409, detail="Max retries reached")
-    audit_log.log(
-        "payment_retried",
-        {
-            "id": transaction_id,
-            "retry_count": payment.retry_count,
-            "actor": current_user.email,
-            "override": True,
-        },
     )
     return payment
 
