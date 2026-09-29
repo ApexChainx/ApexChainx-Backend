@@ -164,7 +164,7 @@ def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webh
     # #518: `is_active` already excludes soft-deleted webhooks because delete
     # clears it, but the tombstone filter is stated explicitly so a future
     # caller that reactivates a row cannot resurrect its deliveries.
-    webhooks = db.query(Webhook).filter(Webhook.is_active).filter(Webhook.deleted_at.is_(None)).all()
+    webhooks = db.query(Webhook).filter(Webhook.is_active, Webhook.deleted_at.is_(None)).all()
     result = []
     for webhook in webhooks:
         try:
@@ -276,6 +276,36 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
 
 @traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
+    delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
+    if not delivery:
+        logger.error("WebhookDelivery %s not found.", delivery_id)
+        return
+
+    if delivery.status in (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.DEAD_LETTER):
+        logger.info("WebhookDelivery %s already in terminal state %s, skipping.", delivery_id, delivery.status)
+        return
+
+    # #518/#634: a tombstone (soft-deleted) or deactivated webhook must never
+    # receive a delivery. The fan-out path filters these out when deliveries
+    # are created; retries and breaker re-dispatches reach this function with
+    # an already-persisted delivery, so the parent has to be re-checked here —
+    # otherwise a webhook deleted while a delivery was pending would still get
+    # the outbound request. The guard runs before the status claim, so nothing
+    # is mutated or committed and the delivery row is left as-is for audit.
+    # The checks are deliberately strict (real datetime / exactly False) so a
+    # test double's auto-created attributes cannot read as tombstoned.
+    webhook = delivery.webhook
+    if webhook is not None:
+        deleted_at = getattr(webhook, "deleted_at", None)
+        is_active = getattr(webhook, "is_active", True)
+        if isinstance(deleted_at, datetime) or is_active is False:
+            logger.warning(
+                "WebhookDelivery %s skipped: webhook %s is soft-deleted or inactive.",
+                delivery_id,
+                getattr(webhook, "id", "?"),
+            )
+            return
+
     claimed = (
         db.query(WebhookDelivery)
         .filter(
