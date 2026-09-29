@@ -403,7 +403,7 @@ GET /api/v1/webhooks
 
 Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
 
-Query parameters: `is_active`, `name` (case-insensitive substring), `page` (1-indexed), `page_size` (1-100, default 20).
+Query parameters: `is_active`, `name` (case-insensitive substring), `page` (1-indexed), `page_size` (default 20, shared list cap 200 — values above 200 are rejected with 422).
 
 The response is a paginated envelope, so a client can tell the last page from a short one without requesting an extra page (#554):
 

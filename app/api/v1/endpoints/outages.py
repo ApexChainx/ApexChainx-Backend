@@ -26,6 +26,7 @@ from app.models.outage_dto import (
     OutageSortField,
 )
 from app.models.webhook import WebhookEvent
+from app.schemas.audit_list_params import MAX_PAGE_SIZE
 from app.repositories.outage_event_repository import OutageEventRepository
 from app.repositories.outage_repository import OutageRepository
 from app.repositories.payment_repository import PaymentRepository
@@ -77,7 +78,8 @@ def export_outages_endpoint(
 @router.get("/violations")
 def list_violations(
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
@@ -95,11 +97,14 @@ def list_outages(
     page: int = Query(
         default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
     ),
-    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE, description="Items per page."),
     cursor: str | None = Query(
         default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
     ),
-    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
+    limit: int = Query(
+        default=20, ge=1, le=MAX_PAGE_SIZE, description="Limit for cursor-based pagination (used with cursor)."
+    ),
     sort_by: OutageSortField = Query(
         default=OutageSortField.detected_at,
         description="Sort field (enum). Supported: detected_at, site_name, severity, status, id. Invalid values rejected with 422.",
@@ -666,7 +671,8 @@ def get_outage_timeline(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):

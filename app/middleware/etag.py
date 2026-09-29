@@ -71,10 +71,16 @@ class ETagMiddleware:
         # sent, and re-sending it from the body path produced a double
         # "http.response.start" (invalid ASGI) for every GET 404/4xx.
         buffer_response = False
+        # True once http.response.start has already been sent for this
+        # response (non-2xx pass-through, or a response that arrived with its
+        # own ETag). The body path must forward instead of re-sending a start.
+        # (#563 merge regression: without this initialization every buffered
+        # 2xx GET raised UnboundLocalError at the `start_forwarded` check.)
+        start_forwarded = False
 
         async def send_with_etag(message: Message) -> None:
             nonlocal response_status, response_headers, buffer_response
-            nonlocal etag, not_modified
+            nonlocal etag, not_modified, start_forwarded
 
             if message["type"] == "http.response.start":
                 response_status = message["status"]

@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.endpoints.sla_dispute import require_engineer
 from app.db.session import get_db
 from app.main import app
-from app.models.sla_dispute import DisputeStatus, SLADispute
+from app.models.sla_dispute import DisputeStatus
 
 client = TestClient(app)
 
@@ -64,8 +64,24 @@ def _mock_db(rows, total: int):
 
 
 def _paged_rows(items, total: int):
-    """Rows as `add_columns(func.count().over())` returns them."""
-    return [(item, total) for item in items]
+    """Rows as `add_columns(func.count().over())` returns them.
+
+    The endpoint reads the window count as `paged[0].total_count` — real
+    SQLAlchemy Rows support both tuple indexing and attribute access, so the
+    stand-ins must too. Plain tuples would crash the attribute lookup.
+    """
+
+    class _Row:
+        __slots__ = ("_values", "total_count")
+
+        def __init__(self, item, count: int):
+            self._values = (item, count)
+            self.total_count = count
+
+        def __getitem__(self, index):
+            return self._values[index]
+
+    return [_Row(item, total) for item in items]
 
 
 def _install(rows, total: int):
@@ -167,7 +183,14 @@ class TestOrderingAndCount:
 
         client.get("/api/v1/sla/disputes")
 
-        assert query.order_by.call_args[0] == (SLADispute.flagged_at.desc(), SLADispute.id)
+        # ORDER BY (flagged_at desc, id) must be part of the paged statement.
+        # SQLAlchemy compiles each UnaryExpression freshly, so compare the
+        # generated SQL text rather than expression object identity (same
+        # approach as test_webhook_list_pagination.py).
+        order_by_args = query.order_by.call_args[0]
+        assert len(order_by_args) == 2
+        assert "flagged_at" in str(order_by_args[0]) and "DESC" in str(order_by_args[0])
+        assert "id" in str(order_by_args[1])
 
     def test_total_comes_from_the_page_statement(self, engineer_override):
         query = _install(_paged_rows([_dispute(), _dispute()], 45), 45)

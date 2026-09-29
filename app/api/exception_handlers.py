@@ -79,6 +79,8 @@ def _problem_response(
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
     error_code: str | None = None,
+    request: Request | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Build an RFC 7807 JSON response, echoing the request's correlation ID.
 
@@ -93,6 +95,23 @@ def _problem_response(
     ID header from issue #563.
     """
     correlation_id = _resolve_correlation_id(request)
+
+    # #563: 4xx responses are logged at WARNING so they can be correlated with
+    # the access log by correlation ID. (The CorrelationIdFilter stamps the
+    # record's correlation_id from the context var, which the middleware keeps
+    # in sync with request.state.)
+    if 400 <= status < 500:
+        logger.warning(
+            "Problem response: %s %s",
+            status,
+            title,
+            extra={
+                "correlation_id": correlation_id,
+                "path": request.url.path if request is not None else None,
+                "status_code": status,
+            },
+        )
+
     problem = ProblemDetail(
         type="about:blank",
         title=title,
@@ -106,11 +125,16 @@ def _problem_response(
     # extension member (see docs/ERROR_CODES.md) when the raiser provides one.
     if error_code:
         body["error_code"] = error_code
+
+    merged_headers: dict[str, str] = dict(headers) if headers else {}
+    # The correlation ID header wins: exception headers are merged with, but
+    # may not override, it (issue #563).
+    merged_headers["X-Correlation-ID"] = correlation_id
     return JSONResponse(
         status_code=status,
         content=body,
         media_type="application/problem+json",
-        headers=response_headers,
+        headers=merged_headers,
     )
 
 
@@ -123,6 +147,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
             detail=exc.detail,
             # #569: endpoints may attach a registered code (docs/ERROR_CODES.md)
             error_code=getattr(exc, "error_code", None),
+            request=request,
+            headers=exc.headers,
         )
 
     errors: list[dict[str, Any]]

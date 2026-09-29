@@ -3,7 +3,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +22,7 @@ from app.db.session import get_db
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 
 from app.services.audit_log import audit_log
+from app.schemas.audit_list_params import MAX_PAGE_SIZE
 from app.services.formatters import canonical_json
 from app.services.metrics import increment_counter, set_gauge
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
@@ -440,7 +441,8 @@ def list_webhooks(
         ),
     ),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),  # BE-083
-    page_size: int = Query(20, ge=1, le=100, description="Items per page"),  # BE-083
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    page_size: int = Query(20, ge=1, le=MAX_PAGE_SIZE, description="Items per page"),  # BE-083
     current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -569,7 +571,7 @@ def list_webhook_deliveries(
     created_before: datetime | None = Query(None, description="Return deliveries created before this timestamp."),
     delivered_after: datetime | None = Query(None, description="Return deliveries delivered after this timestamp."),
     delivered_before: datetime | None = Query(None, description="Return deliveries delivered before this timestamp."),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0, description="Number of records to skip"),  # BE-083
     db: Session = Depends(get_db),
 ):
@@ -812,7 +814,7 @@ def retry_delivery(
 @router.get("/{webhook_id}/dead-letter-deliveries", response_model=list[WebhookDeliveryResponse])
 def list_dead_letter_deliveries(
     webhook_id: UUID,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
 ):
     """List dead-lettered deliveries for a webhook."""

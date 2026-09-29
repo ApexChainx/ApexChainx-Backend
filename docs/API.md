@@ -985,10 +985,18 @@ Endpoints that return lists accept `limit` and `offset` query parameters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | integer | 50 | Maximum records per page |
+| `limit` | integer | 50 | Maximum records per page (capped; see below) |
 | `offset` | integer | 0 | Number of records to skip |
 
 Responses include `total`, `limit`, and `offset` fields for cursor reconstruction.
+
+**Shared page-size cap (#564):** every list endpoint (payments, wallets, outages,
+SLA disputes, webhook deliveries, jobs) enforces the same page-size cap of
+**200** (`MAX_PAGE_SIZE`, defined in `app/schemas/audit_list_params.py`),
+whether it takes `page_size`, `limit`, or an `AuditListParams` model. Values
+above the cap are rejected with `422` by query-param validation; values at the
+cap are accepted. Offsets endpoints use `page`/`page_size`; cursor endpoints
+use `cursor`/`limit` — both share the same cap.
 
 ---
 

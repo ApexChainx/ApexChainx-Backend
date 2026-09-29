@@ -1790,6 +1790,48 @@
         "title": "OutageUpdate",
         "type": "object"
       },
+      "PaginatedDisputeList": {
+        "description": "Envelope for `GET /sla/disputes` (#580).\n\nThe endpoint used to answer with a bare array materialized from\n``query.all()`` \u2014 every dispute in one response, with no way to page or to\ntell \"end of list\" from \"this page happens to be short\". The items array\nis still present, under `items`, alongside the metadata needed to page\ncorrectly (same shape as the webhook list envelope, #554).",
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DisputeResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "returned",
+          "has_more"
+        ],
+        "title": "PaginatedDisputeList",
+        "type": "object"
+      },
       "PaginatedWebhookDeliveries": {
         "properties": {
           "has_more": {
@@ -3370,6 +3412,7 @@
       "WebhookDeliveryStatus": {
         "enum": [
           "pending",
+          "sending",
           "success",
           "failed",
           "retrying",
@@ -3609,6 +3652,19 @@
               }
             ],
             "title": "Secret"
+          },
+          "secret_grace_hours": {
+            "anyOf": [
+              {
+                "maximum": 168.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret Grace Hours"
           },
           "url": {
             "anyOf": [
@@ -5032,7 +5088,7 @@
             "required": false,
             "schema": {
               "default": 20,
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
@@ -5910,7 +5966,7 @@
             "schema": {
               "default": 20,
               "description": "Items per page.",
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
@@ -5942,7 +5998,7 @@
             "schema": {
               "default": 20,
               "description": "Limit for cursor-based pagination (used with cursor).",
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
@@ -6385,7 +6441,7 @@
             "required": false,
             "schema": {
               "default": 20,
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
@@ -6884,7 +6940,7 @@
             "required": false,
             "schema": {
               "default": 20,
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
@@ -6959,7 +7015,7 @@
             "schema": {
               "default": 20,
               "description": "Items per page.",
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
@@ -6991,7 +7047,7 @@
             "schema": {
               "default": 20,
               "description": "Limit for cursor-based pagination (used with cursor).",
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
@@ -7405,7 +7461,7 @@
             "schema": {
               "default": 20,
               "description": "Max items per page.",
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
@@ -9283,6 +9339,7 @@
     },
     "/api/v1/sla/disputes": {
       "get": {
+        "description": "List SLA disputes, paginated (#580).\n\nThe endpoint used to return ``query.all()`` \u2014 every dispute serialized into\none unbounded response, so a large disputes table turned the list call into\na full-table dump. Pages are now capped by the shared MAX_PAGE_SIZE (200,\nsame constant the audit list enforces) and answer with the standard\nenvelope (items/total/page/page_size/returned/has_more).",
         "operationId": "list_disputes_api_v1_sla_disputes_get",
         "parameters": [
           {
@@ -9299,6 +9356,33 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "description": "Page number (1-indexed)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number (1-indexed)",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (shared list cap: 200). Values above it are rejected with 422.",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page (shared list cap: 200). Values above it are rejected with 422.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
             }
           },
           {
@@ -9323,11 +9407,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/DisputeResponse"
-                  },
-                  "title": "Response List Disputes Api V1 Sla Disputes Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/PaginatedDisputeList"
                 }
               }
             },
@@ -10369,7 +10449,7 @@
             "schema": {
               "default": 20,
               "description": "Items per page",
-              "maximum": 100,
+              "maximum": 200,
               "minimum": 1,
               "title": "Page Size",
               "type": "integer"
@@ -11153,7 +11233,7 @@
     },
     "/api/v1/webhooks/{webhook_id}/rotate-secret": {
       "post": {
-        "description": "Rotate the webhook signing secret with a grace period overlap window.\n\nThe previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,\nenabling zero-downtime rotation for consumers.\n\n#502: previous_secrets entries that are past their grace window are pruned\non every rotation, so the JSONB history stays bounded instead of growing for\nthe lifetime of the webhook.\n\nBE-034: Emits durable audit information with timestamp and actor context.",
+        "description": "Rotate the webhook signing secret with a grace period overlap window.\n\nThe previous secret is stored (hashed) and remains valid for the webhook's\n``secret_grace_hours`` (falling back to WEBHOOK_SECRET_GRACE_HOURS when the\ncolumn is unset or out of range), enabling zero-downtime rotation for\nconsumers (#582).\n\nPATCH with a ``secret`` field goes through the same lifecycle (#581).\n\n#502: previous_secrets entries that are past their grace window are pruned\non every rotation, so the JSONB history stays bounded instead of growing for\nthe lifetime of the webhook.\n\nBE-034: Emits durable audit information with timestamp and actor context.",
         "operationId": "rotate_webhook_secret_api_v1_webhooks__webhook_id__rotate_secret_post",
         "parameters": [
           {

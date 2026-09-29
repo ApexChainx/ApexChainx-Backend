@@ -12,6 +12,7 @@ from sqlalchemy import and_, or_
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.job import Job, JobStatus, JobType
+from app.schemas.audit_list_params import MAX_PAGE_SIZE
 from app.services.audit_log import audit_log
 from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
@@ -270,7 +271,8 @@ def submit_bulk_sla_computation(
 def list_jobs(
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
-    limit: int = Query(20, ge=1, le=100),
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
     cursor: str | None = Query(None),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),

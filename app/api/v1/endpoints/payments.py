@@ -15,6 +15,7 @@ from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
+from app.schemas.audit_list_params import MAX_PAGE_SIZE
 from app.services.audit_log import audit_log
 from app.services.single_use_token_store import SingleUseTokenStore
 from app.utils.cursor import CursorPage, encode_cursor, decode_cursor
@@ -73,11 +74,14 @@ def list_payments(
     page: int = Query(
         default=1, ge=1, description="Page number (offset pagination). Not used when cursor is provided."
     ),
-    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE, description="Items per page."),
     cursor: str | None = Query(
         default=None, description="Cursor for cursor-based pagination. Overrides page/page_size."
     ),
-    limit: int = Query(default=20, ge=1, le=100, description="Limit for cursor-based pagination (used with cursor)."),
+    limit: int = Query(
+        default=20, ge=1, le=MAX_PAGE_SIZE, description="Limit for cursor-based pagination (used with cursor)."
+    ),
     status: str | None = None,
     type: str | None = None,
     outage_id: str | None = None,
@@ -310,7 +314,8 @@ class PaymentRetryQueueItem(BaseModel):
 @router.get("/retry-queue", response_model=CursorPage)
 def list_retry_queue(
     cursor: str | None = Query(default=None, description="Cursor for pagination."),
-    limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
+    # Shared list cap (#564): le=MAX_PAGE_SIZE, values above it 422.
+    limit: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE, description="Max items per page."),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
