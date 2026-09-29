@@ -39,11 +39,11 @@ class PayloadSizeMiddleware:
         self.app = app
 
     def __getattr__(self, name):
-        # Delegate attribute access (dependency_overrides, state, routes, ...) to
-        # the wrapped ASGI app. app.main rebinds ``app = PayloadSizeMiddleware(app)``,
-        # so without this every ``from app.main import app`` consumer — including
-        # FastAPI's TestClient dependency-overriding in the test-suite — sees the
-        # wrapper, not the FastAPI instance, and attribute access breaks.
+        # main.py rebinds ``app = PayloadSizeMiddleware(app)`` so uvicorn serves
+        # the guarded ASGI callable. Delegate everything the raw ASGI wrapper
+        # does not define (FastAPI's ``dependency_overrides``, ``openapi()`,
+        # routes, ...) to the wrapped application so importers of
+        # ``app.main.app`` keep a fully functional FastAPI surface.
         return getattr(self.app, name)
 
     async def __call__(self, scope, receive, send):

@@ -1052,6 +1052,23 @@ Return the immutable audit event log. All state-changing operations across outag
 
 ## Jobs Endpoints
 
+### Job state model
+
+Job records carry one closed set of statuses; the API never reports a value
+outside it. Celery task states are mapped at the API boundary as follows:
+
+| Celery state | Job status reported | Notes |
+|--------------|---------------------|-------|
+| `PENDING`    | `pending`           | Waiting for a worker (unknown task IDs also surface as PENDING). |
+| `STARTED`    | `started`           | Task is executing on a worker. |
+| `RETRY`      | `started`           | A retried task is awaiting/running its next attempt; `retry_count` and `last_retried_at` carry the retry distinction. |
+| `SUCCESS`    | `success`           | Terminal. |
+| `FAILURE`    | `failure`           | Terminal. `error` holds the failure message. |
+| `REVOKED`    | `revoked`           | Terminal — cancelled via `DELETE /api/v1/jobs/{id}`. |
+
+Any Celery state outside this table is not passed through: the job keeps its
+last stored status and the deviation is logged.
+
 ### GET `/api/v1/jobs`
 
 List background job records. Each entry reflects a Celery task with retry state, status, and scheduling metadata.

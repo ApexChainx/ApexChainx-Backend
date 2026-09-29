@@ -9,6 +9,9 @@ from app.models.auth import LoginRequest, RegisterRequest
 from app.models.orm.user import UserORM
 from app.services.auth_store import AuthStore
 
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 
 @pytest.fixture
 def client():

@@ -7,13 +7,14 @@ instead of a full sequential scan. Requires PostgreSQL >= 9.1 (pg_trgm);
 in managed Postgres the extension may need superuser privileges.
 
 Revision ID: 0028_outage_search_trgm
-Revises: 0027_sla_results_restrict_cascade
+Revises: 0027_sla_restrict_cascade
 Create Date: 2026-08-26
 """
+
 from alembic import op
 
 revision = "0028_outage_search_trgm"
-down_revision = "0027_sla_results_restrict_cascade"
+down_revision = "0027_sla_restrict_cascade"
 depends_on = None
 branch_labels = None
 

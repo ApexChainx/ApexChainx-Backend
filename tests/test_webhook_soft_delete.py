@@ -55,10 +55,12 @@ def _session(webhook):
         if entity is Webhook:
             query.filter.return_value.first.return_value = webhook
         else:
-            # list_webhook_deliveries pages with a window-count column.
+            # list_webhook_deliveries pages with a window-count column
+            # (#296): the paged chain returns an empty page, and the empty-page
+            # fallback total comes from query.order_by(None).count().
             paged = query.filter.return_value.add_columns.return_value
             paged.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-            paged.order_by.return_value.count.return_value = 0
+            query.filter.return_value.order_by.return_value.count.return_value = 0
         return query
 
     mock_db.query.side_effect = _query
@@ -78,7 +80,11 @@ class TestDeleteRetainsRow:
         mock_db = _session(webhook)
         _override(mock_db)
         try:
-            resp = client.delete(f"/api/v1/webhooks/{webhook.id}")
+            # Patch audit_log: the real audit service opens its own session and
+            # takes a Postgres advisory lock, which would touch the database
+            # this (and every) unit test must not require.
+            with patch("app.api.v1.endpoints.webhooks.audit_log"):
+                resp = client.delete(f"/api/v1/webhooks/{webhook.id}")
             assert resp.status_code == 204
             mock_db.delete.assert_not_called()
         finally:
@@ -191,11 +197,27 @@ class TestTombstonesStayReadable:
 class TestListHidesTombstones:
     def _list_session(self):
         mock_db = MagicMock()
-        mock_db.query.return_value.offset.return_value.limit.return_value.all.return_value = []
+        # list_webhooks pages with a window-count column (#554): the paged
+        # chain returns an empty page; the empty-page fallback total comes
+        # from query.order_by(None).count(). Both the filtered (default) and
+        # unfiltered (include_deleted) chains are stubbed.
+        root = mock_db.query.return_value
+        root.order_by.return_value.count.return_value = 0
+        root.add_columns.return_value.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
+        filtered = root.filter.return_value
+        filtered.order_by.return_value.count.return_value = 0
+        filtered.add_columns.return_value.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
         return mock_db
 
     def _applied_filters(self, mock_db) -> str:
-        return " ".join(str(call) for call in mock_db.query.return_value.filter.call_args_list)
+        # str() the filter arguments themselves (not the mock call repr): the
+        # arguments are real SQLAlchemy expressions whose SQL text names the
+        # filtered columns, e.g. "webhooks.deleted_at IS NULL".
+        parts: list[str] = []
+        for call in mock_db.query.return_value.filter.call_args_list:
+            for arg in call.args:
+                parts.append(str(arg))
+        return " ".join(parts)
 
     def test_list_excludes_deleted_by_default(self, admin_override):
         mock_db = self._list_session()

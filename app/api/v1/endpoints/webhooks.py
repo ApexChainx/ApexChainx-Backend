@@ -6,8 +6,22 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import String, cast, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints.webhook_errors import (
+    DELIVERY_IN_PROGRESS,
+    DELIVERY_NOT_FOUND,
+    DELIVERY_NOT_REPLAYABLE,
+    DELIVERY_NOT_RETRYABLE,
+    INVALID_WEBHOOK_URL,
+    VALIDATION_ERROR,
+    WEBHOOK_CONFLICT,
+    WEBHOOK_DELETED_CONFLICT,
+    WEBHOOK_LIMIT_REACHED,
+    WEBHOOK_NOT_FOUND,
+    WebhookHTTPException,
+)
 from app.core.config import settings
 from app.core.security import hash_token, require_admin
 from app.db.session import get_db
@@ -17,6 +31,7 @@ from app.services.audit_log import audit_log
 from app.services.formatters import canonical_json
 from app.services.metrics import increment_counter, set_gauge
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
+from app.services.webhook_uniqueness import DuplicateWebhookError, handle_create_integrity_error
 from app.utils.logging import get_structured_logger
 from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 from app.utils.secret_history import prune_expired_secrets
@@ -32,20 +47,6 @@ router = APIRouter(
 )
 
 logger = get_structured_logger("webhooks_api")
-
-
-class WebhookHTTPException(HTTPException):
-    """HTTPException carrying a registered error code (issue #569).
-
-    ``error_code`` must exist in docs/ERROR_CODES.md (enforced by
-    scripts/lint_error_codes.py). The RFC 7807 handler includes it in the
-    problem body so clients can branch on the code instead of parsing
-    human-readable detail strings.
-    """
-
-    def __init__(self, status_code: int, detail: str, error_code: str) -> None:
-        super().__init__(status_code=status_code, detail=detail)
-        self.error_code = error_code
 
 
 # --------------------------------------------------------------------------- #
@@ -99,9 +100,9 @@ class WebhookCreate(BaseModel):
             validate_webhook_url(url_str)
         except NetworkValidationError as exc:
             raise WebhookHTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"Webhook URL rejected: {exc}",
-                error_code="invalid_webhook_url",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Webhook URL rejected: {exc}",
+                error_code=INVALID_WEBHOOK_URL,
             ) from exc
         return v
 
@@ -123,6 +124,12 @@ class WebhookUpdate(BaseModel):
     # Same bound as create (#552); None means "leave unchanged".
     max_retries: int | None = Field(default=None, ge=0, le=settings.MAX_WEBHOOK_MAX_RETRIES)
     is_active: bool | None = None
+    # #582: the per-webhook grace window used by secret rotations. None means
+    # "leave unchanged"; the bound matches _apply_secret_rotation's fallback
+    # rule so a value that would be ignored cannot be stored in the first place.
+    secret_grace_hours: int | None = Field(
+        default=None, ge=1, le=settings.MAX_WEBHOOK_SECRET_GRACE_HOURS
+    )
 
     @field_validator("name")
     @classmethod
@@ -144,9 +151,9 @@ class WebhookUpdate(BaseModel):
                 validate_webhook_url(url_str)
             except NetworkValidationError as exc:
                 raise WebhookHTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    f"Webhook URL rejected: {exc}",
-                    error_code="invalid_webhook_url",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Webhook URL rejected: {exc}",
+                    error_code=INVALID_WEBHOOK_URL,
                 ) from exc
         return v
 
@@ -267,9 +274,9 @@ def _validated_url(url: str) -> list[str]:
         return validate_webhook_url(url)
     except NetworkValidationError as exc:
         raise WebhookHTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Webhook URL rejected: {exc}",
-            error_code="invalid_webhook_url",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Webhook URL rejected: {exc}",
+            error_code=INVALID_WEBHOOK_URL,
         ) from exc
 
 
@@ -277,7 +284,9 @@ def _get_webhook_or_404(db: Session, webhook_id: UUID) -> Webhook:
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not webhook:
         raise WebhookHTTPException(
-            status.HTTP_404_NOT_FOUND, "Webhook not found.", error_code="webhook_not_found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook not found.",
+            error_code=WEBHOOK_NOT_FOUND,
         )
     return webhook
 
@@ -292,9 +301,9 @@ def _get_live_webhook_or_409(db: Session, webhook_id: UUID) -> Webhook:
     webhook = _get_webhook_or_404(db, webhook_id)
     if webhook.is_deleted:
         raise WebhookHTTPException(
-            status.HTTP_409_CONFLICT,
-            "Webhook has been deleted and can no longer be modified.",
-            error_code="webhook_deleted_conflict",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Webhook has been deleted and can no longer be modified.",
+            error_code=WEBHOOK_DELETED_CONFLICT,
         )
     return webhook
 
@@ -386,12 +395,12 @@ def _enforce_webhook_registration_cap(db: Session) -> None:
     registered = _count_registered_webhooks(db)
     if registered >= cap:
         raise WebhookHTTPException(
-            status.HTTP_409_CONFLICT,
-            (
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
                 f"Webhook limit reached: {registered} webhooks are already registered and "
                 f"MAX_WEBHOOKS_PER_ACCOUNT is {cap}. Delete an unused webhook before creating another."
             ),
-            error_code="webhook_limit_reached",
+            error_code=WEBHOOK_LIMIT_REACHED,
         )
 
 
@@ -440,7 +449,24 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         resolved_ips=canonical_json(resolved_ips),
     )
     db.add(webhook)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        # The partial unique index on (url, events) WHERE deleted_at IS NULL
+        # fires when the same url+events tuple is registered twice without an
+        # intervening soft-delete.  Translate to 409 so the caller gets a
+        # machine-readable signal instead of an unhandled 500 (issue #562).
+        try:
+            handle_create_integrity_error(exc)
+        except DuplicateWebhookError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A webhook with this url and events combination already exists.",
+            ) from exc
+        # Any other IntegrityError (e.g. FK violation) is not a duplicate —
+        # re-raise and let the global handler deal with it.
+        raise
     db.refresh(webhook)
     _warn_on_excessive_fanout(db)
     return _serialize_webhook(webhook)
@@ -515,13 +541,29 @@ def update_webhook(
         webhook.url = url
         webhook.resolved_ips = canonical_json(resolved_ips)
     if payload.secret is not None:
-        webhook.secret = payload.secret
+        # #581: PATCH used to overwrite the signing secret in place — no
+        # version bump, no history entry, no grace window, no audit event —
+        # so signatures produced with the previous secret failed the moment
+        # the row was written. Changing the secret here is a rotation and
+        # goes through the same lifecycle as POST /rotate-secret.
+        _apply_secret_rotation(
+            webhook,
+            new_secret=payload.secret,
+            now=datetime.now(UTC),
+            actor=getattr(current_user, "email", "unknown"),
+            source="patch",
+        )
     if payload.events is not None:
         webhook.events = canonical_json([e.value for e in payload.events])
     if payload.max_retries is not None:
         webhook.max_retries = payload.max_retries
     if payload.is_active is not None:
         webhook.is_active = payload.is_active
+    if payload.secret_grace_hours is not None:
+        # #582: make the per-webhook grace window settable so the rotation
+        # path's honouring of it (and the 1..MAX bound in the schema) is
+        # reachable from the API rather than only from the DB.
+        webhook.secret_grace_hours = payload.secret_grace_hours
 
     db.commit()
     db.refresh(webhook)
@@ -623,30 +665,51 @@ def list_webhook_deliveries(
     )
 
 
-@router.post("/{webhook_id}/rotate-secret", response_model=WebhookSecretRotateResponse)  # BE-084
-def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin), db: Session = Depends(get_db)):
-    """Rotate the webhook signing secret with a grace period overlap window.
+def _apply_secret_rotation(webhook: Webhook, new_secret: str, now: datetime, actor: str, *, source: str) -> int:
+    """Move `webhook` from its current secret to `new_secret` with the full lifecycle (#581, #582).
 
-    The previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,
-    enabling zero-downtime rotation for consumers.
+    Both paths that change a webhook's signing secret — the dedicated rotate
+    endpoint (BE-084) and PATCH with a `secret` field (#581) — must behave
+    identically, otherwise one of them becomes a silent downgrade:
 
-    #502: previous_secrets entries that are past their grace window are pruned
-    on every rotation, so the JSONB history stays bounded instead of growing for
-    the lifetime of the webhook.
+    - the outgoing secret is stored (hashed) in ``previous_secrets`` for the
+      webhook's own grace window (#582): ``secret_grace_hours`` when valid,
+      falling back to ``WEBHOOK_SECRET_GRACE_HOURS`` when missing/invalid —
+      the column is nullable in older schema states and could be set to 0 or
+      negative by an operator to disable the overlap;
+    - ``secret_version`` is bumped so consumers can detect the change;
+    - ``last_secret_rotation_at`` is stamped;
+    - out-of-grace history is pruned first (#502) and the actor + source are
+      recorded in the audit trail.
 
-    BE-034: Emits durable audit information with timestamp and actor context.
+    Returns the effective grace window in hours (the per-webhook value when it
+    was used, otherwise the global fallback) so callers can report it.
+
+    The caller is responsible for resolving the webhook (live, not deleted)
+    and committing; this helper assigns ``webhook.secret`` itself.
     """
-    from datetime import datetime
-
-    from app.core.config import settings
-
-    webhook = _get_live_webhook_or_409(db, webhook_id)
-
-    # Capture old metadata for audit trail
     old_secret_version = webhook.secret_version
     old_rotation_time = webhook.last_secret_rotation_at
 
-    now = datetime.now(UTC)
+    # #582: honour the per-webhook grace window instead of the global default.
+    # Values outside 1..MAX_WEBHOOK_SECRET_GRACE_HOURS fall back to the global
+    # setting: a grace of 0 or less would drop the old secret immediately
+    # (breaking in-flight consumers with no warning), and an unbounded value
+    # would keep a (hashed) secret alive forever.
+    configured_grace = getattr(webhook, "secret_grace_hours", None)
+    if isinstance(configured_grace, int) and 1 <= configured_grace <= settings.MAX_WEBHOOK_SECRET_GRACE_HOURS:
+        grace_hours = configured_grace
+        grace_source = "webhook"
+    else:
+        grace_hours = settings.WEBHOOK_SECRET_GRACE_HOURS
+        grace_source = "global"
+        if configured_grace is not None:
+            logger.warning(
+                "Webhook secret_grace_hours out of range; falling back to global grace",
+                webhook_id=str(webhook.id),
+                configured_grace_hours=configured_grace,
+                fallback_grace_hours=grace_hours,
+            )
 
     # #502: prune previous_secrets that fell out of their grace window before
     # appending the new one. The daily housekeeping task also prunes, but a
@@ -658,7 +721,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
 
     # Store old secret in previous_secrets with expiry
     if webhook.secret:
-        expires_at = now + timedelta(hours=settings.WEBHOOK_SECRET_GRACE_HOURS)
+        expires_at = now + timedelta(hours=grace_hours)
         previous_entry = {
             "hashed_secret": hash_token(webhook.secret),
             "created_at": now.isoformat(),
@@ -668,34 +731,73 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
             webhook.previous_secrets = []
         webhook.previous_secrets.append(previous_entry)
 
-    # Generate new secret and update metadata
-    new_secret = secrets.token_hex(32)
     webhook.secret = new_secret
     webhook.secret_version = old_secret_version + 1
     webhook.last_secret_rotation_at = now
 
-    db.commit()
-
-    # Emit audit log with actor context and timestamp
+    # Emit audit log with actor context and timestamp. `source` distinguishes
+    # the dedicated rotate endpoint from a PATCH that carries a secret (#581):
+    # both are rotations and both must be auditable as one.
     audit_log.log(
         "webhook_secret_rotated",
         {
-            "webhook_id": str(webhook_id),
+            "webhook_id": str(webhook.id),
             "webhook_name": webhook.name,
             "old_secret_version": old_secret_version,
             "new_secret_version": webhook.secret_version,
             "previous_rotation_at": old_rotation_time.isoformat() if old_rotation_time else None,
-            "grace_hours": settings.WEBHOOK_SECRET_GRACE_HOURS,
-            "rotated_by": getattr(current_user, "email", "unknown"),
+            "grace_hours": grace_hours,
+            "grace_source": grace_source,
+            "rotated_by": actor,
+            "rotation_source": source,
             # #502: how much history the rotation had to drop to stay bounded
             "pruned_previous_secrets": pruned_previous,
         },
     )
 
+    return grace_hours
+
+
+@router.post("/{webhook_id}/rotate-secret", response_model=WebhookSecretRotateResponse)  # BE-084
+def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin), db: Session = Depends(get_db)):
+    """Rotate the webhook signing secret with a grace period overlap window.
+
+    The previous secret is stored (hashed) and remains valid for the webhook's
+    ``secret_grace_hours`` (falling back to WEBHOOK_SECRET_GRACE_HOURS when the
+    column is unset or out of range), enabling zero-downtime rotation for
+    consumers (#582).
+
+    PATCH with a ``secret`` field goes through the same lifecycle (#581).
+
+    #502: previous_secrets entries that are past their grace window are pruned
+    on every rotation, so the JSONB history stays bounded instead of growing for
+    the lifetime of the webhook.
+
+    BE-034: Emits durable audit information with timestamp and actor context.
+    """
+    webhook = _get_live_webhook_or_409(db, webhook_id)
+
+    now = datetime.now(UTC)
+    new_secret = secrets.token_hex(32)
+
+    # Capture the plaintext before it is replaced; _apply_secret_rotation
+    # hashes the outgoing secret into the history.
+    grace_hours = _apply_secret_rotation(
+        webhook,
+        new_secret=new_secret,
+        now=now,
+        actor=getattr(current_user, "email", "unknown"),
+        source="rotate_endpoint",
+    )
+
+    db.commit()
+
     return WebhookSecretRotateResponse(
         webhook_id=webhook.id,
         new_secret=new_secret,
-        message=f"Secret rotated. Previous secret will remain valid for {settings.WEBHOOK_SECRET_GRACE_HOURS} hours.",
+        message=(
+            f"Secret rotated. Previous secret will remain valid for {grace_hours} hours."
+        ),
     )
 
 
@@ -717,19 +819,21 @@ def retry_delivery(
     )
     if not delivery:
         raise WebhookHTTPException(
-            status.HTTP_404_NOT_FOUND, "Delivery not found.", error_code="delivery_not_found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Delivery not found.",
+            error_code=DELIVERY_NOT_FOUND,
         )
     if delivery.status == WebhookDeliveryStatus.SUCCESS:
         raise WebhookHTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Delivery already succeeded; retry not needed.",
-            error_code="delivery_not_retryable",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Delivery already succeeded; retry not needed.",
+            error_code=DELIVERY_NOT_RETRYABLE,
         )
     if delivery.status == WebhookDeliveryStatus.SENDING:
         raise WebhookHTTPException(
-            status.HTTP_409_CONFLICT,
-            "Delivery is already being sent.",
-            error_code="delivery_in_progress",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery is already being sent.",
+            error_code=DELIVERY_IN_PROGRESS,
         )
 
     from app.services.webhook_service import dispatch_delivery
@@ -783,7 +887,9 @@ def replay_dead_letter_delivery(
     )
     if not delivery:
         raise WebhookHTTPException(
-            status.HTTP_404_NOT_FOUND, "Delivery not found.", error_code="delivery_not_found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Delivery not found.",
+            error_code=DELIVERY_NOT_FOUND,
         )
 
     from app.services.webhook_service import replay_dead_letter_delivery
@@ -791,9 +897,9 @@ def replay_dead_letter_delivery(
     success = replay_dead_letter_delivery(db, delivery_id)
     if not success:
         raise WebhookHTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Failed to replay delivery. It may not be in dead-letter status.",
-            error_code="delivery_not_replayable",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to replay delivery. It may not be in dead-letter status.",
+            error_code=DELIVERY_NOT_REPLAYABLE,
         )
 
     db.refresh(delivery)

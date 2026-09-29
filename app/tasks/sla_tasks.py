@@ -437,23 +437,30 @@ def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correla
     sorted_ids = sorted(device_ids)
     dedup_key = ",".join(sorted_ids)
 
-    with advisory_lock(db, f"sla-enqueue:{JobType.BULK_SLA_COMPUTATION.value}:{dedup_key}:{period}"):
-        existing = _find_inflight_sla_job(
-            db,
-            JobType.BULK_SLA_COMPUTATION,
-            lambda p: sorted(p.get("device_ids") or []) == sorted_ids and p.get("period") == period,
-        )
-        if existing:
-            return existing
+    job = Job(
+        celery_task_id=task_result.id,
+        job_type=JobType.BULK_SLA_COMPUTATION,
+        payload=payload,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
 
-        task_result = compute_bulk_sla.apply_async(kwargs=payload)
 
-        job = Job(
-            celery_task_id=task_result.id,
-            job_type=JobType.BULK_SLA_COMPUTATION,
-            payload=payload,
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        return job
+@celery_app.task(name="app.tasks.sla_tasks.warm_sla_cache_task")
+def warm_sla_cache_task() -> dict:
+    """Beat task: pre-populate the SLA cache for the busiest devices (#566).
+
+    Runs daily and after a worker boot (see ``worker_ready`` signal hookup in
+    app/tasks/sla_cache_warmup_bootstrap.py) so the first wave of reads after a
+    restart hits warm cache entries instead of stampeding the database.
+    """
+    from app.services.sla_cache_warmup import warm_sla_cache
+
+    db = SessionLocal()
+    try:
+        warmed = warm_sla_cache(db)
+        return {"warmed_entries": len(warmed)}
+    finally:
+        db.close()

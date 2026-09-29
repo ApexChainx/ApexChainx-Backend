@@ -10,7 +10,11 @@ celery_app = Celery(
         "app.tasks.auth_tasks",
         "app.tasks.outage_tasks",
         "app.tasks.audit_tasks",
+        "app.tasks.oauth_tasks",
         "app.tasks.sla_tasks",
+        # #566: imported (only) by workers so its ``worker_ready`` handler is
+        # registered before the signal fires; web/beat imports never load it.
+        "app.tasks.sla_cache_warmup_bootstrap",
         "app.tasks.webhook_secret_housekeeping",
         "app.tasks.webhook_tasks",
     ],
@@ -37,6 +41,11 @@ celery_app.conf.update(
             "task": "app.tasks.auth_tasks.cleanup_expired_auth_rows",
             "schedule": 3600.0,  # every hour
         },
+        # #568: sweep OAuth connect-state rows that outlived their expires_at.
+        "prune-expired-oauth-states": {
+            "task": "app.tasks.oauth_tasks.prune_expired_oauth_states",
+            "schedule": 3600.0,  # every hour
+        },
         "expire-old-webhook-secrets": {
             "task": "app.tasks.webhook_secret_housekeeping.expire_old_secrets",
             "schedule": 86400.0,  # every day
@@ -47,6 +56,12 @@ celery_app.conf.update(
         },
         "archive-old-audit-entries": {
             "task": "app.tasks.audit_tasks.archive_old_audit_entries",
+            "schedule": 86400.0,  # every day
+        },
+        # #566: keep the top-N SLA cache entries warm so reads after a restart
+        # (or mid-day eviction) hit Redis instead of recomputing.
+        "warm-sla-cache": {
+            "task": "app.tasks.sla_tasks.warm_sla_cache_task",
             "schedule": 86400.0,  # every day
         },
     },

@@ -139,6 +139,8 @@ class _FakeWebhook:
         self.secret_version = 3
         self.last_secret_rotation_at = NOW - timedelta(days=1)
         self.previous_secrets = previous_secrets
+        self.secret_grace_hours = 24  # #582: per-webhook window, read by rotation
+        self.is_deleted = False  # #518: _get_live_webhook_or_409 reads this
 
 
 class _RecordingAuditLog:

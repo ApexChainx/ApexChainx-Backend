@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSON
 
 from app.db.base import Base
@@ -8,6 +8,11 @@ from app.db.base import Base
 
 class OutageORM(Base):
     __tablename__ = "outages"
+
+    # Mirrors the composite index created in 0032_outage_status_detected_at_index
+    # so the incident-view query (status + detected_at window, newest first) is
+    # index-backed in metadata-created schemas too (#579).
+    __table_args__ = (Index("ix_outages_status_detected_at", "status", "detected_at"),)
 
     id = Column(String, primary_key=True, index=True)
     site_name = Column(String(255), nullable=False)

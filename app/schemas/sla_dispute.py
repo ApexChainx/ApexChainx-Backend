@@ -34,6 +34,24 @@ class DisputeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PaginatedDisputeList(BaseModel):
+    """Envelope for `GET /sla/disputes` (#580).
+
+    The endpoint used to answer with a bare array materialized from
+    ``query.all()`` — every dispute in one response, with no way to page or to
+    tell "end of list" from "this page happens to be short". The items array
+    is still present, under `items`, alongside the metadata needed to page
+    correctly (same shape as the webhook list envelope, #554).
+    """
+
+    items: list[DisputeResponse]
+    total: int
+    page: int
+    page_size: int
+    returned: int
+    has_more: bool
+
+
 class DisputeAuditLogResponse(BaseModel):
     id: UUID
     dispute_id: UUID

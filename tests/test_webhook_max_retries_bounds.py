@@ -38,8 +38,11 @@ def admin_override():
 
     app.dependency_overrides[require_admin] = _fake_admin
     # A rejected body never reaches the handler, but FastAPI resolves `get_db`
-    # while building the request, so keep it off the real database.
-    app.dependency_overrides[get_db] = MagicMock()
+    # while building the request, so keep it off the real database. The override
+    # must be a generator function like the real dependency: a bare MagicMock()
+    # makes FastAPI read the mock's (*args, **kwargs) signature as two required
+    # query parameters, so every request 422s before body validation.
+    app.dependency_overrides[get_db] = lambda: iter([MagicMock()])
     yield
     app.dependency_overrides.pop(require_admin, None)
     app.dependency_overrides.pop(get_db, None)
@@ -83,7 +86,9 @@ class TestCreateReturns422:
         resp = client.post("/api/v1/webhooks", json=VALID_BODY | {"max_retries": 1_000_000})
 
         assert resp.status_code == 422
-        assert any(detail["loc"][-1] == "max_retries" for detail in resp.json()["detail"])
+        # RFC 7807 shape: field errors live in errors[].pointer (docs/API.md),
+        # not in FastAPI's raw detail[].loc list.
+        assert any(error["pointer"].endswith("max_retries") for error in resp.json()["errors"])
 
     def test_negative_max_retries_is_rejected(self, admin_override):
         resp = client.post("/api/v1/webhooks", json=VALID_BODY | {"max_retries": -1})
@@ -99,7 +104,9 @@ class TestCreateReturns422:
         """
         safe_client = TestClient(app, raise_server_exceptions=False)
         with patch("app.api.v1.endpoints.webhooks.validate_webhook_url"):
-            resp = safe_client.post("/api/v1/webhooks", json=VALID_BODY | {"max_retries": settings.MAX_WEBHOOK_MAX_RETRIES})
+            resp = safe_client.post(
+                "/api/v1/webhooks", json=VALID_BODY | {"max_retries": settings.MAX_WEBHOOK_MAX_RETRIES}
+            )
 
         assert resp.status_code != 422
 
@@ -109,7 +116,7 @@ class TestUpdateReturns422:
         resp = client.patch(f"/api/v1/webhooks/{uuid4()}", json={"max_retries": 1_000_000})
 
         assert resp.status_code == 422
-        assert any(detail["loc"][-1] == "max_retries" for detail in resp.json()["detail"])
+        assert any(error["pointer"].endswith("max_retries") for error in resp.json()["errors"])
 
     def test_negative_max_retries_is_rejected(self, admin_override):
         resp = client.patch(f"/api/v1/webhooks/{uuid4()}", json={"max_retries": -2})

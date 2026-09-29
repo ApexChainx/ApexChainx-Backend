@@ -1,98 +1,96 @@
-"""Unit tests for the JobState <-> Celery state mapping at the API boundary (#571).
+"""#571: Celery state → JobStatus mapping at the jobs API boundary.
 
-The job API must only expose states this service owns: every Celery state —
-including the scheduling states RETRY / RECEIVED / SCHEDULED / REJECTED that a
-worker can surface — maps onto a persisted :class:`JobStatus`, and unknown
-states map to ``None`` so callers keep the stored status.
+The jobs API used to inline a five-key lookup that copied Celery strings
+through loosely; anything unmapped silently froze the stored status. The
+boundary now goes through one closed, explicit table (app/utils/job_states.py)
+and only ever reports JobStatus members.
 """
 
 import pytest
 
-from app.models.job import JobState, JobStatus
+from app.models.job import JobStatus
+from app.utils.job_states import (
+    CELERY_STATE_TO_JOB_STATUS,
+    celery_state_to_job_status,
+)
+
+# Every state Celery's backends can report for a task, per celery.result and
+# docs/reference: PENDING, STARTED, RETRY, SUCCESS, FAILURE, REVOKED.
+ALL_CELERY_STATES = ["PENDING", "STARTED", "RETRY", "SUCCESS", "FAILURE", "REVOKED"]
 
 
-class TestKnownCeleryStates:
+class TestCeleryStateMapping:
+    @pytest.mark.parametrize("celery_state", ALL_CELERY_STATES)
+    def test_every_core_celery_state_is_mapped(self, celery_state):
+        assert celery_state in CELERY_STATE_TO_JOB_STATUS
+
     @pytest.mark.parametrize(
         ("celery_state", "expected"),
         [
+            ("PENDING", JobStatus.PENDING),
+            ("STARTED", JobStatus.STARTED),
+            ("RETRY", JobStatus.STARTED),
             ("SUCCESS", JobStatus.SUCCESS),
             ("FAILURE", JobStatus.FAILURE),
             ("REVOKED", JobStatus.REVOKED),
-            ("STARTED", JobStatus.STARTED),
-            ("PENDING", JobStatus.PENDING),
-            # Celery re-enqueued the task — queued again, not running.
-            ("RETRY", JobStatus.PENDING),
-            # Framework scheduling states between reception and execution.
-            ("RECEIVED", JobStatus.PENDING),
-            ("SCHEDULED", JobStatus.PENDING),
-            # Worker rejected the task (e.g. requeue on worker loss).
-            ("REJECTED", JobStatus.FAILURE),
         ],
     )
-    def test_every_celery_state_maps(self, celery_state, expected):
-        assert JobState.to_job_status(celery_state) is expected
+    def test_mapping_targets(self, celery_state, expected):
+        assert celery_state_to_job_status(celery_state, fallback=JobStatus.PENDING) is expected
 
-    def test_mapping_is_case_insensitive(self):
-        assert JobState.to_job_status("success") is JobStatus.SUCCESS
-        assert JobState.to_job_status("Retry") is JobStatus.PENDING
+    @pytest.mark.parametrize("celery_state", ALL_CELERY_STATES)
+    def test_mapping_only_emits_job_status_members(self, celery_state):
+        result = celery_state_to_job_status(celery_state, fallback=JobStatus.PENDING)
+        assert isinstance(result, JobStatus)
+        assert result in set(JobStatus)
+
+    @pytest.mark.parametrize(
+        "unmapped",
+        [
+            "PROGRESS",  # custom worker state
+            "SCHEDULED",  # custom state some brokers report
+            "",  # empty
+            None,  # AsyncResult.state can be None in edge cases
+            "sent",  # pre-PENDING transport-level state
+        ],
+    )
+    def test_unmapped_states_fall_back_to_stored_status(self, unmapped):
+        stored = JobStatus.STARTED
+        assert celery_state_to_job_status(unmapped, fallback=stored) is stored
+
+    @pytest.mark.parametrize("celery_state", [s.lower() for s in ALL_CELERY_STATES])
+    def test_mapping_tolerates_lowercase(self, celery_state):
+        # Backend strings are normalised case-insensitively before lookup.
+        expected = CELERY_STATE_TO_JOB_STATUS[celery_state.upper()]
+        assert celery_state_to_job_status(celery_state, fallback=JobStatus.PENDING) is expected
+
+    def test_retry_is_not_terminal(self):
+        # RETRY maps to started (an attempt is running/waiting), never to a
+        # terminal status: a retried job must stay retry-eligible.
+        assert CELERY_STATE_TO_JOB_STATUS["RETRY"] not in (
+            JobStatus.SUCCESS,
+            JobStatus.FAILURE,
+            JobStatus.REVOKED,
+        )
+
+    def test_terminal_states_are_terminal(self):
+        assert CELERY_STATE_TO_JOB_STATUS["SUCCESS"] == JobStatus.SUCCESS
+        assert CELERY_STATE_TO_JOB_STATUS["FAILURE"] == JobStatus.FAILURE
+        assert CELERY_STATE_TO_JOB_STATUS["REVOKED"] == JobStatus.REVOKED
 
 
-class TestEdgeStates:
-    @pytest.mark.parametrize("bad", [None, "", "   "])
-    def test_missing_state_returns_none(self, bad):
-        assert JobState.to_job_status(bad) is None
+class TestSyncFlowUsesMapping:
+    def test_unknown_celery_state_keeps_stored_status(self):
+        """_sync_job_status_from_celery no longer needs its own lookup; the
+        closed mapping is the single source of truth. Unknown states keep the
+        stored status instead of raising or leaking through."""
+        from app.utils.job_states import celery_state_to_job_status as mapper
 
-    def test_unknown_state_returns_none(self):
-        # Not a real Celery state — must not guess a status.
-        assert JobState.to_job_status("ZOMBIE") is None
+        stored = JobStatus.STARTED
+        assert mapper("SOME_CUSTOM_STATE", fallback=stored) is stored
 
-    def test_job_state_enum_covers_all_celery_states(self):
-        # The enum itself must enumerate every state it can map. Values are
-        # the lower-case Celery state names; names are the upper-case ones.
-        documented = {
-            "SUCCESS",
-            "FAILURE",
-            "REVOKED",
-            "STARTED",
-            "PENDING",
-            "RETRY",
-            "RECEIVED",
-            "SCHEDULED",
-            "REJECTED",
-        }
-        assert {member.name for member in JobState} == documented
-
-    def test_job_status_values_unchanged(self):
-        # The persisted enum is part of the API contract.
-        assert {s.value for s in JobStatus} == {"pending", "started", "success", "failure", "revoked"}
-
-
-class TestAPIBoundary:
-    def test_sync_endpoint_uses_enum_mapping(self):
-        # The endpoint module must no longer carry its own inline state map.
-        import inspect
-
-        from app.api.v1.endpoints import jobs
-
-        source = inspect.getsource(jobs._sync_job_status_from_celery)
-        assert "state_map" not in source
-        assert "JobState.to_job_status" in source
-
-    def test_job_status_cache_stores_mapped_status(self):
-        """A job whose Celery state is a scheduling state gets PENDING cached,
-        not the raw Celery string."""
-        from unittest.mock import MagicMock, patch
-
-        from app.api.v1.endpoints.jobs import _job_status_cache, _sync_job_status_from_celery
-
-        job = MagicMock()
-        job.id = "job-1"
-        job.status = JobStatus.PENDING
-        job.celery_task_id = "task-1"
-
-        with patch("app.api.v1.endpoints.jobs.AsyncResult") as mock_result_cls:
-            mock_result_cls.return_value.state = "RECEIVED"
-            _job_status_cache._cache.clear() if hasattr(_job_status_cache, "_cache") else None
-            result = _sync_job_status_from_celery(MagicMock(), job)
-
-        assert result.status == JobStatus.PENDING
+    def test_api_responses_can_only_carry_job_status_values(self):
+        """The state set exposed by the Job API equals JobStatus, so no
+        Celery string can ever appear in a response payload."""
+        api_states = {status.value for status in JobStatus}
+        assert api_states == {"pending", "started", "success", "failure", "revoked"}

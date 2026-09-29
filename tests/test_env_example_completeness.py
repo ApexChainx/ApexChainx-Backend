@@ -93,7 +93,9 @@ class TestTemplateCoverage:
         """The required-secret section must not ship a literal value."""
         text = _example_text()
         for key in ("SECRET_KEY", "PAYMENT_WEBHOOK_SECRET"):
-            assigned = [line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key]
+            assigned = [
+                line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key
+            ]
             assert assigned, f"{key} should be present in the template"
             for line in assigned:
                 assert "GENERATE" in line, f"{key} must stay a documented placeholder, got: {line}"
@@ -154,6 +156,9 @@ class TestProductionGuards:
 
         config = _dev_settings(
             ENVIRONMENT="production",
+            # #510: production forbids eager Celery, so a real production config
+            # always sets this false alongside its secrets.
+            CELERY_TASK_ALWAYS_EAGER=False,
             SECRET_KEY="k" * 48,
             IMPERSONATION_SIGNING_KEY="i" * 48,
             PAYMENT_WEBHOOK_SECRET="w" * 48,

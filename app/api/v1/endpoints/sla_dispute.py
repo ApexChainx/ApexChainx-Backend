@@ -2,18 +2,21 @@ import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.security import require_admin, require_engineer, require_engineer_or_admin
 from app.db.session import get_db
 from app.models.orm.sla import SLAResultORM
 from app.models.sla_dispute import DisputeAuditLog, DisputeStatus, SLADispute
+from app.schemas.audit_list_params import MAX_PAGE_SIZE
 from app.schemas.sla_dispute import (
     CreateProposedSLARequest,
     DisputeAuditLogResponse,
     DisputeFlagRequest,
     DisputeResolveRequest,
     DisputeResponse,
+    PaginatedDisputeList,
 )
 from app.services.metrics import (
     SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL,
@@ -26,18 +29,57 @@ router = APIRouter()
 
 @router.get(
     "/disputes",
-    response_model=list[DisputeResponse],
+    response_model=PaginatedDisputeList,
     summary="List SLA disputes",
 )
 def list_disputes(
     status_filter: DisputeStatus | None = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(
+        default=20,
+        ge=1,
+        le=MAX_PAGE_SIZE,
+        description=f"Items per page (shared list cap: {MAX_PAGE_SIZE}). Values above it are rejected with 422.",
+    ),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    query = db.query(SLADispute).order_by(SLADispute.flagged_at.desc())
+    """List SLA disputes, paginated (#580).
+
+    The endpoint used to return ``query.all()`` — every dispute serialized into
+    one unbounded response, so a large disputes table turned the list call into
+    a full-table dump. Pages are now capped by the shared MAX_PAGE_SIZE (200,
+    same constant the audit list enforces) and answer with the standard
+    envelope (items/total/page/page_size/returned/has_more).
+    """
+    query = db.query(SLADispute)
     if status_filter is not None:
         query = query.filter(SLADispute.status == status_filter)
-    return query.all()
+
+    offset = (page - 1) * page_size
+
+    # Single statement for total + page (the #296 pattern used by the webhook
+    # list) with an explicit, deterministic ORDER BY: `flagged_at` was already
+    # the sort key, but without a tiebreaker rows sharing a timestamp could
+    # repeat or vanish between pages, which would make has_more lie.
+    paged = (
+        query.add_columns(func.count().over().label("total_count"))
+        .order_by(SLADispute.flagged_at.desc(), SLADispute.id)
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+    total = paged[0].total_count if paged else query.order_by(None).count()
+    items = [row[0] for row in paged]
+
+    return PaginatedDisputeList(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        returned=len(items),
+        has_more=offset + len(items) < total,
+    )
 
 
 @router.post(

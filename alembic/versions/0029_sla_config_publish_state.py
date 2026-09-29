@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Persist SLA policy versions and publish tokens.
 
 The sla_config_history table (0022) already enforces a unique

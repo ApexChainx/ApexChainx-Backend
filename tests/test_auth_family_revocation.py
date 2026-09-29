@@ -19,6 +19,9 @@ from app.models.orm.session import SessionORM
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.services.auth_store import AuthStore
 
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 PASSWORD = "RevokedFamily123!"
 
 

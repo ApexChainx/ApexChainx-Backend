@@ -26,6 +26,11 @@ from app.models.auth import LoginRequest, RegisterRequest
 from app.services.auth_store import AuthStore
 from app.services.metrics import metrics
 
+# Needs Postgres (auth flows) and Redis (idempotency middleware); skips with
+# instructions when either is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres, pytest.mark.redis]
+
+
 SECRET = settings.SECRET_KEY or "apexchainx-dev-secret"
 PASSWORD = "TestPass123!"
 FAILURE_MESSAGE = "impersonation_verification_failed"
@@ -61,7 +66,9 @@ def _counters_snapshot() -> dict:
     return dict(metrics.get_metrics_summary()["counters"])
 
 
-def _mint_impersonation_token(sub: str, *, exp_offset: int = 900, scope: str = "impersonate", secret: str = SECRET) -> str:
+def _mint_impersonation_token(
+    sub: str, *, exp_offset: int = 900, scope: str = "impersonate", secret: str = SECRET
+) -> str:
     now = int(time.time())
     payload = {
         "sub": sub,
@@ -88,9 +95,7 @@ class TestImpersonationFailureObservability:
             (lambda: _mint_impersonation_token("user_00000000", scope="outages:read"), "wrong_scope"),
         ],
     )
-    def test_failed_verification_falls_through_and_records(
-        self, client, caplog, token_factory, expected_reason
-    ):
+    def test_failed_verification_falls_through_and_records(self, client, caplog, token_factory, expected_reason):
         caplog.set_level(logging.WARNING)
         before = _counters_snapshot()
         correlation_id = f"test-corr-{uuid.uuid4().hex[:12]}"

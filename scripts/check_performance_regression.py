@@ -22,6 +22,11 @@ Usage:
     # realistic amount of outage data):
     python scripts/check_performance_regression.py --check-outage-search-plan
 
+    # Index-backed guard for the primary incident view (#579) -- EXPLAINs the
+    # status + detected_at window query and fails if it Seq Scans `outages`
+    # instead of the composite index from migration 0032:
+    python scripts/check_performance_regression.py --check-outage-incident-view-plan
+
 Exit codes:
     0  all endpoints within the regression factor
     1  at least one endpoint exceeded the regression factor (or no baseline)
@@ -53,6 +58,15 @@ P95_COLUMN = "95%"
 # Seq Scan on the outages table.
 SEQ_SCAN_NODE = "Seq Scan"
 OUTAGES_RELATION = "outages"
+
+# #579: the dominant operator query -- "active outages in the last hour" --
+# filters outages by status plus a detected_at window and orders newest-first.
+# Migration 0032_outage_status_detected_at_index adds a composite btree on
+# (status, detected_at DESC) so the equality + range + order-by shape is served
+# by one index. Without it Postgres bitmap-combines ix_outages_status with a
+# scan of the time dimension (or Seq Scans outright), which degrades exactly
+# while the incident view is being paged during an incident.
+INCIDENT_VIEW_RELATION = OUTAGES_RELATION
 
 
 def find_seq_scans_on_relation(plan_node: dict, relation: str) -> list[dict]:
@@ -138,6 +152,54 @@ def check_outage_search_plan(session, search_term: str = "site-1") -> list[str]:
     return []
 
 
+def check_outage_incident_view_plan(session, status: str = "open") -> list[str]:
+    """Assert that the incident-view query plan (status + detected_at window,
+    newest first) stays index-backed rather than Seq Scanning `outages` (#579).
+
+    Runs the real OutageRepository.list() shape the incident view uses and
+    EXPLAINs the exact SQL it issues (captured, not re-implemented, so the
+    check cannot drift from the code). Returns a list of failure messages;
+    empty means the check passed. The caller is responsible for making sure
+    `outages` has a realistic amount of data and has been ANALYZEd -- on a
+    near-empty table Postgres correctly (and uninterestingly) prefers a seq
+    scan regardless of indexes.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.repositories.outage_repository import OutageRepository
+
+    repo = OutageRepository(session)
+    start = datetime.now(UTC) - timedelta(days=30)
+    statement, params = _capture_last_statement(
+        session,
+        lambda: repo.list(
+            status=status,
+            start_date=start,
+            end_date=datetime.now(UTC),
+            page=1,
+            page_size=20,
+            include_total=False,
+        ),
+    )
+
+    raw_conn = session.connection().connection
+    cursor = raw_conn.cursor()
+    try:
+        cursor.execute(f"EXPLAIN (FORMAT JSON) {statement}", params)
+        plan_json = cursor.fetchone()[0]
+    finally:
+        cursor.close()
+
+    root = plan_json[0]["Plan"]
+    seq_scans = find_seq_scans_on_relation(root, INCIDENT_VIEW_RELATION)
+    if seq_scans:
+        return [
+            f"outage incident-view plan uses Seq Scan on '{INCIDENT_VIEW_RELATION}' instead of the composite "
+            f"(status, detected_at) index (status={status!r}); plan: {json.dumps(root, indent=2)[:2000]}"
+        ]
+    return []
+
+
 def read_stats(csv_path: Path) -> dict[str, float]:
     """Map endpoint name -> p95 latency (ms) from a locust stats CSV."""
     p95_by_endpoint: dict[str, float] = {}
@@ -183,6 +245,18 @@ def main() -> int:
         "point at a DB with a realistic amount of outage data.",
     )
     parser.add_argument("--search-term", default="site-1", help="Search term to EXPLAIN with (default: 'site-1')")
+    parser.add_argument(
+        "--check-outage-incident-view-plan",
+        action="store_true",
+        help="Instead of the locust CSV comparison, EXPLAIN the primary "
+        "incident-view query (status + detected_at window, newest first) and "
+        "fail if it falls back to a Seq Scan on `outages` instead of the "
+        "composite index from migration 0032 (#579). Requires DATABASE_URL "
+        "to point at a DB with a realistic amount of outage data.",
+    )
+    parser.add_argument(
+        "--incident-status", default="open", help="Status value for the incident-view plan check (default: 'open')"
+    )
     args = parser.parse_args()
 
     if args.check_outage_search_plan:
@@ -199,6 +273,25 @@ def main() -> int:
                 print(f"  - {failure}")
             return 1
         print(f"outage search plan check passed: term={args.search_term!r} uses the pg_trgm GIN index.")
+        return 0
+
+    if args.check_outage_incident_view_plan:
+        from app.db.session import SessionLocal
+
+        session = SessionLocal()
+        try:
+            failures = check_outage_incident_view_plan(session, status=args.incident_status)
+        finally:
+            session.close()
+        if failures:
+            print("outage incident-view plan check FAILED:")
+            for failure in failures:
+                print(f"  - {failure}")
+            return 1
+        print(
+            f"outage incident-view plan check passed: status={args.incident_status!r} "
+            "uses the composite (status, detected_at) index."
+        )
         return 0
 
     if not args.csv:

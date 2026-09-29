@@ -1,6 +1,43 @@
 {
   "components": {
     "schemas": {
+      "AdminCreateUserRequest": {
+        "description": "Request body for the admin-only user creation endpoint.",
+        "example": {
+          "email": "newuser@example.com",
+          "full_name": "New User",
+          "password": "Password123!",
+          "role": "engineer"
+        },
+        "properties": {
+          "email": {
+            "format": "email",
+            "title": "Email",
+            "type": "string"
+          },
+          "full_name": {
+            "minLength": 1,
+            "title": "Full Name",
+            "type": "string"
+          },
+          "password": {
+            "minLength": 6,
+            "title": "Password",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "default": "engineer"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "full_name"
+        ],
+        "title": "AdminCreateUserRequest",
+        "type": "object"
+      },
       "ApiKeyCreateRequest": {
         "properties": {
           "expires_at": {
@@ -431,6 +468,37 @@
         "title": "CreateProposedSLARequest",
         "type": "object"
       },
+      "CursorPage": {
+        "description": "Standard cursor-paginated response envelope.\n\nEvery list endpoint that supports cursor pagination returns this shape.\n\n.. code-block:: json\n\n    {\n      \"items\": [...],\n      \"next_cursor\": \"eyJpZCI6ICIuLi4iLCAidiI6ICIuLi4ifQ\",\n      \"has_more\": true\n    }",
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {},
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "title": "CursorPage",
+        "type": "object"
+      },
       "DisputeAuditLogResponse": {
         "properties": {
           "action": {
@@ -644,40 +712,6 @@
           "message"
         ],
         "title": "GDPREraseResponse",
-        "type": "object"
-      },
-      "GDPRExportResponse": {
-        "properties": {
-          "entry_count": {
-            "title": "Entry Count",
-            "type": "integer"
-          },
-          "exported_at": {
-            "title": "Exported At",
-            "type": "string"
-          },
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "size_bytes": {
-            "title": "Size Bytes",
-            "type": "integer"
-          },
-          "tarball_base64": {
-            "format": "binary",
-            "title": "Tarball Base64",
-            "type": "string"
-          }
-        },
-        "required": [
-          "job_id",
-          "exported_at",
-          "size_bytes",
-          "tarball_base64",
-          "entry_count"
-        ],
-        "title": "GDPRExportResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1329,6 +1363,7 @@
         },
         "properties": {
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -1796,6 +1831,65 @@
         "title": "PaginatedWebhookDeliveries",
         "type": "object"
       },
+      "PaginatedWebhookList": {
+        "description": "Envelope for `GET /webhooks` (#554).\n\nThe endpoint used to answer with a bare array, so a caller paging through\nwebhooks could not tell \"end of list\" from \"this page happens to be short\":\nit had to request one more page to find out. The items array is still\npresent, under `items`, alongside the metadata needed to page correctly.",
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "returned",
+          "has_more"
+        ],
+        "title": "PaginatedWebhookList",
+        "type": "object"
+      },
+      "PaymentSortDirection": {
+        "enum": [
+          "asc",
+          "desc"
+        ],
+        "title": "PaymentSortDirection",
+        "type": "string"
+      },
+      "PaymentSortField": {
+        "enum": [
+          "created_at",
+          "amount",
+          "status"
+        ],
+        "title": "PaymentSortField",
+        "type": "string"
+      },
       "PaymentTransaction": {
         "example": {
           "amount": 150.0,
@@ -1815,7 +1909,7 @@
         "properties": {
           "amount": {
             "title": "Amount",
-            "type": "number"
+            "type": "integer"
           },
           "asset_code": {
             "title": "Asset Code",
@@ -1940,6 +2034,32 @@
           }
         },
         "title": "ProfileUpdateRequest",
+        "type": "object"
+      },
+      "ProposeAdminRequest": {
+        "properties": {
+          "new_admin_address": {
+            "title": "New Admin Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_admin_address"
+        ],
+        "title": "ProposeAdminRequest",
+        "type": "object"
+      },
+      "ProposeOperatorRequest": {
+        "properties": {
+          "new_operator_address": {
+            "title": "New Operator Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_operator_address"
+        ],
+        "title": "ProposeOperatorRequest",
         "type": "object"
       },
       "ProviderCallbackRequest": {
@@ -2097,11 +2217,11 @@
         "example": {
           "email": "user@example.com",
           "full_name": "Example User",
-          "password": "Password123!",
-          "role": "engineer"
+          "password": "Password123!"
         },
         "properties": {
           "email": {
+            "format": "email",
             "title": "Email",
             "type": "string"
           },
@@ -2114,10 +2234,6 @@
             "minLength": 6,
             "title": "Password",
             "type": "string"
-          },
-          "role": {
-            "$ref": "#/components/schemas/Role",
-            "default": "engineer"
           }
         },
         "required": [
@@ -3124,6 +3240,8 @@
           },
           "max_retries": {
             "default": 3,
+            "maximum": 10.0,
+            "minimum": 0.0,
             "title": "Max Retries",
             "type": "integer"
           },
@@ -3334,6 +3452,17 @@
           "url": "https://example.com/webhook"
         },
         "properties": {
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
           "events": {
             "items": {
               "type": "string"
@@ -3449,6 +3578,8 @@
           "max_retries": {
             "anyOf": [
               {
+                "maximum": 10.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -3506,6 +3637,314 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/accept-admin": {
+      "post": {
+        "description": "Complete an admin transfer (called by the proposed new admin).",
+        "operationId": "api_accept_admin_api_v1_admin_accept_admin_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Accept Admin",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/accept-operator": {
+      "post": {
+        "description": "Complete an operator transfer (called by the proposed new operator).",
+        "operationId": "api_accept_operator_api_v1_admin_accept_operator_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Accept Operator",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/cancel-admin-proposal": {
+      "post": {
+        "description": "Cancel a pending admin proposal.",
+        "operationId": "api_cancel_admin_proposal_api_v1_admin_cancel_admin_proposal_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Cancel Admin Proposal",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/propose-admin": {
+      "post": {
+        "description": "Initiate a two-step admin transfer on the SLA contract.",
+        "operationId": "api_propose_admin_api_v1_admin_propose_admin_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeAdminRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Propose Admin",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/propose-operator": {
+      "post": {
+        "description": "Initiate a two-step operator transfer on the SLA contract.",
+        "operationId": "api_propose_operator_api_v1_admin_propose_operator_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeOperatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Propose Operator",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/renounce-admin": {
+      "post": {
+        "description": "Renounce admin role permanently.",
+        "operationId": "api_renounce_admin_api_v1_admin_renounce_admin_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Renounce Admin",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/api-keys": {
       "get": {
         "operationId": "list_api_keys_endpoint_api_v1_api_keys_get",
@@ -3882,6 +4321,66 @@
         ]
       }
     },
+    "/api/v1/auth/admin/users": {
+      "post": {
+        "description": "Admin-only endpoint to create a user with an explicit role.\n\nEvery creation is audit-logged with the approving admin's identity.",
+        "operationId": "admin_create_user_api_v1_auth_admin_users_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUser"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Create User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/impersonate": {
       "post": {
         "description": "Admin endpoint to impersonate a non-admin user (audit-logged).\n\nReturns a short-lived JWT (15 min) with an ``act`` claim set to the\nadmin's id so that every action performed during impersonation is\nattributable.\n\nAcceptance criteria:\n- Cannot impersonate another admin\n- Reason is mandatory and recorded in the audit log",
@@ -4183,7 +4682,7 @@
     },
     "/api/v1/auth/me/export": {
       "post": {
-        "description": "Export all personal data for the authenticated user (GDPR compliance).\n\nReturns a tarball containing user data and audit log entries.\nDesigned to complete in < 30 s for up to 1 000 audit events.",
+        "description": "Export all personal data for the authenticated user (GDPR compliance).\n\nReturns a streaming gzip tarball containing user data and audit log entries.",
         "operationId": "export_my_data_api_v1_auth_me_export_post",
         "parameters": [
           {
@@ -4207,9 +4706,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GDPRExportResponse"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -4494,7 +4991,7 @@
     },
     "/api/v1/jobs": {
       "get": {
-        "description": "List all jobs with optional filters.",
+        "description": "List jobs with cursor-based pagination.",
         "operationId": "list_jobs_api_v1_jobs_get",
         "parameters": [
           {
@@ -4534,11 +5031,27 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 50,
-              "maximum": 200,
+              "default": 20,
+              "maximum": 100,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
@@ -4563,11 +5076,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/JobResponse"
-                  },
-                  "title": "Response List Jobs Api V1 Jobs Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/CursorPage"
                 }
               }
             },
@@ -5055,6 +5564,24 @@
       "get": {
         "description": "Get application metrics in JSON format.",
         "operationId": "get_metrics_api_v1_metrics_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5063,6 +5590,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Get Metrics",
@@ -5073,7 +5610,7 @@
     },
     "/api/v1/metrics/prometheus": {
       "get": {
-        "description": "Get metrics in Prometheus text format for scraping (BE-043).\n\nThis endpoint exposes all application metrics in Prometheus-compatible format:\n- Counters: Monotonically increasing values\n- Gauges: Point-in-time measurements\n- Histograms: Distribution of values with buckets\n- Timers: Request/job timing with percentiles\n\nAccess Control:\n- Requires engineer role to prevent unauthorized access\n- Can be further restricted via environment configuration\n\nPrometheus will scrape this endpoint periodically to collect metrics.",
+        "description": "Get metrics in Prometheus text format for scraping (BE-063).\n\nThis endpoint exposes all application metrics in Prometheus-compatible format:\n- Counters: Monotonically increasing values\n- Gauges: Point-in-time measurements\n- Histograms: Distribution of values with actual bucket counts\n\nAccess Control:\n- Requires engineer role to prevent unauthorized access\n- Can be further restricted via environment configuration\n\nHot metric names documented in dashboards/apexchainx.json.",
         "operationId": "get_prometheus_metrics_api_v1_metrics_prometheus_get",
         "parameters": [
           {
@@ -5431,6 +5968,18 @@
               "$ref": "#/components/schemas/OutageSortDirection",
               "default": "desc",
               "description": "Sort direction (enum). Supported: asc, desc. Invalid values rejected with 422. Default: desc."
+            }
+          },
+          {
+            "description": "Include total count in response. Set to false for faster pagination when only page navigation is needed.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Include total count in response. Set to false for faster pagination when only page navigation is needed.",
+              "title": "Include Total",
+              "type": "boolean"
             }
           },
           {
@@ -5819,6 +6368,29 @@
       "get": {
         "operationId": "list_violations_api_v1_outages_violations_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",
@@ -6508,6 +7080,24 @@
             }
           },
           {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PaymentSortField",
+              "default": "created_at"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/PaymentSortDirection",
+              "default": "desc"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -6550,6 +7140,145 @@
         ]
       }
     },
+    "/api/v1/payments/export": {
+      "get": {
+        "operationId": "export_payments_api_v1_payments_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outage_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outage Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date To"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Payments",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
     "/api/v1/payments/ping": {
       "get": {
         "operationId": "payments_ping_api_v1_payments_ping_get",
@@ -6571,7 +7300,7 @@
     },
     "/api/v1/payments/provider-callback": {
       "post": {
-        "description": "Inbound callback from a payment provider to update payment status (BE-028).\n\nSecurity model:\n- HMAC-SHA256 signature (X-Webhook-Signature) verified when\n  PAYMENT_WEBHOOK_SECRET is configured.  The signed message includes the\n  nonce so replaying a captured request fails if the nonce changes.\n- Replay protection: the nonce (from X-Callback-Nonce header or the\n  ``nonce`` body field) must be unique within a 5-minute window.\n  Duplicate nonces are rejected with 409 Conflict.\n- Idempotency: a callback that moves a payment into its current status\n  is silently accepted (returns 200 with the unchanged record).\n- Failures and suspicious events are written to the audit log so they\n  are reviewable later.",
+        "description": "Inbound callback from a payment provider to update payment status (BE-028).\n\nSecurity model:\n- HMAC-SHA256 signature (X-Webhook-Signature) is verified whenever\n  PAYMENT_WEBHOOK_SECRET is configured. PAYMENT_WEBHOOK_SECRET is required\n  in non-local environments (validate_critical_settings), so signature\n  verification is effectively mandatory in deployments.  The signed\n  message includes the nonce so replaying a captured request fails if the\n  nonce changes.\n- Replay protection: the nonce (from X-Callback-Nonce header or the\n  ``nonce`` body field) is MANDATORY. Nonce-less callbacks are rejected\n  with 400, and duplicate nonces within the 5-minute window are rejected\n  with 409 Conflict.\n- Idempotency: a callback that moves a payment into its current status\n  is silently accepted (returns 200 with the unchanged record).\n- Failures and suspicious events are written to the audit log so they\n  are reviewable later.",
         "operationId": "provider_callback_api_v1_payments_provider_callback_post",
         "parameters": [
           {
@@ -6640,6 +7369,147 @@
           }
         },
         "summary": "Provider Callback",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/payments/retry-queue": {
+      "get": {
+        "description": "Return payments eligible for retry with computed backoff metadata.\n\nSupports cursor-based pagination. The cursor encodes\n``(created_at, id)`` of the last item on the previous page.",
+        "operationId": "list_retry_queue_api_v1_payments_retry_queue_get",
+        "parameters": [
+          {
+            "description": "Cursor for pagination.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cursor for pagination.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Max items per page.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Max items per page.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Retry Queue",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/api/v1/payments/retry-queue/{transaction_id}/retry": {
+      "post": {
+        "description": "Admin endpoint: trigger an immediate retry, bypassing exponential backoff.",
+        "operationId": "retry_now_api_v1_payments_retry_queue__transaction_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentTransaction"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Now",
         "tags": [
           "payments"
         ]
@@ -9054,6 +9924,7 @@
     },
     "/api/v1/wallets/create": {
       "post": {
+        "description": "Create the user's wallet.\n\nRaises ``ApexWalletAlreadyExistsError`` (409) when the user already has one,\nincluding when a concurrent request wins the race for the unique constraint\n(issue #531). One user gets one wallet, and a retried registration is told\nwhich address already exists instead of creating a second row.",
         "operationId": "create_wallet_api_v1_wallets_create_post",
         "parameters": [
           {
@@ -9466,6 +10337,18 @@
             }
           },
           {
+            "description": "Include soft-deleted webhooks (#518). Their delivery history is retained for audit, so operators need a way to find the tombstones.",
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include soft-deleted webhooks (#518). Their delivery history is retained for audit, so operators need a way to find the tombstones.",
+              "title": "Include Deleted",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Page number (1-indexed)",
             "in": "query",
             "name": "page",
@@ -9514,11 +10397,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/WebhookResponse"
-                  },
-                  "title": "Response List Webhooks Api V1 Webhooks Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/PaginatedWebhookList"
                 }
               }
             },
@@ -9610,6 +10489,22 @@
             "schema": {
               "$ref": "#/components/schemas/WebhookEvent"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "requestBody": {
@@ -9652,6 +10547,7 @@
     },
     "/api/v1/webhooks/{webhook_id}": {
       "delete": {
+        "description": "Soft-delete a webhook, retaining its delivery history (#518).\n\nThe row used to be deleted outright, and `deliveries` cascades, so the record\nof what was delivered and what the consumer answered was destroyed with the\nregistration. The row is now kept as a tombstone: `deleted_at` is stamped and\n`is_active` cleared so the dispatcher stops selecting it, while the delivery\nrows stay queryable for audit.\n\nIdempotent: deleting an already-deleted webhook is still a 204, because the\ncaller's intent (this webhook should not receive events) already holds.",
         "operationId": "delete_webhook_api_v1_webhooks__webhook_id__delete",
         "parameters": [
           {
@@ -9851,6 +10747,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           }
         ],
@@ -10054,6 +10966,22 @@
               "title": "Offset",
               "type": "integer"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -10108,6 +11036,22 @@
               "title": "Delivery Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -10161,6 +11105,22 @@
               "title": "Delivery Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
           }
         ],
         "responses": {
@@ -10193,7 +11153,7 @@
     },
     "/api/v1/webhooks/{webhook_id}/rotate-secret": {
       "post": {
-        "description": "Rotate the webhook signing secret with a grace period overlap window.\n\nThe previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,\nenabling zero-downtime rotation for consumers.\n\nBE-034: Emits durable audit information with timestamp and actor context.",
+        "description": "Rotate the webhook signing secret with a grace period overlap window.\n\nThe previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,\nenabling zero-downtime rotation for consumers.\n\n#502: previous_secrets entries that are past their grace window are pruned\non every rotation, so the JSONB history stays bounded instead of growing for\nthe lifetime of the webhook.\n\nBE-034: Emits durable audit information with timestamp and actor context.",
         "operationId": "rotate_webhook_secret_api_v1_webhooks__webhook_id__rotate_secret_post",
         "parameters": [
           {
