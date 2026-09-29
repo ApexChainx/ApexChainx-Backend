@@ -66,6 +66,7 @@ class ETagMiddleware:
         body_prefix = bytearray()
         etag: str | None = None
         not_modified = False
+        start_forwarded = False
         # Only 2xx responses are buffered for the ETag computation. Non-2xx
         # responses are forwarded untouched: their start message was already
         # sent, and re-sending it from the body path produced a double
@@ -74,7 +75,12 @@ class ETagMiddleware:
 
         async def send_with_etag(message: Message) -> None:
             nonlocal response_status, response_headers, buffer_response
-            nonlocal etag, not_modified
+            nonlocal etag, not_modified, start_forwarded
+            # start_forwarded spans ASGI messages (set on http.response.start,
+            # read on http.response.body), so it must be declared nonlocal too:
+            # each send_with_etag invocation gets fresh locals and reading the
+            # bare name on the body message raised UnboundLocalError for every
+            # buffered 2xx response.
 
             if message["type"] == "http.response.start":
                 response_status = message["status"]
