@@ -76,7 +76,11 @@ extend-select = ["DTZ005"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12, not the 3.11 CI interpreter: the pinned `deprecated` dependency ships
+# `type`-statement syntax (3.12+) in its packaged source, which mypy refuses
+# to parse when targeting 3.11 — the check died before scanning any file.
+# The project floor (requires-python >=3.11) is unaffected.
+python_version = "3.12"
 explicit_package_bases = true
 ignore_missing_imports = true
 disable_error_code = [
