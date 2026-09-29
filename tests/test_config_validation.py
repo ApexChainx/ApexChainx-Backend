@@ -14,7 +14,13 @@ class ConfigValidationTests(unittest.TestCase):
             "ALLOWED_ORIGINS": ["http://localhost:3000"],
             "CELERY_BROKER_URL": "redis://localhost:6379/0",
             "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-            "CELERY_TASK_ALWAYS_EAGER": True,
+            # Non-eager by default: the broker URLs above are set, and a
+            # production-environment override in any test below must present a
+            # *plausible* production config — eager-in-production is exactly
+            # what the #510 rule rejects, and an eager fixture default used to
+            # fail every positive production/staging case with an unrelated
+            # CELERY_TASK_ALWAYS_EAGER error (issue #632).
+            "CELERY_TASK_ALWAYS_EAGER": False,
             "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
             "STELLAR_NETWORK": "testnet",
             "CONTRACT_EXECUTION_MODE": "local_adapter",
@@ -28,6 +34,59 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_valid_settings_pass(self):
         validate_critical_settings(self.make_settings())
+
+    # ------------------------------------------------------------------ #
+    # CELERY_TASK_ALWAYS_EAGER is dev-only (#510)                          #
+    # ------------------------------------------------------------------ #
+
+    def test_eager_celery_accepted_in_local(self):
+        validate_critical_settings(
+            self.make_settings(
+                ENVIRONMENT="local",
+                CELERY_TASK_ALWAYS_EAGER=True,
+            )
+        )
+
+    def test_eager_celery_accepted_in_test(self):
+        validate_critical_settings(
+            self.make_settings(
+                ENVIRONMENT="test",
+                CELERY_TASK_ALWAYS_EAGER=True,
+            )
+        )
+
+    def test_eager_celery_rejected_in_production(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_critical_settings(
+                self.make_settings(
+                    ENVIRONMENT="production",
+                    CELERY_TASK_ALWAYS_EAGER=True,
+                )
+            )
+
+        self.assertIn("CELERY_TASK_ALWAYS_EAGER must be false outside development", str(ctx.exception))
+
+    def test_eager_celery_rejected_in_staging(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_critical_settings(
+                self.make_settings(
+                    ENVIRONMENT="staging",
+                    CELERY_TASK_ALWAYS_EAGER=True,
+                )
+            )
+
+        self.assertIn("CELERY_TASK_ALWAYS_EAGER must be false outside development", str(ctx.exception))
+
+    def test_non_eager_celery_accepted_in_production(self):
+        # The shape every production deployment must have: real broker URLs,
+        # no eager mode.
+        validate_critical_settings(
+            self.make_settings(
+                ENVIRONMENT="production",
+                SECRET_KEY="a-very-long-secure-production-secret-key-1234567890",
+                CELERY_TASK_ALWAYS_EAGER=False,
+            )
+        )
 
     def test_invalid_api_prefix_fails_fast(self):
         with self.assertRaises(ValueError) as ctx:
