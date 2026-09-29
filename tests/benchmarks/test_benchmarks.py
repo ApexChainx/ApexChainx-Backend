@@ -129,6 +129,7 @@ def test_benchmark_webhook_header_building(benchmark):
     """Benchmark webhook header generation (includes SHA-256 signing)."""
     from unittest.mock import MagicMock
 
+    from app.core.tracing import tracer
     from app.services.webhook_service import _build_headers
 
     webhook = MagicMock()
@@ -137,7 +138,13 @@ def test_benchmark_webhook_header_building(benchmark):
 
     payload = '{"event": "sla_violation", "data": {"device_id": "dev-001"}}'
 
-    headers = benchmark(_build_headers, webhook, payload)
+    # _build_headers injects traceparent only while a real span is active, as
+    # happens on every production delivery via FastAPI instrumentation. Run
+    # inside one so the benchmark measures the full path and the assertion
+    # below checks real behaviour rather than an always-absent header.
+    with tracer.start_as_current_span("bench.webhook_header_building"):
+        headers = benchmark(_build_headers, webhook, payload)
+
     assert "X-Webhook-Signature" in headers
     assert "traceparent" in headers
 
