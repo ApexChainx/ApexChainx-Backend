@@ -167,7 +167,15 @@ class TestOrderingAndCount:
 
         client.get("/api/v1/sla/disputes")
 
-        assert query.order_by.call_args[0] == (SLADispute.flagged_at.desc(), SLADispute.id)
+        # Compare canonical string renderings: SQLAlchemy compiles a fresh
+        # UnaryExpression per .desc() call and distinct instances never
+        # compare equal by value or identity, so raw tuple equality between
+        # the call args and a second set of expressions could never pass on
+        # any implementation.
+        assert [str(k) for k in query.order_by.call_args[0]] == [
+            str(SLADispute.flagged_at.desc()),
+            str(SLADispute.id),
+        ]
 
     def test_total_comes_from_the_page_statement(self, engineer_override):
         query = _install(_paged_rows([_dispute(), _dispute()], 45), 45)

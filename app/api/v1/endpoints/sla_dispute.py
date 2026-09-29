@@ -69,7 +69,10 @@ def list_disputes(
         .limit(page_size)
         .all()
     )
-    total = paged[0].total_count if paged else query.order_by(None).count()
+    # Rows come back as (entity, total_count) pairs; read them positionally
+    # (#630) — attribute access only works when the driver hands back labeled
+    # Row objects, and blows up with AttributeError on plain tuples.
+    total = paged[0][1] if paged else query.order_by(None).count()
     items = [row[0] for row in paged]
 
     return PaginatedDisputeList(
