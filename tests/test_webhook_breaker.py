@@ -1,6 +1,27 @@
 import time
 
+import pytest
+
 from app.services.webhook_breaker import CircuitBreaker
+
+
+@pytest.fixture(autouse=True)
+def _clean_shared_breaker_state():
+    """The breaker publishes OPEN markers to the shared Redis (#293); those
+    keys outlive the process and would trip fresh breakers in later tests.
+    Clear them before and after every test."""
+    import redis as _redis
+
+    from app.core.config import settings
+
+    client = _redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+    for prefix in ("before", "after"):
+        try:
+            for key in client.scan_iter("webhook_breaker:*"):
+                client.delete(key)
+        except Exception:
+            pass
+    yield
 
 
 class TestCircuitBreaker:

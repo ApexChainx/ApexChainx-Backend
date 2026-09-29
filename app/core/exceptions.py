@@ -44,7 +44,11 @@ class ApexTransientError(ApexException):
     """Transient / retryable error (503 by default)."""
 
     def __init__(self, detail: str = "A transient error occurred.", **kwargs: Any) -> None:
-        super().__init__(detail=detail, error_code="transient_error", status_code=503, **kwargs)
+        # Defaults are applied per-key so subclasses (e.g. ConcurrencyLockError)
+        # can override error_code/status_code without colliding (#multi-kw).
+        kwargs.setdefault("error_code", "transient_error")
+        kwargs.setdefault("status_code", 503)
+        super().__init__(detail=detail, **kwargs)
 
 
 class ApexConflictError(ApexException):

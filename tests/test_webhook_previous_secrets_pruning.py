@@ -139,6 +139,8 @@ class _FakeWebhook:
         self.secret_version = 3
         self.last_secret_rotation_at = NOW - timedelta(days=1)
         self.previous_secrets = previous_secrets
+        # Soft-delete tombstone flag (#518); fake is a live webhook.
+        self.is_deleted = False
 
 
 class _RecordingAuditLog:

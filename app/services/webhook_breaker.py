@@ -154,6 +154,13 @@ class CircuitBreaker:
             self._failures.pop(host, None)
             self._open_since.pop(host, None)
             self._probe_sent.pop(host, None)
+        # The shared OPEN marker must die with the local state, or the next
+        # allow_request() would re-adopt OPEN from Redis (#293).
+        if _redis_client is not None:
+            try:
+                _redis_client.delete(f"webhook_breaker:open:{host}")
+            except Exception:
+                logger.warning("Webhook breaker: failed to clear shared OPEN state for %s in Redis.", host)
 
 
 breaker = CircuitBreaker(

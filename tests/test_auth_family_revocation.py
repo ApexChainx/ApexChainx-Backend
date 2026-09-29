@@ -16,6 +16,9 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models.auth import LoginRequest, RegisterRequest
 from app.models.orm.session import SessionORM
+from app.repositories.session_repository import SessionRepository
+from uuid import uuid4
+
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.services.auth_store import AuthStore
 
@@ -34,7 +37,9 @@ def db():
 
 def _register_and_login(db, label: str):
     """Register a throwaway user and log them in; return (login, family_id, email)."""
-    email = f"{label}-{id(object())}@example.com"
+    # uuid4, not id(object()): CPython reuses memory addresses, so two rapid
+    # id(object()) calls can collide and yield the same email.
+    email = f"{label}-{uuid4().hex[:12]}@example.com"
     AuthStore.register(
         RegisterRequest(email=email, password=PASSWORD, full_name="Family Test"),
         db=db,
@@ -50,8 +55,16 @@ def logged_in(db):
 
 
 def _delete_family(db, family_id: str) -> None:
+    """Simulate the production family-deletion sequence (#535).
+
+    logout-all deletes the user's sessions first, then the family row. The
+    sessions.famil_id FK has no ON DELETE CASCADE, so deleting a family that
+    still has sessions would violate fk_sessions_token_families — a state the
+    repository contract never produces.
+    """
     family = TokenFamilyRepository(db).get_family(family_id)
     assert family is not None
+    SessionRepository(db).delete_sessions_by_email(family.email)
     db.delete(family)
     db.commit()
 

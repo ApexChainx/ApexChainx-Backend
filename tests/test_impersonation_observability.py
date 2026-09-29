@@ -52,9 +52,21 @@ def _failure_records(caplog):
 
 
 def _counter_delta(before: dict, reason: str) -> float:
-    key = f"{IMPERSONATION_VERIFICATION_FAILURES}{{reason={reason}}}"
+    """Delta of the failure counter for ``reason`` across both key layouts.
+
+    Metric keys carry an ``instance`` tag (hostname-pid, #336) that is
+    stable within a run, so match on the (name, reason) prefix rather
+    than the full serialized key.
+    """
+    prefix = f"{IMPERSONATION_VERIFICATION_FAILURES}{{instance="
+    suffix = f",reason={reason}}}" 
+    def _sum_matching(counters: dict) -> float:
+        return sum(
+            (v for k, v in counters.items() if k.startswith(prefix) and k.endswith(suffix)),
+            start=0.0,
+        )
     after = metrics.get_metrics_summary()["counters"]
-    return after.get(key, 0.0) - before.get(key, 0.0)
+    return _sum_matching(after) - _sum_matching(before)
 
 
 def _counters_snapshot() -> dict:

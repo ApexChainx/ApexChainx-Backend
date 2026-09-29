@@ -4,12 +4,20 @@ Public registration must never create admin accounts.  Admin users must be
 created through the dedicated POST /auth/admin/users endpoint.
 """
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.enums import Role
 
 client = TestClient(app)
+
+
+
+def _uid() -> str:
+    """Unique per-run email stem: the dev DB may already hold rows."""
+    return uuid4().hex[:10]
 
 
 class TestPublicRegistrationRoleEnforcement:
@@ -20,7 +28,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "normal_register@example.com",
+                "email": f"normal_register-{_uid()}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "Normal User",
             },
@@ -34,7 +42,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "admin_register@example.com",
+                "email": f"admin_register-{_uid()}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "Evil User",
                 "role": "admin",
@@ -48,7 +56,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "engineer_register@example.com",
+                "email": f"engineer_register-{_uid()}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "Crafty User",
                 "role": "engineer",
@@ -61,7 +69,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "sneaky_admin@example.com",
+                "email": f"sneaky_admin-{_uid()}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "Sneaky Admin",
             },
@@ -120,7 +128,7 @@ class TestEngineerCannotAccessAdminRoutes:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "newuser@example.com",
+                "email": f"newuser-{_uid()}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "New User",
                 "role": "engineer",
@@ -179,10 +187,11 @@ class TestAdminUserCreationEndpoint:
     def test_admin_can_create_engineer_user(self):
         """Admin can create a new engineer user via admin endpoint."""
         token = self._get_admin_token()
+        self._last_uid = _uid()
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "created_engineer@example.com",
+                "email": f"created_engineer-{self._last_uid}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "Created Engineer",
                 "role": "engineer",
@@ -192,7 +201,7 @@ class TestAdminUserCreationEndpoint:
         assert resp.status_code == 201, resp.json()
         data = resp.json()
         assert data["role"] == "engineer"
-        assert data["email"] == "created_engineer@example.com"
+        assert data["email"] == f"created_engineer-{self._last_uid}@example.com"
 
     def test_admin_can_create_admin_user(self):
         """Admin can create another admin user via admin endpoint."""
@@ -200,7 +209,7 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "created_admin@example.com",
+                "email": f"created_admin-{_uid()}@example.com",
                 "password": "AdminPass1!",
                 "full_name": "Created Admin",
                 "role": "admin",
@@ -214,11 +223,12 @@ class TestAdminUserCreationEndpoint:
     def test_admin_create_user_duplicate_email_rejected(self):
         """Creating a user with a duplicate email returns 400."""
         token = self._get_admin_token()
+        self._dupe = _uid()
         # First creation
         client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "dupe_user@example.com",
+                "email": f"dupe_user-{self._dupe}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "User One",
                 "role": "engineer",
@@ -229,7 +239,7 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "dupe_user@example.com",
+                "email": f"dupe_user-{self._dupe}@example.com",
                 "password": "Passw0rd!",
                 "full_name": "User Two",
                 "role": "engineer",
@@ -245,8 +255,10 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "weak_pw@example.com",
-                "password": "123",
+                "email": f"weak_pw-{_uid()}@example.com",
+                # Long enough to pass the schema min_length=6, but fails the
+                # password policy (no uppercase, digit or symbol) → 400.
+                "password": "weakpassword",
                 "full_name": "Weak PW",
                 "role": "engineer",
             },

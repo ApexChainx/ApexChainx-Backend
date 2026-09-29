@@ -122,13 +122,14 @@ class TestSLACalculationError:
 class TestAnalyticsSummaryCSV:
     """CSV export must be RFC 4180-compliant (single header, uniform rows)."""
     def _make_summary(self, include_trends: bool) -> dict:
+        # KPI keys match the real SLADashboardKPI schema.
         summary = {
             "kpi": {
                 "total_outages": 1,
-                "availability": 99.9,
-                "violations": 0,
-                "rewards": 1,
-                "penalties": 0,
+                "total_violations": 0,
+                "total_rewards": 1.0,
+                "total_penalties": 0.0,
+                "net_payout": 1.0,
             },
             "trends": [],
             "trend_count": 0,

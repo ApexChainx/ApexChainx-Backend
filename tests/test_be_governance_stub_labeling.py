@@ -8,7 +8,6 @@
 """
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.core.config import settings as real_settings
 from app.main import app

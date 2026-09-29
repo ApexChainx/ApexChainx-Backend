@@ -6,6 +6,8 @@ metric and that the metric is available on the Prometheus endpoint.
 
 from unittest.mock import MagicMock, patch
 
+from app.core.security import get_current_user
+from app.main import app
 from app.services.metrics import _SLA_LATENCY_BUCKETS, metrics
 
 
@@ -29,7 +31,9 @@ class TestSLALatencyHistogram:
         call_args = mock_record.call_args
         assert call_args[0][0] == "sla_computation_latency_seconds"
         assert call_args[0][1] >= 0  # latency >= 0
-        assert call_args[1]["tags"]["device_id"] == "dev-1"
+        # Tags are period/status (bounded cardinality) — NOT device_id (#383):
+        # per-device series would explode Prometheus cardinality.
+        assert call_args[1]["tags"] == {"period": "2025-03", "status": "no_outages"}
 
     @patch("app.services.sla_service.record_histogram")
     @patch("app.services.sla_service.SLAOrchestrator")
@@ -74,18 +78,29 @@ class TestSLALatencyBuckets:
         metrics.record_histogram("test_latency", 0.15, buckets=[0.01, 0.05, 0.1])
 
         summary = metrics.get_metrics_summary()
-        buckets = summary.get("histogram_buckets", {}).get("test_latency", {})
-        assert buckets[0.01] == 0  # 0.03 > 0.01
-        assert buckets[0.05] == 1  # 0.03 <= 0.05
-        assert buckets[0.1] == 2   # 0.03, 0.07 <= 0.1
+        # Series keys carry the exporter's instance tag (#336); find the one
+        # for this test's series regardless of its tag value.
+        all_buckets = summary.get("histogram_buckets", {})
+        matching = [v for k, v in all_buckets.items() if k.startswith("test_latency{")]
+        assert len(matching) == 1, f"expected one test_latency series, got {all_buckets.keys()}"
+        buckets = matching[0]
+        # Each observation increments exactly ONE bucket — the first bound
+        # >= value (cb3b2ee). 0.03 → 0.05; 0.07 → 0.1; 0.15 → +Inf (not stored).
+        assert buckets.get(0.01, 0) == 0
+        assert buckets.get(0.05, 0) == 1
+        assert buckets.get(0.1, 0) == 1
 
 
 class TestPrometheusEndpointIncludesHistogram:
     def test_latency_histogram_in_prometheus_output(self):
         from fastapi.testclient import TestClient
 
-        from app.main import app
 
+        # /metrics/prometheus requires an engineer (BE-063 access control);
+        # override auth so the test exercises the exporter output, not auth.
+        app.dependency_overrides[get_current_user] = lambda: type(
+            "U", (), {"email": "metrics@example.com", "role": "engineer"}
+        )()
         client = TestClient(app)
 
         # Record a metric first
@@ -101,7 +116,10 @@ class TestPrometheusEndpointIncludesHistogram:
             db = MagicMock()
             compute_device_sla(db, "dev-prom", "2025-03")
 
-        resp = client.get("/api/v1/metrics/prometheus")
+        try:
+            resp = client.get("/api/v1/metrics/prometheus")
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
         assert resp.status_code == 200
         text = resp.text
         assert "sla_computation_latency_seconds" in text

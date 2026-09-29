@@ -13,11 +13,12 @@ request so the key removes itself once its window lapses, and the in-process pat
 sweeps keys that are never presented again (`SimpleRateLimiter.cull_expired`).
 """
 
+import asyncio
 import logging
 import random
 from collections import defaultdict
 from time import time
-from typing import ClassVar
+from typing import Awaitable, ClassVar
 
 import redis
 import redis.asyncio as redis_async
@@ -131,7 +132,35 @@ class RedisRateLimiter:
     def _eval(self, key: str) -> bool:
         encoded_key, now_ts, window, limit, member = self._lua_args(key)
         result = self.client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
-        return bool(result)
+        return self._coerce_decision(result)
+
+    @staticmethod
+    def _coerce_decision(result: object) -> bool:
+        """Interpret a Lua EVAL reply as an allow/deny decision.
+
+        The reply must be an integer (redis returns 0/1 from the script).
+        Instrumentation wrappers or mis-typed clients can yield awaitables
+        (OTel's async wrapper, an async fake assigned to the sync slot);
+        ``bool(coroutine)`` is always True, which would silently allow
+        everything. So: resolve awaitables when no loop is running, deny on
+        any other non-integer reply.
+        """
+        if isinstance(result, int) and not isinstance(result, bool):
+            return result != 0
+        if isinstance(result, bool):
+            return result
+        if asyncio.iscoroutine(result) or isinstance(result, Awaitable):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                resolved = asyncio.run(result)  # type: ignore[arg-type]
+                if isinstance(resolved, int):
+                    return resolved != 0
+                return bool(resolved)
+            # A loop is already running (async context reached the sync path)
+            # — cannot block on it; deny and let the caller trip the circuit.
+            raise RedisError("rate limiter eval returned an awaitable in async context")
+        return False
 
     async def _eval_async(self, key: str) -> bool:
         encoded_key, now_ts, window, limit, member = self._lua_args(key)

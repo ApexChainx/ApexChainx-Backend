@@ -46,7 +46,7 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = [_make_webhook()]
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [_make_webhook()]
         delivery = _make_delivery()
         with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
             "app.tasks.celery_app.celery_app",
@@ -62,7 +62,7 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = [_make_webhook()]
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [_make_webhook()]
         delivery = _make_delivery()
         with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
             "app.tasks.celery_app.celery_app",
@@ -78,7 +78,7 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = [_make_webhook()]
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [_make_webhook()]
         delivery = _make_delivery()
         with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
             "app.tasks.celery_app.celery_app",
@@ -93,7 +93,7 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
         result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
         assert result == []
 
@@ -103,7 +103,7 @@ class TestTriggerSlaViolationAsyncDispatch:
 
         mock_db = MagicMock()
         hooks = [_make_webhook(), _make_webhook()]
-        mock_db.query.return_value.filter.return_value.all.return_value = hooks
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = hooks
         d1 = _make_delivery()
         d1.id = "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         d2 = _make_delivery()

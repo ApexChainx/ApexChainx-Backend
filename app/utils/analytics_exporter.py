@@ -91,17 +91,20 @@ def export_performance_aggregation(aggregation: SLAPerformanceAggregation, forma
 
 
 def export_analytics_summary(
-    kpi: SLADashboardKPI,
-    trends: list[SLATrendPoint],
+    kpi: SLADashboardKPI | dict[str, Any],
+    trends: list[SLATrendPoint] | None = None,
     aggregation: SLAPerformanceAggregation | None = None,
     format: str = "json",
 ) -> Any:
     """Export comprehensive analytics summary combining KPI, trends, and optional aggregation.
 
     Args:
-        kpi: Dashboard KPI object
-        trends: List of trend point objects
-        aggregation: Optional performance aggregation object
+        kpi: Dashboard KPI object — or a pre-built summary dict with
+            ``kpi``/``trends``/``trend_count`` keys (as produced by a previous
+            ``export_analytics_summary(..., format="json")`` call).
+        trends: List of trend point objects (ignored when ``kpi`` is a dict)
+        aggregation: Optional performance aggregation object (ignored when
+            ``kpi`` is a dict)
         format: Export format ('json' or 'csv')
 
     Returns:
@@ -109,14 +112,21 @@ def export_analytics_summary(
     """
     format = format.lower()
 
-    summary = {
-        "kpi": kpi.model_dump(mode="json"),
-        "trends": [trend.model_dump(mode="json") for trend in trends],
-        "trend_count": len(trends),
-    }
-
-    if aggregation:
-        summary["aggregation"] = aggregation.model_dump(mode="json")
+    if isinstance(kpi, dict):
+        # Already-serialized summary (round-trip path); re-use as-is.
+        summary = dict(kpi)
+        kpi_model = summary.get("kpi")
+        if not isinstance(kpi_model, SLADashboardKPI):
+            kpi_model = SLADashboardKPI.model_validate(kpi_model)
+    else:
+        summary = {
+            "kpi": kpi.model_dump(mode="json"),
+            "trends": [trend.model_dump(mode="json") for trend in trends or []],
+            "trend_count": len(trends or []),
+        }
+        if aggregation:
+            summary["aggregation"] = aggregation.model_dump(mode="json")
+        kpi_model = kpi
 
     if format == "json":
         return summary
@@ -125,4 +135,4 @@ def export_analytics_summary(
         raise ValueError("Unsupported export format. Use 'json' or 'csv'.")
 
     # CSV export includes only KPI metrics; trends and aggregation are available via JSON.
-    return export_dashboard_kpi(kpi, format="csv")
+    return export_dashboard_kpi(kpi_model, format="csv")

@@ -162,7 +162,9 @@ class TestStartupValidation:
             "ALLOWED_ORIGINS": ["http://localhost:3000"],
             "CELERY_BROKER_URL": "redis://localhost:6379/0",
             "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-            "CELERY_TASK_ALWAYS_EAGER": True,
+            # Eager mode is illegal outside local/test (#510); the production-shaped
+            # fixtures below must keep it off or the validator rejects them first.
+            "CELERY_TASK_ALWAYS_EAGER": False,
             "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
             "STELLAR_NETWORK": "testnet",
             "CONTRACT_EXECUTION_MODE": "local_adapter",

@@ -45,11 +45,15 @@ def detector() -> CredentialStuffingDetector:
     return CredentialStuffingDetector(redis_client=FakeRedis())
 
 
-def _spray(detector, ip, account, count):
+def _spray(detector, ip, account, count, *, salt="a"):
     # The detector buckets on the first four characters, so each guess needs a
-    # distinct four-character prefix to look like a new entry.
+    # distinct four-character prefix to look like a new entry. `salt` is a
+    # single character prepended to a 3-digit counter so every attempt has a
+    # distinct 4-char bucket prefix; varying it across IPs keeps buckets
+    # distinct for a distributed attack where each source tries the same
+    # number of guesses.
     for i in range(count):
-        detector.record_attempt(ip, f"{i:04d}-attempted-password", account)
+        detector.record_attempt(ip, f"{salt}{i:03d}-attempted-password", account)
 
 
 class TestSharedIpIsolation:
@@ -66,7 +70,9 @@ class TestSharedIpIsolation:
         """Distributed attack: no single IP trips, the account scope must."""
         per_ip = settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD - 5
         for i in range(6):
-            _spray(detector, f"198.51.100.{i}", "target@example.com", per_ip)
+            # Distinct salt per IP: a real distributed attack does not reuse
+            # the exact same password list from every source address.
+            _spray(detector, f"198.51.100.{i}", "target@example.com", per_ip, salt=chr(ord("a") + i))
 
         # No individual pair reached the threshold...
         assert detector.detect_stuffing("198.51.100.0", "target@example.com") is False
@@ -80,14 +86,15 @@ class TestSharedIpIsolation:
 
 class TestIpSignalIsAlertingOnly:
     def test_ip_wide_spray_is_flagged(self, detector):
-        # 25 distinct accounts, a few guesses each, from one address.
+        # 25 distinct accounts, a few guesses each, from one address. Distinct
+        # salt per account so each attempt is a distinct password bucket.
         for account in range(settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD + 5):
-            _spray(detector, "192.0.2.7", f"user{account}@example.com", 2)
+            _spray(detector, "192.0.2.7", f"user{account}@example.com", 2, salt=chr(ord("a") + account % 26))
         assert detector.is_ip_flagged("192.0.2.7") is True
 
     def test_ip_flag_does_not_imply_any_account_is_locked(self, detector):
         for account in range(settings.AUTH_LOCKOUT_ENTROPY_THRESHOLD + 5):
-            _spray(detector, "192.0.2.7", f"user{account}@example.com", 2)
+            _spray(detector, "192.0.2.7", f"user{account}@example.com", 2, salt=chr(ord("a") + account % 26))
         assert detector.is_ip_flagged("192.0.2.7") is True
         assert detector.is_account_locked("user0@example.com") is False
         assert detector.detect_stuffing("192.0.2.7", "user0@example.com") is False
