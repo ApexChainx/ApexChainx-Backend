@@ -149,19 +149,19 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     
     # Credential stuffing detection
     credential_stuffing_detector.record_attempt(
-        client_ip, payload.password, db, account=payload.email
+        client_ip, payload.password, account=payload.email, db=db
     )
     if credential_stuffing_detector.detect_stuffing(
-        client_ip, db, account=payload.email
+        client_ip, account=payload.email, db=db
     ):
-        lockout_minutes = settings.AUTH_LOCKOUT_DURATION_MINUTES * 4
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
         audit_log.log_event(
             db,
             "suspicious_login_activity",
             details={
                 "ip": client_ip,
                 "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(
-                    client_ip, db, account=payload.email
+                    client_ip
                 ),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
@@ -174,7 +174,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             ),
         )
 
-    if credential_stuffing_detector.is_account_locked(account):
+    if credential_stuffing_detector.is_account_locked(payload.email):
         # Distributed spray: each source IP stays under the pair threshold, so
         # only the account-scoped counter sees it.
         lockout_minutes = credential_stuffing_detector.lockout_minutes()
@@ -183,18 +183,25 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "suspicious_login_activity",
             details={
                 "scope": "account",
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(account),
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(payload.email),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
-    
-    # Rate limit by IP
-    if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
         raise HTTPException(
             status_code=429,
             detail=(
                 f"Too many login attempts for this account. "
                 f"Account locked for {lockout_minutes} minutes."
+            ),
+        )
+
+    # Rate limit by IP
+    if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Too many login attempts from this address. "
+                f"Try again in {settings.AUTH_RATE_LIMIT_WINDOW_SECONDS // 60} minutes."
             ),
         )
 
