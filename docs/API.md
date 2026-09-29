@@ -936,11 +936,16 @@ event by an unbounded number of outbound HTTPS requests:
 | `MAX_WEBHOOKS_PER_ACCOUNT` | `50` | `POST /api/v1/webhooks` returns `409 Conflict` with the cap in the message once this many webhooks are registered. `0` disables the cap. |
 | `WEBHOOK_FANOUT_WARN_THRESHOLD` | `200` | When the total number of event subscriptions across all webhooks exceeds this, creation and event-subscription updates log a warning and increment `webhook.fanout.threshold_exceeded`. Not enforced — per-dispatch concurrency stays bounded by `WEBHOOK_MAX_CONCURRENT_DISPATCHES`. |
 
-`409` response body:
+`409` response body (RFC 7807 problem; see [Error Codes](ERROR_CODES.md)):
 
 ```json
 {
-  "detail": "Webhook limit reached: 50 webhooks are already registered and MAX_WEBHOOKS_PER_ACCOUNT is 50. Delete an unused webhook before creating another."
+  "type": "about:blank",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "Webhook limit reached: 50 webhooks are already registered and MAX_WEBHOOKS_PER_ACCOUNT is 50. Delete an unused webhook before creating another.",
+  "correlation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "error_code": "webhook_limit_reached"
 }
 ```
 
@@ -1724,3 +1729,49 @@ Attach a root cause analysis to a resolved outage.
 ## Outage Import Validation
 
 The bulk import endpoint (`POST /api/v1/outages/import`) validates each record before persisting any. If any record fails validation, the entire batch is rejected with a `422` response listing all field errors per record index. Partial imports are not supported.
+
+---
+
+## Changelog — Unreleased
+
+### Added
+
+- **`error_code` on problem responses** — every webhook 4xx now carries a stable
+  machine-readable `error_code` in the RFC 7807 problem body, so clients can
+  branch on the code instead of parsing `detail` strings. The registry of codes
+  is [ERROR_CODES.md](ERROR_CODES.md); new webhook codes:
+
+  | Status | `error_code` | Raised when |
+  |--------|--------------|-------------|
+  | 400 | `invalid_webhook_url` | Webhook URL failed validation (SSRF, private network, schema) — previously surfaced as a pydantic `422` or an unhandled `500` |
+  | 404 | `webhook_not_found` | Webhook configuration not found |
+  | 404 | `delivery_not_found` | Delivery record not found |
+  | 400 | `delivery_not_retryable` | Delivery already succeeded; retry not applicable |
+  | 409 | `delivery_in_progress` | Delivery is currently being sent; retry later |
+  | 400 | `delivery_not_replayable` | Delivery is not in dead-letter status and cannot be replayed |
+  | 409 | `webhook_deleted_conflict` | Webhook is a soft-deleted tombstone and cannot be modified |
+  | 409 | `webhook_limit_reached` | Registration cap (`MAX_WEBHOOKS_PER_ACCOUNT`) reached |
+
+- **New settings** (validated at startup; see
+  [Webhook Registration Limits](#webhook-registration-limits)):
+
+  | Setting | Default | Description |
+  |---------|---------|-------------|
+  | `MAX_WEBHOOKS_PER_ACCOUNT` | `50` | Per-account webhook registration cap; `POST /api/v1/webhooks` returns `409 webhook_limit_reached` beyond it. `0` disables the cap. |
+  | `WEBHOOK_FANOUT_WARN_THRESHOLD` | `200` | Warns (but does not enforce) when total event subscriptions exceed this. `0` disables the check. |
+
+### Changed
+
+- Job status sync now maps **all** Celery states — including scheduling states
+  `RETRY`, `RECEIVED`, `SCHEDULED`, `REJECTED` — onto the five persisted
+  `JobStatus` values. The job API never leaks raw Celery state strings; unknown
+  states keep the stored status.
+
+### Fixed
+
+- ETag middleware no longer emits a second `http.response.start` for error
+  responses, which crashed ASGI consumers with
+  `Received multiple http.response.start messages`.
+- `PayloadSizeMiddleware` forwards attribute access (`dependency_overrides`,
+  `state`, …) to the wrapped FastAPI app instead of breaking consumers that
+  import it.
