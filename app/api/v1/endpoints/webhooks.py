@@ -416,9 +416,10 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         try:
             handle_create_integrity_error(exc)
         except DuplicateWebhookError:
-            raise HTTPException(
+            raise WebhookHTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A webhook with this url and events combination already exists.",
+                error_code=WEBHOOK_CONFLICT,
             ) from exc
         # Any other IntegrityError (e.g. FK violation) is not a duplicate —
         # re-raise and let the global handler deal with it.
@@ -786,9 +787,10 @@ def retry_delivery(
             error_code=VALIDATION_ERROR,
         )
     if delivery.status == WebhookDeliveryStatus.SENDING:
-        raise HTTPException(
+        raise WebhookHTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Delivery is already being sent.",
+            error_code=WEBHOOK_CONFLICT,
         )
 
     from app.services.webhook_service import dispatch_delivery

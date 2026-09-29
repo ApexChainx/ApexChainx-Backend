@@ -79,6 +79,8 @@ def _problem_response(
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
     error_code: str | None = None,
+    request: Request | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Build an RFC 7807 JSON response, echoing the request's correlation ID.
 
@@ -91,8 +93,30 @@ def _problem_response(
     ``HTTPException`` (for example ``Retry-After`` on a 429 rate-limit
     response); they are merged with — but may not override — the correlation
     ID header from issue #563.
+
+    4xx responses are also logged as WARNING with the correlation ID, status
+    and path in ``extra`` so they correlate with the access-log entry.
     """
     correlation_id = _resolve_correlation_id(request)
+    # Merge the caller-supplied headers (e.g. ``Retry-After`` from a 429 or
+    # ``WWW-Authenticate`` from a 401) with the correlation ID header from
+    # issue #563 — the correlation header always wins so the body, header, and
+    # access-log entry carry the same ID.
+    response_headers = {"X-Correlation-ID": correlation_id}
+    if headers:
+        response_headers = {**headers, **response_headers}
+    # Issue #563: log client errors with the correlation ID so the response a
+    # consumer sees can be matched to its access-log entry (and to the ID
+    # echoed in this body) without correlating by timestamp alone.
+    if 400 <= status < 500:
+        log_extra: dict[str, Any] = {"correlation_id": correlation_id, "status": status}
+        if error_code:
+            log_extra["error_code"] = error_code
+        if request is not None:
+            path = getattr(getattr(request, "url", None), "path", None)
+            if isinstance(path, str) and path:
+                log_extra["path"] = path
+        logger.warning("Client error response: %s %s", status, title, extra=log_extra)
     problem = ProblemDetail(
         type="about:blank",
         title=title,
@@ -123,6 +147,10 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
             detail=exc.detail,
             # #569: endpoints may attach a registered code (docs/ERROR_CODES.md)
             error_code=getattr(exc, "error_code", None),
+            # #563: echo the request's correlation ID and carry any headers
+            # attached to the exception (e.g. ``Retry-After`` on a 429).
+            request=request,
+            headers=exc.headers,
         )
 
     errors: list[dict[str, Any]]
