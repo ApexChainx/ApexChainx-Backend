@@ -1,6 +1,7 @@
 """Computes an ETag over the full assembled response body, instead of
 only the first streamed chunk, to avoid false 304s on multi-chunk bodies.
 """
+
 import hashlib
 from typing import AsyncIterable
 

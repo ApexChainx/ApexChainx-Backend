@@ -519,9 +519,7 @@ def resolve_outage(
             # MTTR, skip recompute/payment/webhook side effects (#302).
             existing = repo.get(outage_id)
             already_resolved = (
-                existing is not None
-                and existing.status == "resolved"
-                and existing.mttr_minutes == payload.mttr_minutes
+                existing is not None and existing.status == "resolved" and existing.mttr_minutes == payload.mttr_minutes
             )
 
             try:

@@ -214,10 +214,7 @@ class TestListHidesTombstones:
         # stringify each filter's argument; str(BinaryExpression) renders the
         # SQL (e.g. "webhooks.deleted_at IS NULL"), so column names are visible.
         query = mock_db.query.return_value
-        return " ".join(
-            " ".join(str(arg) for arg in call.args)
-            for call in query.filter.call_args_list
-        )
+        return " ".join(" ".join(str(arg) for arg in call.args) for call in query.filter.call_args_list)
 
     def test_list_excludes_deleted_by_default(self, admin_override):
         mock_db = self._list_session()

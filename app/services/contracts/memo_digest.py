@@ -1,6 +1,7 @@
 """Collision-resistant relay memo digest, replacing truncated hashes
 that can collide across distinct transfers within the dedupe window.
 """
+
 import hashlib
 from typing import Any, Dict
 

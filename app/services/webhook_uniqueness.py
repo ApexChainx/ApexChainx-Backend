@@ -2,6 +2,7 @@
 unhandled IntegrityError, pending a DB unique constraint on
 (url, canonical(events)).
 """
+
 from sqlalchemy.exc import IntegrityError
 
 

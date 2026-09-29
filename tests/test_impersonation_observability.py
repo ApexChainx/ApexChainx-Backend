@@ -59,12 +59,14 @@ def _counter_delta(before: dict, reason: str) -> float:
     than the full serialized key.
     """
     prefix = f"{IMPERSONATION_VERIFICATION_FAILURES}{{instance="
-    suffix = f",reason={reason}}}" 
+    suffix = f",reason={reason}}}"
+
     def _sum_matching(counters: dict) -> float:
         return sum(
             (v for k, v in counters.items() if k.startswith(prefix) and k.endswith(suffix)),
             start=0.0,
         )
+
     after = metrics.get_metrics_summary()["counters"]
     return _sum_matching(after) - _sum_matching(before)
 
@@ -73,7 +75,9 @@ def _counters_snapshot() -> dict:
     return dict(metrics.get_metrics_summary()["counters"])
 
 
-def _mint_impersonation_token(sub: str, *, exp_offset: int = 900, scope: str = "impersonate", secret: str = SECRET) -> str:
+def _mint_impersonation_token(
+    sub: str, *, exp_offset: int = 900, scope: str = "impersonate", secret: str = SECRET
+) -> str:
     now = int(time.time())
     payload = {
         "sub": sub,
@@ -100,9 +104,7 @@ class TestImpersonationFailureObservability:
             (lambda: _mint_impersonation_token("user_00000000", scope="outages:read"), "wrong_scope"),
         ],
     )
-    def test_failed_verification_falls_through_and_records(
-        self, client, caplog, token_factory, expected_reason
-    ):
+    def test_failed_verification_falls_through_and_records(self, client, caplog, token_factory, expected_reason):
         caplog.set_level(logging.WARNING)
         before = _counters_snapshot()
         correlation_id = f"test-corr-{uuid.uuid4().hex[:12]}"

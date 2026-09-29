@@ -55,10 +55,7 @@ def _compute_fingerprint(method: str, path: str, body: bytes) -> str:
         try:
             decoded = json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise MalformedRequestBody(
-                "Request body is not valid JSON; cannot fingerprint "
-                "Idempotency-Key"
-            ) from exc
+            raise MalformedRequestBody("Request body is not valid JSON; cannot fingerprint " "Idempotency-Key") from exc
         canonical = canonical_json(decoded)
     raw = f"{method}:{path}:{canonical}".encode()
     return hashlib.sha256(raw).hexdigest()

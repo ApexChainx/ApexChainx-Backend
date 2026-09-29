@@ -48,9 +48,12 @@ class TestTriggerSlaViolationAsyncDispatch:
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [_make_webhook()]
         delivery = _make_delivery()
-        with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
-            "app.tasks.celery_app.celery_app",
-            _make_celery_mock(eager=False),
+        with (
+            patch("app.services.webhook_service.create_delivery", return_value=delivery),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                _make_celery_mock(eager=False),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 
@@ -64,9 +67,12 @@ class TestTriggerSlaViolationAsyncDispatch:
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [_make_webhook()]
         delivery = _make_delivery()
-        with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
-            "app.tasks.celery_app.celery_app",
-            _make_celery_mock(eager=True),
+        with (
+            patch("app.services.webhook_service.create_delivery", return_value=delivery),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                _make_celery_mock(eager=True),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 
@@ -80,9 +86,12 @@ class TestTriggerSlaViolationAsyncDispatch:
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [_make_webhook()]
         delivery = _make_delivery()
-        with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
-            "app.tasks.celery_app.celery_app",
-            side_effect=ImportError("no celery"),
+        with (
+            patch("app.services.webhook_service.create_delivery", return_value=delivery),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                side_effect=ImportError("no celery"),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 
@@ -109,9 +118,12 @@ class TestTriggerSlaViolationAsyncDispatch:
         d2 = _make_delivery()
         d2.id = "bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         deliveries = [d1, d2]
-        with patch("app.services.webhook_service.create_delivery", side_effect=deliveries), patch(
-            "app.tasks.celery_app.celery_app",
-            _make_celery_mock(eager=False),
+        with (
+            patch("app.services.webhook_service.create_delivery", side_effect=deliveries),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                _make_celery_mock(eager=False),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 

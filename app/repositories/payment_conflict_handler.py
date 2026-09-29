@@ -1,6 +1,7 @@
 """Translates a unique-constraint race on sla_result_id into a clean
 409 conflict instead of letting IntegrityError surface as a 500.
 """
+
 from sqlalchemy.exc import IntegrityError
 
 

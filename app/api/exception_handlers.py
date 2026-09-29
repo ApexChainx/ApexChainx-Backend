@@ -68,9 +68,7 @@ def _problem_response(
     )
 
 
-async def http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """Handle all HTTPException instances as RFC 7807 problem responses."""
     if isinstance(exc.detail, str):
         return _problem_response(
@@ -94,7 +92,6 @@ async def http_exception_handler(
         detail="Request failed.",
         errors=errors,
     )
-
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

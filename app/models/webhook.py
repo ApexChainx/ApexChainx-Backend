@@ -70,7 +70,9 @@ class Webhook(Base):
     secret_version = Column(Integer, default=1, nullable=False)  # Incremented on each rotation
     # BE-009: Grace period overlap window
     # JSONB on Postgres, plain JSON elsewhere (SQLite test schemas).
-    previous_secrets = Column(JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
+    previous_secrets = Column(
+        JSON().with_variant(JSONB, "postgresql"), default=list, nullable=False
+    )  # List of {hashed_secret, created_at, expires_at}
     secret_grace_hours = Column(Integer, default=24, nullable=False)  # Configurable grace period per webhook
 
     # #518: soft delete. Deleting a webhook used to delete the row, and

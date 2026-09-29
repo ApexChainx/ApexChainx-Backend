@@ -64,9 +64,7 @@ class AuditLogService:
         with blocking_advisory_lock(db, "audit_chain"):
             last_entry = db.query(AuditLogORM).order_by(desc(AuditLogORM.id)).first()
             prev_hash = last_entry.entry_hash if last_entry else None
-            entry_hash = self._compute_entry_hash(
-                prev_hash, event_type, safe_details, correlation_id, created_at
-            )
+            entry_hash = self._compute_entry_hash(prev_hash, event_type, safe_details, correlation_id, created_at)
 
             audit_entry = AuditLogORM(
                 event_type=event_type,
@@ -91,13 +89,7 @@ class AuditLogService:
         """
         factory = AuditSessionLocal if settings.DATABASE_AUDIT_URL else self.db_session_factory
         with factory() as db:
-            entries = (
-                db.query(AuditLogORM)
-                .order_by(desc(AuditLogORM.id))
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
+            entries = db.query(AuditLogORM).order_by(desc(AuditLogORM.id)).offset(offset).limit(limit).all()
             return [
                 {
                     "id": entry.id,

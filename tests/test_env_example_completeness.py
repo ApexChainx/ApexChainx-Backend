@@ -15,6 +15,7 @@ keep it honest:
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -72,7 +73,15 @@ def _dev_values() -> dict:
 
 def _dev_settings(**overrides) -> Settings:
     # _env_file=None keeps a developer's real .env out of these assertions.
-    return Settings(_env_file=None, **{**_dev_values(), **overrides})
+    # CI also exports settings (USE_REDIS_RATE_LIMITER=false,
+    # WEBHOOK_SECRET_ENCRYPTION_KEY, ...) for the app under test, and those
+    # leak into Settings and break the dev-profile assertions. These tests
+    # must see exactly what the template documents, so ambient env is
+    # scrubbed for the duration of the call.
+    with pytest.MonkeyPatch.context() as mp:
+        for key in [k for k in os.environ if k.isupper()]:
+            mp.delenv(key, raising=False)
+        return Settings(_env_file=None, **{**_dev_values(), **overrides})
 
 
 class TestTemplateCoverage:
@@ -93,7 +102,9 @@ class TestTemplateCoverage:
         """The required-secret section must not ship a literal value."""
         text = _example_text()
         for key in ("SECRET_KEY", "PAYMENT_WEBHOOK_SECRET"):
-            assigned = [line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key]
+            assigned = [
+                line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key
+            ]
             assert assigned, f"{key} should be present in the template"
             for line in assigned:
                 assert "GENERATE" in line, f"{key} must stay a documented placeholder, got: {line}"

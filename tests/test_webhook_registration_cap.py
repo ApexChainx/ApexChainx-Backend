@@ -164,9 +164,7 @@ class TestRegistrationCap:
 class TestFanoutWarning:
     def test_fanout_over_threshold_warns_and_counts(self, admin_override, monkeypatch):
         monkeypatch.setattr(settings, "WEBHOOK_FANOUT_WARN_THRESHOLD", 3)
-        _override_db(
-            _fake_session(registered=1, event_rows=[json.dumps(["a", "b"]), json.dumps(["c", "d"])])
-        )
+        _override_db(_fake_session(registered=1, event_rows=[json.dumps(["a", "b"]), json.dumps(["c", "d"])]))
         try:
             with (
                 patch("app.api.v1.endpoints.webhooks.logger") as mock_logger,
@@ -183,9 +181,7 @@ class TestFanoutWarning:
 
     def test_fanout_at_threshold_does_not_warn(self, admin_override, monkeypatch):
         monkeypatch.setattr(settings, "WEBHOOK_FANOUT_WARN_THRESHOLD", 4)
-        _override_db(
-            _fake_session(registered=1, event_rows=[json.dumps(["a", "b"]), json.dumps(["c", "d"])])
-        )
+        _override_db(_fake_session(registered=1, event_rows=[json.dumps(["a", "b"]), json.dumps(["c", "d"])]))
         try:
             with patch("app.api.v1.endpoints.webhooks.increment_counter") as mock_counter:
                 resp = _post()

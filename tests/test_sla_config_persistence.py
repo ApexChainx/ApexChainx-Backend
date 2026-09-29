@@ -97,11 +97,15 @@ class TestOptimisticConcurrency:
         db2 = SessionLocal()
         try:
             token = get_current_token(severity, db=db1)
-            publish_config_for_severity(severity, _payload(), expected_token=token, published_by="a@example.com", db=db1)
+            publish_config_for_severity(
+                severity, _payload(), expected_token=token, published_by="a@example.com", db=db1
+            )
 
             # Second session reuses the same token → must conflict.
             with pytest.raises(ConcurrencyError):
-                publish_config_for_severity(severity, _payload(), expected_token=token, published_by="b@example.com", db=db2)
+                publish_config_for_severity(
+                    severity, _payload(), expected_token=token, published_by="b@example.com", db=db2
+                )
 
             # Exactly one history row was produced for this token generation.
             rows = db.query(SLAConfigHistoryORM).filter(SLAConfigHistoryORM.severity == severity).all()
@@ -143,7 +147,9 @@ class TestOptimisticConcurrency:
             # Session 2 still believes the version is free (stale snapshot and
             # stale cache) and attempts the same version → unique constraint → ConcurrencyError.
             with pytest.raises(ConcurrencyError):
-                publish_config_for_severity(severity, _payload(), expected_token=None, published_by="b@example.com", db=db2)
+                publish_config_for_severity(
+                    severity, _payload(), expected_token=None, published_by="b@example.com", db=db2
+                )
 
             rows = db.query(SLAConfigHistoryORM).filter(SLAConfigHistoryORM.severity == severity).all()
             assert len(rows) == 1
@@ -158,7 +164,9 @@ class TestLedgerIsQueryable:
         _reset_service_state()
 
         publish_config_for_severity(severity, _payload(), expected_token=None, published_by="eng@example.com", db=db)
-        publish_config_for_severity(severity, _payload(threshold_minutes=45), expected_token=None, published_by="eng@example.com", db=db)
+        publish_config_for_severity(
+            severity, _payload(threshold_minutes=45), expected_token=None, published_by="eng@example.com", db=db
+        )
 
         rows = (
             db.query(SLAConfigHistoryORM)

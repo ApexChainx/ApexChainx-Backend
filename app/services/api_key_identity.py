@@ -2,6 +2,7 @@
 the raw token for lookup, replacing a short-hash marker prone to
 collisions across users.
 """
+
 import hashlib
 import secrets
 

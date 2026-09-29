@@ -51,9 +51,7 @@ class TestFingerprint:
         assert a == b
 
     def test_empty_body_fingerprints_as_empty_object(self):
-        assert _compute_fingerprint("POST", "/x", b"") == _compute_fingerprint(
-            "POST", "/x", b"{}"
-        )
+        assert _compute_fingerprint("POST", "/x", b"") == _compute_fingerprint("POST", "/x", b"{}")
 
     def test_malformed_json_raises_domain_error(self):
         try:

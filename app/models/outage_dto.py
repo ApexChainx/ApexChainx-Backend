@@ -89,7 +89,9 @@ class OutageCreate(BaseModel):
         if v.tzinfo != UTC:
             v = v.astimezone(UTC)
         # Reject dates more than 60 seconds in the future (configurable skew tolerance)
-        max_detected_at = datetime.now(UTC) + timedelta(seconds=getattr(settings, 'OUTAGE_FUTURE_DETECTION_SKEW_SECONDS', 60))
+        max_detected_at = datetime.now(UTC) + timedelta(
+            seconds=getattr(settings, "OUTAGE_FUTURE_DETECTION_SKEW_SECONDS", 60)
+        )
         if v > max_detected_at:
             raise ValueError(
                 f"detected_at cannot be in the future. Received {v.isoformat()}, "

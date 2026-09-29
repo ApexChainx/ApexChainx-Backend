@@ -5,6 +5,7 @@ list cannot drift from the caps enforced on every other list endpoint. The
 endpoint consumes these bounds directly via ``Query`` (see
 ``app/api/v1/endpoints/audit.py``), mirroring ``AuditListParams``.
 """
+
 from typing import Optional
 
 from pydantic import BaseModel, Field

@@ -152,7 +152,10 @@ class TestVerifyDeliverySignature:
         ts = _now_iso()
         signature = sign_payload_v2(SECRET, PAYLOAD, ts)
 
-        assert verify_delivery_signature(SECRET, PAYLOAD, signature, 2, ts, now=datetime.now(UTC) + timedelta(seconds=60)) is True
+        assert (
+            verify_delivery_signature(SECRET, PAYLOAD, signature, 2, ts, now=datetime.now(UTC) + timedelta(seconds=60))
+            is True
+        )
 
     def test_legacy_v1_delivery_still_verifies(self) -> None:
         signature = sign_payload_v1(SECRET, PAYLOAD)

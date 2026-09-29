@@ -4,15 +4,27 @@ Validates that USE_REDIS_RATE_LIMITER defaults to True so that
 Redis-backed rate limiting is used across multiple Gunicorn workers.
 """
 
+import os
 
-from app.core.config import settings
+import pytest
+
+from app.core.config import Settings, settings
 from app.core.rate_limiter import SimpleRateLimiter
 
 
 class TestRateLimiterDefault:
+    # CI exports USE_REDIS_RATE_LIMITER=false for the suite; a default
+    # assertion must read the field default, not the ambient environment.
+    # A fresh Settings with an empty env and no .env file shows the default.
+    def _default_settings(self) -> Settings:
+        with pytest.MonkeyPatch.context() as mp:
+            for key in [k for k in os.environ if k.isupper()]:
+                mp.delenv(key, raising=False)
+            return Settings(_env_file=None)
+
     def test_use_redis_rate_limiter_defaults_to_true(self):
         """USE_REDIS_RATE_LIMITER must be True so Redis is the default store."""
-        assert settings.USE_REDIS_RATE_LIMITER is True
+        assert self._default_settings().USE_REDIS_RATE_LIMITER is True
 
     def test_module_level_rate_limiter_is_redis_when_enabled(self, monkeypatch):
         """When USE_REDIS_RATE_LIMITER=True and not eager, rate_limiter is RedisRateLimiter."""

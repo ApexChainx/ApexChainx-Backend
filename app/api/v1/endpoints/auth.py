@@ -162,9 +162,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             details={
                 "ip": client_ip,
                 "scope": "ip_account_pair",
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_pair_count(
-                    client_ip, account
-                ),
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_pair_count(client_ip, account),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
@@ -191,10 +189,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
         raise HTTPException(
             status_code=429,
-            detail=(
-                f"Too many login attempts for this account. "
-                f"Account locked for {lockout_minutes} minutes."
-            ),
+            detail=(f"Too many login attempts for this account. " f"Account locked for {lockout_minutes} minutes."),
         )
 
     if credential_stuffing_detector.is_ip_flagged(client_ip):

@@ -255,13 +255,7 @@ class WalletRegistry:
         no list endpoint to cap; this gives operators one that follows the
         shared pagination contract instead of an unbounded dump.
         """
-        rows = (
-            db.query(WalletORM)
-            .order_by(WalletORM.id.asc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+        rows = db.query(WalletORM).order_by(WalletORM.id.asc()).offset(offset).limit(limit).all()
         return [_orm_to_pydantic(row) for row in rows]
 
     @classmethod

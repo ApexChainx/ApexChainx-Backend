@@ -53,8 +53,7 @@ def _guard(operation: str) -> bool:
         )
     if settings.CONTRACT_EXECUTION_MODE != "local_adapter":
         raise GovernanceNotImplementedError(
-            f"{operation} is not implemented for CONTRACT_EXECUTION_MODE="
-            f"{settings.CONTRACT_EXECUTION_MODE!r}."
+            f"{operation} is not implemented for CONTRACT_EXECUTION_MODE=" f"{settings.CONTRACT_EXECUTION_MODE!r}."
         )
     return True
 

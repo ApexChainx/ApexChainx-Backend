@@ -101,9 +101,10 @@ class TestRetryAuditsActor:
         delivery.webhook_id = webhook_id
         _override_db_with_delivery(delivery)
         try:
-            with patch("app.api.v1.endpoints.webhooks.audit_log") as mock_audit, patch(
-                "app.services.webhook_service.dispatch_delivery"
-            ) as mock_dispatch:
+            with (
+                patch("app.api.v1.endpoints.webhooks.audit_log") as mock_audit,
+                patch("app.services.webhook_service.dispatch_delivery") as mock_dispatch,
+            ):
                 resp = client.post(f"/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/retry")
                 assert resp.status_code == 200
                 mock_dispatch.assert_called_once()
@@ -125,8 +126,9 @@ class TestReplayAuditsActor:
         delivery.webhook_id = webhook_id
         _override_db_with_delivery(delivery)
         try:
-            with patch("app.api.v1.endpoints.webhooks.audit_log") as mock_audit, patch(
-                "app.services.webhook_service.replay_dead_letter_delivery", return_value=True
+            with (
+                patch("app.api.v1.endpoints.webhooks.audit_log") as mock_audit,
+                patch("app.services.webhook_service.replay_dead_letter_delivery", return_value=True),
             ):
                 resp = client.post(f"/api/v1/webhooks/{webhook_id}/deliveries/{delivery_id}/replay")
                 assert resp.status_code == 200
@@ -138,8 +140,9 @@ class TestReplayAuditsActor:
             app.dependency_overrides.pop(get_db, None)
 
     def test_replay_by_context_audits_acting_admin(self, admin_override):
-        with patch("app.api.v1.endpoints.webhooks.audit_log") as mock_audit, patch(
-            "app.services.webhook_service.replay_deliveries_by_event_context", return_value=3
+        with (
+            patch("app.api.v1.endpoints.webhooks.audit_log") as mock_audit,
+            patch("app.services.webhook_service.replay_deliveries_by_event_context", return_value=3),
         ):
             resp = client.post(
                 "/api/v1/webhooks/replay-by-context",

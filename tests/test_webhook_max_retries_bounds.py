@@ -103,7 +103,9 @@ class TestCreateReturns422:
         """
         safe_client = TestClient(app, raise_server_exceptions=False)
         with patch("app.api.v1.endpoints.webhooks.validate_webhook_url"):
-            resp = safe_client.post("/api/v1/webhooks", json=VALID_BODY | {"max_retries": settings.MAX_WEBHOOK_MAX_RETRIES})
+            resp = safe_client.post(
+                "/api/v1/webhooks", json=VALID_BODY | {"max_retries": settings.MAX_WEBHOOK_MAX_RETRIES}
+            )
 
         assert resp.status_code != 422
 

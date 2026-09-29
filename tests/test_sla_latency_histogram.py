@@ -95,7 +95,6 @@ class TestPrometheusEndpointIncludesHistogram:
     def test_latency_histogram_in_prometheus_output(self):
         from fastapi.testclient import TestClient
 
-
         # /metrics/prometheus requires an engineer (BE-063 access control);
         # override auth so the test exercises the exporter output, not auth.
         app.dependency_overrides[get_current_user] = lambda: type(

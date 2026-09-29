@@ -21,13 +21,23 @@ in a key name.
 from __future__ import annotations
 
 import hashlib
+import logging
 from time import time
 
 from redis import Redis
+from redis.exceptions import RedisError
 
 from app.core.config import settings
 
 PREFIX_LENGTH = 4
+
+logger = logging.getLogger(__name__)
+
+# Redis-outage policy: detection is defence-in-depth on top of the DB-backed
+# account lockout, and every other Redis consumer in this codebase degrades
+# to a logged fallback instead of failing the request. record_attempt is
+# best-effort and the counters fail open (0 hits) so login keeps working
+# while Redis is down; the DB-level lockout still protects the account.
 
 
 class CredentialStuffingDetector:
@@ -72,10 +82,13 @@ class CredentialStuffingDetector:
             keys.append(self._pair_key(ip, account))
             keys.append(self._account_key(account))
 
-        for key in keys:
-            self.redis.zadd(key, {bucket: now})
-            self.redis.zremrangebyscore(key, "-inf", now - window)
-            self.redis.expire(key, ttl)
+        try:
+            for key in keys:
+                self.redis.zadd(key, {bucket: now})
+                self.redis.zremrangebyscore(key, "-inf", now - window)
+                self.redis.expire(key, ttl)
+        except (RedisError, OSError) as exc:
+            logger.warning("Credential-stuffing detector: Redis unavailable, attempt not recorded: %s", exc)
 
     # ------------------------------------------------------------------
     # Detection
@@ -84,9 +97,13 @@ class CredentialStuffingDetector:
     def _count(self, key: str) -> int:
         now = time()
         window = settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES * 60
-        self.redis.zremrangebyscore(key, "-inf", now - window)
-        unique = self.redis.zrangebyscore(key, now - window, "+inf")
-        return len(set(u.decode() if isinstance(u, bytes) else u for u in unique))
+        try:
+            self.redis.zremrangebyscore(key, "-inf", now - window)
+            unique = self.redis.zrangebyscore(key, now - window, "+inf")
+            return len(set(u.decode() if isinstance(u, bytes) else u for u in unique))
+        except (RedisError, OSError) as exc:
+            logger.warning("Credential-stuffing detector: Redis unavailable, failing open: %s", exc)
+            return 0
 
     def detect_stuffing(self, ip: str, account: str | None = None) -> bool:
         """Return True when this (IP, account) pair looks like a spray.

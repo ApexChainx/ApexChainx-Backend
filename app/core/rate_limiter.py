@@ -164,9 +164,7 @@ class RedisRateLimiter:
 
     async def _eval_async(self, key: str) -> bool:
         encoded_key, now_ts, window, limit, member = self._lua_args(key)
-        result = await self.async_client.eval(
-            RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member
-        )
+        result = await self.async_client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
         return bool(result)
 
     def is_allowed(self, key: str) -> bool:

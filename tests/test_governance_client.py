@@ -4,7 +4,6 @@ Validates that governance operations return correct response shapes
 and that audit events are logged for each action.
 """
 
-
 import pytest
 
 from app.core.config import settings

@@ -72,9 +72,7 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
     deadline = time.monotonic() + timeout_seconds
 
     while True:
-        result = db.execute(
-            text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id}
-        )
+        result = db.execute(text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
         if result.scalar():
             break
 
@@ -140,9 +138,7 @@ def advisory_lock_nowait(db: Session, lock_key: str) -> Generator[None, None, No
     """
     lock_id = _lock_id_from_key(lock_key)
 
-    result = db.execute(
-        text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id}
-    )
+    result = db.execute(text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
     acquired = result.scalar()
 
     if not acquired:
