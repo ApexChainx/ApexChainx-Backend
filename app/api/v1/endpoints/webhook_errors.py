@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from app.api.coded_errors import CodedHTTPException
 
 # Codes registered in docs/ERROR_CODES.md (Webhook Error Codes section) and
 # enforced by scripts/lint_error_codes.py. 4xx only: 5xx responses are
@@ -24,7 +24,7 @@ WEBHOOK_CONFLICT = "conflict"
 VALIDATION_ERROR = "validation_error"
 
 
-class WebhookHTTPException(StarletteHTTPException):
+class WebhookHTTPException(CodedHTTPException):
     """An HTTPException that carries a registered error code (#569)."""
 
     def __init__(
@@ -32,8 +32,10 @@ class WebhookHTTPException(StarletteHTTPException):
         *,
         status_code: int,
         detail: Any,
-        error_code: str,
+        error_code: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
-        super().__init__(status_code=status_code, detail=detail, headers=headers)
-        self.error_code = error_code
+        # CodedHTTPException supplies the registered generic code for the
+        # status when ``error_code`` is omitted; webhook call-sites always pass
+        # their domain code explicitly.
+        super().__init__(status_code=status_code, detail=detail, headers=headers, error_code=error_code)

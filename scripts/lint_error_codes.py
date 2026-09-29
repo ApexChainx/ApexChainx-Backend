@@ -10,7 +10,6 @@ Exit code 0 when all codes are documented; non-zero otherwise.
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -50,16 +49,24 @@ EXPECTED_CODES: set[str] = {
 
 
 def _extract_codes_from_doc(doc_path: Path) -> set[str]:
-    """Return the set of error codes listed in the documentation."""
+    """Return the set of error codes listed in the documentation.
+
+    Only backtick-wrapped tokens in markdown table cells are considered, and a
+    token must be the whole cell — prose like ``Retry-After`` or a description
+    sentence cannot be mistaken for a code. The old "must contain an
+    underscore" heuristic silently dropped the underscore-free standard codes
+    (``unauthorized``, ``forbidden``, ``conflict``) and always failed the check.
+    """
     if not doc_path.exists():
         return set()
-    text = doc_path.read_text()
     codes: set[str] = set()
-    # Match backtick-wrapped codes in the markdown tables
-    for match in re.finditer(r"`([a-z_]+)`", text):
-        code = match.group(1)
-        if code.endswith("_error") or "_" in code:
-            codes.add(code)
+    for line in doc_path.read_text().splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        for cell in line.split("|"):
+            token = cell.strip().strip("`").strip()
+            if re.fullmatch(r"[a-z][a-z0-9_]*", token):
+                codes.add(token)
     return codes
 
 

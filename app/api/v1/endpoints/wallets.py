@@ -3,9 +3,10 @@
 All handlers now pass a request-scoped database session to WalletRegistry.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.exceptions import ApexConflictError
 from app.core.security import require_engineer
 from app.db.session import get_db
@@ -49,7 +50,11 @@ def link_wallet(
     try:
         return WalletRegistry.link_wallet(db, payload)
     except ApexConflictError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        # wallet_already_linked (#569): the registry rejects linking a user or
+        # address that is already bound to a different entity.
+        raise CodedHTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc), error_code="wallet_already_linked"
+        )
 
 
 @router.get("/ping")
@@ -65,7 +70,7 @@ def get_wallet(
 ) -> Wallet:
     wallet = WalletRegistry.get_wallet(db, user_id)
     if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise CodedHTTPException(status_code=404, detail="Wallet not found", error_code="wallet_not_found")
     return wallet
 
 
@@ -77,7 +82,7 @@ def get_wallet_status(
 ) -> WalletStatusResponse:
     wallet_status = WalletRegistry.get_status(db, user_id)
     if not wallet_status:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise CodedHTTPException(status_code=404, detail="Wallet not found", error_code="wallet_not_found")
     return wallet_status
 
 
@@ -91,7 +96,7 @@ def get_wallet_trustline(
 ) -> WalletTrustlineResponse:
     result = WalletRegistry.get_trustline(db, user_id)
     if not result:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise CodedHTTPException(status_code=404, detail="Wallet not found", error_code="wallet_not_found")
     return result
 
 
@@ -107,7 +112,7 @@ def get_wallet_funding_state(
 ) -> WalletFundingStateResponse:
     result = WalletRegistry.get_funding_state(db, user_id)
     if not result:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise CodedHTTPException(status_code=404, detail="Wallet not found", error_code="wallet_not_found")
     return result
 
 
@@ -119,5 +124,5 @@ def get_wallet_balance(
 ) -> WalletBalanceResponse:
     balance = WalletRegistry.get_balance(db, address)
     if not balance:
-        raise HTTPException(status_code=404, detail="Wallet not found")
+        raise CodedHTTPException(status_code=404, detail="Wallet not found", error_code="wallet_not_found")
     return balance

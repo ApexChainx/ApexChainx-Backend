@@ -3,12 +3,13 @@ import io
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.api.v1.endpoints.sla import _invalidate_analytics_cache
 from app.core.config import settings
 from app.core.lock import ConcurrencyLockError, advisory_lock_nowait
@@ -52,7 +53,7 @@ def export_outages_endpoint(
     repo = OutageRepository(db)
     fmt = format.lower()
     if fmt not in ("csv", "json"):
-        raise HTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
+        raise CodedHTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
 
     outage_iter = repo.iter_filtered(
         severity=severity,
@@ -175,7 +176,7 @@ def get_outage(outage_id: str, current_user=Depends(require_engineer), db: Sessi
     repo = OutageRepository(db)
     outage = repo.get(outage_id)
     if not outage:
-        raise HTTPException(status_code=404, detail="Outage not found")
+        raise CodedHTTPException(status_code=404, detail="Outage not found")
     return outage
 
 
@@ -187,9 +188,9 @@ def create_outage(payload: OutageCreate, current_user=Depends(require_engineer),
     try:
         outage = repo.create(payload)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        raise CodedHTTPException(status_code=422, detail=exc.errors()) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     audit_log.log("outage_created", {"id": outage.id})
     OutageEventRepository(db).record(outage.id, "created", {"site_name": outage.site_name})
     return outage
@@ -209,7 +210,7 @@ def bulk_create_outages(
             if persisted:
                 persisted_count += 1
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     return {"count": len(items), "persisted": persisted_count, "items": items}
 
 
@@ -248,7 +249,7 @@ async def import_outages(
             break
         total_read += len(chunk)
         if total_read > MAX_BYTES:
-            raise HTTPException(status_code=413, detail="File exceeds 10 MB limit")
+            raise CodedHTTPException(status_code=413, detail="File exceeds 10 MB limit")
         chunks.append(chunk)
     content = b"".join(chunks)
 
@@ -263,12 +264,12 @@ async def import_outages(
 
     # Detect mislabeled files
     if declared_json and not actual_is_json:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400,
             detail=f"File appears to be CSV or unsupported format, not JSON as declared by filename '{filename}'",
         )
     if declared_csv and actual_is_json:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400,
             detail=f"File appears to be JSON, not CSV as declared by filename '{filename}'",
         )
@@ -277,9 +278,9 @@ async def import_outages(
         try:
             rows = json.loads(content)
             if not isinstance(rows, list):
-                raise HTTPException(status_code=400, detail="JSON file must contain a list of outage objects")
+                raise CodedHTTPException(status_code=400, detail="JSON file must contain a list of outage objects")
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+            raise CodedHTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
     elif declared_csv:
         try:
             # utf-8-sig strips BOM automatically (handles Excel on Windows exports)
@@ -289,24 +290,24 @@ async def import_outages(
                 # Fallback to latin-1 for Windows-1252 / ISO-8859-1 exports
                 text = content.decode("latin-1")
             except UnicodeDecodeError as exc:
-                raise HTTPException(
+                raise CodedHTTPException(
                     status_code=400,
                     detail=f"CSV encoding not supported. Please re-save as UTF-8: {exc}",
                 ) from exc
         try:
             rows = list(csv.DictReader(io.StringIO(text)))
         except csv.Error as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
+            raise CodedHTTPException(status_code=400, detail=f"Invalid CSV: {exc}") from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
+            raise CodedHTTPException(status_code=400, detail=f"CSV processing failed: {exc}") from exc
     else:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400,
             detail=f"Unsupported file type. File '{filename}' does not appear to be JSON or CSV.",
         )
 
     if len(rows) > settings.MAX_BULK_OUTAGES_COUNT:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400, detail=f"Too many rows in file. Maximum allowed is {settings.MAX_BULK_OUTAGES_COUNT}."
         )
 
@@ -375,12 +376,12 @@ async def import_outages(
             db.rollback()
             for outage_id in rows_persisted_this_batch:
                 repo.delete(outage_id)
-            raise HTTPException(status_code=500, detail=f"Transaction failed, batch rolled back: {exc}") from exc
+            raise CodedHTTPException(status_code=500, detail=f"Transaction failed, batch rolled back: {exc}") from exc
         except Exception as exc:
             db.rollback()
             for outage_id in rows_persisted_this_batch:
                 repo.delete(outage_id)
-            raise HTTPException(status_code=500, detail=f"Unexpected import error, batch rolled back: {exc}") from exc
+            raise CodedHTTPException(status_code=500, detail=f"Unexpected import error, batch rolled back: {exc}") from exc
     else:
         for i, row in enumerate(rows):
             try:
@@ -447,12 +448,12 @@ def update_outage(
     repo = OutageRepository(db)
     existing = repo.get(outage_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Outage not found")
+        raise CodedHTTPException(status_code=404, detail="Outage not found")
 
     try:
         updated = repo.update(outage_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     OutageEventRepository(db).record(outage_id, "updated", payload.model_dump(exclude_unset=True, exclude_none=True))
     return updated
 
@@ -472,12 +473,12 @@ def patch_outage(
     repo = OutageRepository(db)
     existing = repo.get(outage_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Outage not found")
+        raise CodedHTTPException(status_code=404, detail="Outage not found")
 
     try:
         updated = repo.update(outage_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     OutageEventRepository(db).record(outage_id, "patched", payload.model_dump(exclude_unset=True, exclude_none=True))
     return updated
 
@@ -487,11 +488,11 @@ def delete_outage(outage_id: str, current_user=Depends(require_admin), db: Sessi
     repo = OutageRepository(db)
     existing = repo.get(outage_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Outage not found")
+        raise CodedHTTPException(status_code=404, detail="Outage not found")
     try:
         repo.delete(outage_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=409, detail=str(exc)) from exc
     return {"message": "Outage deleted successfully"}
 
 
@@ -529,9 +530,9 @@ def resolve_outage(
             try:
                 outage = repo.resolve(outage_id, payload.mttr_minutes)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
             if not outage:
-                raise HTTPException(status_code=404, detail="Outage not found")
+                raise CodedHTTPException(status_code=404, detail="Outage not found")
 
             if already_resolved:
                 stored_sla = SLARepository(db).get_by_outage(outage.id)
@@ -582,7 +583,7 @@ def resolve_outage(
 
             return {"outage": outage, "sla": stored_sla, "payment": payment}
     except ConcurrencyLockError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{outage_id}/recompute-sla")
@@ -605,10 +606,10 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
     repo = OutageRepository(db)
     outage = repo.get(outage_id)
     if not outage:
-        raise HTTPException(status_code=404, detail="Outage not found")
+        raise CodedHTTPException(status_code=404, detail="Outage not found")
 
     if outage.status != OutageStatus.resolved.value:
-        raise HTTPException(status_code=400, detail="Outage must be resolved to recompute SLA")
+        raise CodedHTTPException(status_code=400, detail="Outage must be resolved to recompute SLA")
 
     # Acquire advisory lock to prevent concurrent recomputations
     try:
@@ -656,7 +657,7 @@ def recompute_sla(outage_id: str, current_user=Depends(require_engineer), db: Se
             OutageEventRepository(db).record(outage_id, "sla_recomputed", {"status": stored_sla.status})
             return {"sla": stored_sla, "payment": payment}
     except ConcurrencyLockError:
-        raise HTTPException(status_code=409, detail="SLA recomputation already in progress")
+        raise CodedHTTPException(status_code=409, detail="SLA recomputation already in progress")
 
 
 @router.get("/{outage_id}/timeline")
@@ -673,7 +674,7 @@ def get_outage_timeline(
     """Get event timeline for an outage (BE-009)."""
     repo = OutageRepository(db)
     if not repo.get(outage_id):
-        raise HTTPException(status_code=404, detail="Outage not found")
+        raise CodedHTTPException(status_code=404, detail="Outage not found")
     return OutageEventRepository(db).list_for_outage(
         outage_id,
         event_type=event_type,
