@@ -1779,10 +1779,12 @@ The bulk import endpoint (`POST /api/v1/outages/import`) validates each record b
 
 ### Changed
 
-- Job status sync now maps **all** Celery states — including scheduling states
-  `RETRY`, `RECEIVED`, `SCHEDULED`, `REJECTED` — onto the five persisted
-  `JobStatus` values. The job API never leaks raw Celery state strings; unknown
-  states keep the stored status.
+- Job status sync now funnels every Celery state through a single closed
+  mapping table (`app/utils/job_states.py`) onto the five persisted `JobStatus`
+  values. `RETRY` reports `started` (with `retry_count` carrying the retry
+  distinction); any state outside the table — custom worker states included —
+  is not passed through: the job keeps its stored status and the deviation is
+  logged. The job API never leaks raw Celery state strings.
 
 ### Fixed
 

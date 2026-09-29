@@ -208,11 +208,20 @@ class TestRegistrationCapCarriesCode:
         from app.core.config import settings
 
         monkeypatch.setattr(settings, "MAX_WEBHOOKS_PER_ACCOUNT", 2)
+        # Register the pre-configured session directly: _override_db() builds its
+        # own mock for .filter().first() chains and would drop the .scalar() stub.
         mock_db = MagicMock()
         mock_db.query.return_value.scalar.return_value = 2
-        _override_db(mock_db)
+
+        def _get_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = _get_db
         try:
-            with patch("app.api.v1.endpoints.webhooks.validate_webhook_url", return_value=["93.184.216.34"]):
+            with (
+                patch("app.api.v1.endpoints.webhooks.validate_webhook_url", return_value=["93.184.216.34"]),
+                patch("app.api.v1.endpoints.webhooks._serialize_webhook", side_effect=lambda w: w),
+            ):
                 resp = client.post("/api/v1/webhooks", json=VALID_PAYLOAD)
             assert resp.status_code == 409
             body = resp.json()
@@ -262,19 +271,10 @@ class TestSSRFMapsTo400:
 
 
 class TestDeliveryStateGuards:
-    @staticmethod
-    def _simple_delivery(status):
-        return SimpleNamespace(
-            id=uuid4(),
-            webhook_id=uuid4(),
-            status=status,
-        )
-
     def test_retry_of_sending_delivery_is_in_progress(self, admin_override):
-        delivery = self._simple_delivery(WebhookDeliveryStatus.SENDING)
-        mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.first.return_value = delivery
-        _override_db(mock_db)
+        delivery = _delivery(WebhookDeliveryStatus.SENDING)
+        delivery.webhook_id = uuid4()
+        _override_db(delivery)
         try:
             resp = client.post(f"/api/v1/webhooks/{uuid4()}/deliveries/{delivery.id}/retry")
             assert resp.status_code == 409
@@ -283,10 +283,9 @@ class TestDeliveryStateGuards:
             app.dependency_overrides.pop(get_db, None)
 
     def test_replay_of_non_dead_letter_is_not_replayable(self, admin_override):
-        delivery = self._simple_delivery(WebhookDeliveryStatus.SUCCESS)
-        mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.first.return_value = delivery
-        _override_db(mock_db)
+        delivery = _delivery(WebhookDeliveryStatus.SUCCESS)
+        delivery.webhook_id = uuid4()
+        _override_db(delivery)
         try:
             resp = client.post(f"/api/v1/webhooks/{uuid4()}/deliveries/{delivery.id}/replay")
             assert resp.status_code == 400
