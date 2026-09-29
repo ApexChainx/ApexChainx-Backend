@@ -36,6 +36,9 @@ All API errors are returned as RFC 7807 Problem Details.
 | 404         | `wallet_not_found`                | No wallet exists for the given user_id or public_key           | No        |
 | 404         | `webhook_not_found`               | Webhook configuration not found                                | No        |
 | 404         | `delivery_not_found`              | Webhook delivery record not found                              | No        |
+| 400         | `delivery_not_retryable`          | Delivery already succeeded; retry not applicable               | No        |
+| 409         | `delivery_in_progress`            | Delivery is currently being sent; retry later                  | No        |
+| 400         | `delivery_not_replayable`         | Delivery is not in dead-letter status and cannot be replayed   | No        |
 | 409         | `wallet_already_exists`           | A wallet already exists for this user or address               | No        |
 | 409         | `wallet_already_linked`           | The user or address is already linked to a different entity    | No        |
 | 409         | `sla_config_concurrency`          | SLA config was modified by another request; re-fetch and retry | Yes       |
@@ -72,6 +75,9 @@ ApexException (base)
 |-------------|---------------------------------|---------------------------------------------------------------|-----------|
 | 400         | `webhook_ssrf_blocked`          | Webhook URL targets a private/reserved network address        | No        |
 | 400         | `webhook_url_blocked`           | Webhook URL not in the configured allowlist                   | No        |
+| 400         | `invalid_webhook_url`           | Webhook URL failed validation (SSRF, private network, schema)  | No        |
+| 409         | `webhook_limit_reached`         | Webhook registration cap (MAX_WEBHOOKS_PER_ACCOUNT) reached    | No        |
+| 409         | `webhook_deleted_conflict`      | Webhook is a soft-deleted tombstone and cannot be modified     | No        |
 | 500         | `webhook_delivery_failed`       | Delivery to endpoint failed (timeout, connection error, 5xx)  | Yes       |
 | 500         | `webhook_dead_letter`           | Delivery permanently failed after max retries                 | No        |
 

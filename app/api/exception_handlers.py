@@ -32,6 +32,7 @@ class ProblemDetail(BaseModel):
     Extension members:
       - ``correlation_id`` – ties the error back to the request log.
       - ``errors`` – optional list of field-level errors (validation).
+      - ``error_code`` – stable machine-readable category from docs/ERROR_CODES.md.
     """
 
     type: str = Field(
@@ -43,6 +44,10 @@ class ProblemDetail(BaseModel):
     detail: str = Field(default="", description="A human-readable explanation.")
     correlation_id: str | None = Field(default=None)
     errors: list[dict[str, Any]] | None = Field(default=None)
+    error_code: str | None = Field(
+        default=None,
+        description="Stable machine-readable error code (docs/ERROR_CODES.md).",
+    )
 
 
 def _problem_response(
@@ -50,6 +55,7 @@ def _problem_response(
     title: str,
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
+    error_code: str | None = None,
 ) -> JSONResponse:
     correlation_id = get_or_generate_correlation_id()
     problem = ProblemDetail(
@@ -59,6 +65,7 @@ def _problem_response(
         detail=detail,
         correlation_id=correlation_id,
         errors=errors,
+        error_code=error_code,
     )
     return JSONResponse(
         status_code=status,
@@ -72,11 +79,15 @@ async def http_exception_handler(
     request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
     """Handle all HTTPException instances as RFC 7807 problem responses."""
+    # Issue #569: exceptions may carry a registered error_code (see
+    # docs/ERROR_CODES.md); surface it in the problem body when present.
+    error_code = getattr(exc, "error_code", None)
     if isinstance(exc.detail, str):
         return _problem_response(
             status=exc.status_code,
             title=_default_title(exc.status_code),
             detail=exc.detail,
+            error_code=error_code,
         )
 
     errors: list[dict[str, Any]]

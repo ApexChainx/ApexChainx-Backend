@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
     WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
+    # Per-account webhook registration cap (#517). POST /api/v1/webhooks returns
+    # 409 webhook_limit_reached once this many webhooks are registered; 0 disables
+    # the cap. See docs/API.md.
+    MAX_WEBHOOKS_PER_ACCOUNT: int = 50
+    # Not enforced — creation and event-subscription updates log a warning and
+    # increment webhook.fanout.threshold_exceeded when total subscriptions exceed
+    # this. 0 disables the check.
+    WEBHOOK_FANOUT_WARN_THRESHOLD: int = 200
+
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
     # Fix #576: hard cap on how many completed Idempotency-Key records are
@@ -367,6 +376,12 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.MAX_WEBHOOKS_PER_ACCOUNT < 0:
+        errors.append("MAX_WEBHOOKS_PER_ACCOUNT must be >= 0 (0 disables the cap).")
+
+    if config.WEBHOOK_FANOUT_WARN_THRESHOLD < 0:
+        errors.append("WEBHOOK_FANOUT_WARN_THRESHOLD must be >= 0 (0 disables the warning).")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))

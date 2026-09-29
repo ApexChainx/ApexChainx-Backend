@@ -11,7 +11,7 @@ from sqlalchemy import and_, or_
 
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
-from app.models.job import Job, JobStatus, JobType
+from app.models.job import Job, JobState, JobStatus, JobType
 from app.services.audit_log import audit_log
 from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
@@ -166,17 +166,11 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
         return job
 
     task_result: AsyncResult = AsyncResult(job.celery_task_id, app=celery_app)
-    celery_state = task_result.state  # PENDING, STARTED, SUCCESS, FAILURE, REVOKED
-
-    state_map = {
-        "PENDING": JobStatus.PENDING,
-        "STARTED": JobStatus.STARTED,
-        "SUCCESS": JobStatus.SUCCESS,
-        "FAILURE": JobStatus.FAILURE,
-        "REVOKED": JobStatus.REVOKED,
-    }
-
-    new_status = state_map.get(celery_state, job.status)
+    # Issue #571: map every Celery state (including scheduling states such as
+    # RETRY/RECEIVED/SCHEDULED/REJECTED) through the JobState enum so the API
+    # only ever exposes states this service owns. Unknown states keep the
+    # stored status instead of leaking a raw Celery string.
+    new_status = JobState.to_job_status(task_result.state) or job.status
     _job_status_cache.set(cache_key, new_status)
     if new_status != job.status:
         job.status = new_status

@@ -18,7 +18,7 @@ from app.services.formatters import canonical_json
 from app.services.metrics import increment_counter, set_gauge
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
 from app.utils.logging import get_structured_logger
-from app.utils.network_validation import validate_webhook_url
+from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 from app.utils.secret_history import prune_expired_secrets
 
 router = APIRouter(
@@ -32,6 +32,20 @@ router = APIRouter(
 )
 
 logger = get_structured_logger("webhooks_api")
+
+
+class WebhookHTTPException(HTTPException):
+    """HTTPException carrying a registered error code (issue #569).
+
+    ``error_code`` must exist in docs/ERROR_CODES.md (enforced by
+    scripts/lint_error_codes.py). The RFC 7807 handler includes it in the
+    problem body so clients can branch on the code instead of parsing
+    human-readable detail strings.
+    """
+
+    def __init__(self, status_code: int, detail: str, error_code: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.error_code = error_code
 
 
 # --------------------------------------------------------------------------- #
@@ -76,7 +90,19 @@ class WebhookCreate(BaseModel):
         url_str = str(v)
         if len(url_str) > settings.MAX_WEBHOOK_URL_LENGTH:
             raise ValueError(f"url too long. Maximum length is {settings.MAX_WEBHOOK_URL_LENGTH} characters.")
-        validate_webhook_url(url_str)
+        # Issue #569: SSRF/validation failures must surface as the registered
+        # 400 ``invalid_webhook_url`` problem, not as a pydantic 422 (pydantic
+        # converts ValueError subclasses — NetworkValidationError included —
+        # into field errors). Raising HTTPException here bypasses that
+        # conversion and reaches the RFC 7807 handler intact.
+        try:
+            validate_webhook_url(url_str)
+        except NetworkValidationError as exc:
+            raise WebhookHTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Webhook URL rejected: {exc}",
+                error_code="invalid_webhook_url",
+            ) from exc
         return v
 
     @field_validator("events")
@@ -112,7 +138,16 @@ class WebhookUpdate(BaseModel):
             url_str = str(v)
             if len(url_str) > settings.MAX_WEBHOOK_URL_LENGTH:
                 raise ValueError(f"url too long. Maximum length is {settings.MAX_WEBHOOK_URL_LENGTH} characters.")
-            validate_webhook_url(url_str)
+            # Issue #569: map SSRF/validation failures to the registered 400
+            # ``invalid_webhook_url`` problem (see WebhookCreate validator).
+            try:
+                validate_webhook_url(url_str)
+            except NetworkValidationError as exc:
+                raise WebhookHTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Webhook URL rejected: {exc}",
+                    error_code="invalid_webhook_url",
+                ) from exc
         return v
 
     @field_validator("events")
@@ -221,10 +256,29 @@ class WebhookReplayResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+def _validated_url(url: str) -> list[str]:
+    """Resolve a webhook URL, mapping SSRF/validation failures to 400 (#569).
+
+    ``NetworkValidationError`` escaping the endpoint used to surface as an
+    unhandled 500; here it becomes a registered ``invalid_webhook_url``
+    problem response per docs/ERROR_CODES.md.
+    """
+    try:
+        return validate_webhook_url(url)
+    except NetworkValidationError as exc:
+        raise WebhookHTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Webhook URL rejected: {exc}",
+            error_code="invalid_webhook_url",
+        ) from exc
+
+
 def _get_webhook_or_404(db: Session, webhook_id: UUID) -> Webhook:
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not webhook:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found.")
+        raise WebhookHTTPException(
+            status.HTTP_404_NOT_FOUND, "Webhook not found.", error_code="webhook_not_found"
+        )
     return webhook
 
 
@@ -237,9 +291,10 @@ def _get_live_webhook_or_409(db: Session, webhook_id: UUID) -> Webhook:
     """
     webhook = _get_webhook_or_404(db, webhook_id)
     if webhook.is_deleted:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Webhook has been deleted and can no longer be modified.",
+        raise WebhookHTTPException(
+            status.HTTP_409_CONFLICT,
+            "Webhook has been deleted and can no longer be modified.",
+            error_code="webhook_deleted_conflict",
         )
     return webhook
 
@@ -330,12 +385,13 @@ def _enforce_webhook_registration_cap(db: Session) -> None:
         return
     registered = _count_registered_webhooks(db)
     if registered >= cap:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
+        raise WebhookHTTPException(
+            status.HTTP_409_CONFLICT,
+            (
                 f"Webhook limit reached: {registered} webhooks are already registered and "
                 f"MAX_WEBHOOKS_PER_ACCOUNT is {cap}. Delete an unused webhook before creating another."
             ),
+            error_code="webhook_limit_reached",
         )
 
 
@@ -373,7 +429,7 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
     # rejected does not cost a DNS resolution.
     _enforce_webhook_registration_cap(db)
     url = str(payload.url)
-    resolved_ips = validate_webhook_url(url)
+    resolved_ips = _validated_url(url)
     webhook = Webhook(
         name=payload.name,
         url=url,
@@ -455,7 +511,7 @@ def update_webhook(
         webhook.name = payload.name
     if payload.url is not None:
         url = str(payload.url)
-        resolved_ips = validate_webhook_url(url)
+        resolved_ips = _validated_url(url)
         webhook.url = url
         webhook.resolved_ips = canonical_json(resolved_ips)
     if payload.secret is not None:
@@ -660,16 +716,20 @@ def retry_delivery(
         .first()
     )
     if not delivery:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+        raise WebhookHTTPException(
+            status.HTTP_404_NOT_FOUND, "Delivery not found.", error_code="delivery_not_found"
+        )
     if delivery.status == WebhookDeliveryStatus.SUCCESS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Delivery already succeeded; retry not needed.",
+        raise WebhookHTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Delivery already succeeded; retry not needed.",
+            error_code="delivery_not_retryable",
         )
     if delivery.status == WebhookDeliveryStatus.SENDING:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Delivery is already being sent.",
+        raise WebhookHTTPException(
+            status.HTTP_409_CONFLICT,
+            "Delivery is already being sent.",
+            error_code="delivery_in_progress",
         )
 
     from app.services.webhook_service import dispatch_delivery
@@ -722,15 +782,18 @@ def replay_dead_letter_delivery(
         .first()
     )
     if not delivery:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+        raise WebhookHTTPException(
+            status.HTTP_404_NOT_FOUND, "Delivery not found.", error_code="delivery_not_found"
+        )
 
     from app.services.webhook_service import replay_dead_letter_delivery
 
     success = replay_dead_letter_delivery(db, delivery_id)
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to replay delivery. It may not be in dead-letter status.",
+        raise WebhookHTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Failed to replay delivery. It may not be in dead-letter status.",
+            error_code="delivery_not_replayable",
         )
 
     db.refresh(delivery)

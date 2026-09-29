@@ -66,10 +66,16 @@ class ETagMiddleware:
         body_prefix = bytearray()
         etag: str | None = None
         not_modified = False
+        # True only when the start message was withheld for etag computation.
+        # Error responses (and responses that already carry an ETag) are
+        # forwarded immediately and must NOT be re-sent with the first body
+        # chunk — that used to emit a second http.response.start and crash
+        # ASGI consumers with "Received multiple http.response.start messages".
+        start_buffered = False
 
         async def send_with_etag(message: Message) -> None:
             nonlocal response_status, response_headers
-            nonlocal etag, not_modified
+            nonlocal etag, not_modified, start_buffered
 
             if message["type"] == "http.response.start":
                 response_status = message["status"]
@@ -80,6 +86,7 @@ class ETagMiddleware:
                 if any(name.lower() == b"etag" for name, _ in response_headers):
                     await send(message)
                     return
+                start_buffered = True
                 return
 
             if message["type"] != "http.response.body" or response_status is None:
@@ -88,6 +95,11 @@ class ETagMiddleware:
 
             body = message.get("body", b"")
             if etag is None:
+                if not start_buffered:
+                    # Start was already forwarded upstream; body just passes
+                    # through untouched.
+                    await send(message)
+                    return
                 remaining = MAX_ETAG_BODY_BYTES - len(body_prefix)
                 if remaining > 0:
                     body_prefix.extend(body[:remaining])

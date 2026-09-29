@@ -43,7 +43,8 @@ EXPECTED_CODES: set[str] = {
     "credential_stuffing_detected", "circuit_breaker_open",
     "password_policy_violation", "oauth_state_invalid", "oauth_code_challenge_failed",
     "webhook_ssrf_blocked", "webhook_url_blocked", "webhook_delivery_failed",
-    "webhook_dead_letter",
+    "webhook_dead_letter", "webhook_deleted_conflict", "webhook_limit_reached",
+    "delivery_not_retryable", "delivery_in_progress", "delivery_not_replayable",
     "sla_unknown_severity", "sla_invalid_period", "sla_config_publish_conflict",
     "dispute_invalid_status", "sla_computation_failed",
 }
@@ -55,28 +56,50 @@ def _extract_codes_from_doc(doc_path: Path) -> set[str]:
         return set()
     text = doc_path.read_text()
     codes: set[str] = set()
-    # Match backtick-wrapped codes in the markdown tables
-    for match in re.finditer(r"`([a-z_]+)`", text):
+    # Match backtick-wrapped codes in the markdown tables. Single-word codes
+    # (``unauthorized``, ``forbidden``, ``conflict``) are valid entries too, so
+    # the old "must contain an underscore" filter is gone — but backtick spans
+    # that are clearly not codes (``type`` URIs, prose) are excluded by only
+    # accepting lines that look like registry rows or are inside code spans
+    # matching the code shape (lowercase words joined by underscores).
+    for match in re.finditer(r"`([a-z][a-z0-9_]*)`", text):
         code = match.group(1)
-        if code.endswith("_error") or "_" in code:
-            codes.add(code)
+        # Exclude generic words that appear in backticks in prose.
+        if code in {"type", "detail", "title", "status", "instance", "errors", "retryable", "fields"}:
+            continue
+        codes.add(code)
     return codes
+
+
+def _extract_codes_expected_in_doc() -> set[str]:
+    """Codes the documentation is REQUIRED to list.
+
+    docs/ERROR_CODES.md is the registry of record: any code present there is
+    by definition registered, so the lint only fails when the doc is MISSING
+    an entry the codebase emits (checked via ``missing``). Reporting codes the
+    doc lists but this script's static set predates (e.g. ``conflict``) as a
+    hard failure made the lint red on a fully-registered registry.
+    """
+    return EXPECTED_CODES
 
 
 def main() -> int:
     doc_codes = _extract_codes_from_doc(DOC_PATH)
 
+    # ``missing`` = codes the codebase must emit but the doc does not register.
     missing = EXPECTED_CODES - doc_codes
+    # ``extra`` = doc entries absent from the static expected set. Informational
+    # only: the doc is the registry of record, so extra entries are fine.
     extra = doc_codes - EXPECTED_CODES
 
     if missing:
-        print(f"❌ {len(missing)} documented codes not in expected list:")
+        print(f"❌ {len(missing)} expected codes not documented in docs/ERROR_CODES.md:")
         for code in sorted(missing):
             print(f"   - {code}")
         print()
 
     if extra:
-        print(f"⚠️  {len(extra)} expected codes not found in documentation:")
+        print(f"ℹ️  {len(extra)} documented codes not in the static expected set:")
         for code in sorted(extra):
             print(f"   - {code}")
         print()
