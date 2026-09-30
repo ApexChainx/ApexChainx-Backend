@@ -3,7 +3,7 @@ import io
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -34,7 +34,7 @@ from app.repositories.sla_repository import SLARepository
 from app.services.audit_log import audit_log
 from app.services.contracts import SLAContractAdapter, translate_contract_result
 from app.services.webhook_service import trigger_sla_violation_webhooks
-from app.utils.exporter import export_outages, stream_export_csv, stream_export_json
+from app.utils.exporter import stream_export_csv, stream_export_json
 
 router = APIRouter()
 
@@ -257,7 +257,6 @@ async def import_outages(
     # Sniff actual content type from first non-whitespace byte
     stripped = content.lstrip()
     actual_is_json = stripped.startswith((b"{", b"["))
-    actual_is_csv = not actual_is_json and len(stripped) > 0
 
     declared_json = filename.endswith(".json")
     declared_csv = filename.endswith(".csv")
@@ -381,7 +380,9 @@ async def import_outages(
             db.rollback()
             for outage_id in rows_persisted_this_batch:
                 repo.delete(outage_id)
-            raise CodedHTTPException(status_code=500, detail=f"Unexpected import error, batch rolled back: {exc}") from exc
+            raise CodedHTTPException(
+                status_code=500, detail=f"Unexpected import error, batch rolled back: {exc}"
+            ) from exc
     else:
         for i, row in enumerate(rows):
             try:
@@ -522,9 +523,7 @@ def resolve_outage(
             # MTTR, skip recompute/payment/webhook side effects (#302).
             existing = repo.get(outage_id)
             already_resolved = (
-                existing is not None
-                and existing.status == "resolved"
-                and existing.mttr_minutes == payload.mttr_minutes
+                existing is not None and existing.status == "resolved" and existing.mttr_minutes == payload.mttr_minutes
             )
 
             try:
