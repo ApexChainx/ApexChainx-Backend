@@ -1,6 +1,7 @@
 """Merges overlapping outage intervals before summing downtime, so
 duplicate/overlapping periods aren't double-counted in SLA windows.
 """
+
 from datetime import datetime
 from typing import List, Tuple
 

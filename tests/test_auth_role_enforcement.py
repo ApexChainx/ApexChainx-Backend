@@ -160,6 +160,7 @@ class TestAdminUserCreationEndpoint:
             repo = UserRepository(db)
             if not repo.get_by_email("test_admin@example.com"):
                 from uuid import uuid4
+
                 repo.create(
                     user_id=f"admin_{uuid4().hex[:8]}",
                     email="test_admin@example.com",

@@ -43,9 +43,7 @@ class TestParseApiVersion:
     def test_valid_versions(self, raw, expected):
         assert parse_api_version(raw) == expected
 
-    @pytest.mark.parametrize(
-        "raw", ["", "   ", "banana", "1.0.0.1", "1..0", "1.0.x", "-1", "1.0.0-beta", "1.0.²"]
-    )
+    @pytest.mark.parametrize("raw", ["", "   ", "banana", "1.0.0.1", "1..0", "1.0.x", "-1", "1.0.0-beta", "1.0.²"])
     def test_invalid_versions(self, raw):
         assert parse_api_version(raw) is None
 
@@ -117,22 +115,16 @@ class TestSupportedRangeConfiguration:
         return Settings.model_construct(**base)
 
     def test_served_version_inside_range_is_accepted(self):
-        validate_critical_settings(
-            self._settings(API_VERSION_MIN_SUPPORTED="1.0.0", API_VERSION_MAX_SUPPORTED="2.0.0")
-        )
+        validate_critical_settings(self._settings(API_VERSION_MIN_SUPPORTED="1.0.0", API_VERSION_MAX_SUPPORTED="2.0.0"))
 
     def test_served_version_outside_range_is_rejected(self):
-        config = self._settings(
-            API_VERSION_MIN_SUPPORTED="2.0.0", API_VERSION_MAX_SUPPORTED="3.0.0"
-        )
+        config = self._settings(API_VERSION_MIN_SUPPORTED="2.0.0", API_VERSION_MAX_SUPPORTED="3.0.0")
         with pytest.raises(ValueError) as exc:
             validate_critical_settings(config)
         assert "API_VERSION_MIN_SUPPORTED" in str(exc.value)
 
     def test_inverted_range_is_rejected(self):
-        config = self._settings(
-            API_VERSION_MIN_SUPPORTED="2.0.0", API_VERSION_MAX_SUPPORTED="1.0.0"
-        )
+        config = self._settings(API_VERSION_MIN_SUPPORTED="2.0.0", API_VERSION_MAX_SUPPORTED="1.0.0")
         with pytest.raises(ValueError) as exc:
             validate_critical_settings(config)
         assert "must not be greater than" in str(exc.value)

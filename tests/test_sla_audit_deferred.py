@@ -125,9 +125,7 @@ class TestRecordSlaSettlementAuditEvents:
     @patch("app.services.sla_service.audit_log")
     def test_emits_with_error(self, mock_audit):
         result = _make_result()
-        record_sla_settlement_audit_events(
-            "dev-1", "2025-03", result, status="failed", error="db timeout"
-        )
+        record_sla_settlement_audit_events("dev-1", "2025-03", result, status="failed", error="db timeout")
 
         mock_audit.log.assert_called_once()
         args, kwargs = mock_audit.log.call_args

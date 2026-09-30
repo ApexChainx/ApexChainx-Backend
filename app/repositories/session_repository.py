@@ -70,12 +70,7 @@ class SessionRepository:
         now = datetime.now(UTC)
         total_deleted = 0
         while True:
-            expired = (
-                self.db.query(SessionORM)
-                .filter(SessionORM.expires_at < now)
-                .limit(batch_size)
-                .all()
-            )
+            expired = self.db.query(SessionORM).filter(SessionORM.expires_at < now).limit(batch_size).all()
             if not expired:
                 break
             for session in expired:

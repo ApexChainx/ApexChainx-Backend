@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
@@ -90,11 +91,11 @@ def _get_client_ip(request: Request) -> str:
 
 def _extract_bearer_token(authorization: str | None) -> str:
     if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
+        raise CodedHTTPException(status_code=401, detail="Missing Authorization header")
 
     prefix = "Bearer "
     if not authorization.startswith(prefix):
-        raise HTTPException(status_code=401, detail="Invalid Authorization header")
+        raise CodedHTTPException(status_code=401, detail="Invalid Authorization header")
     return authorization[len(prefix) :]
 
 
@@ -106,7 +107,7 @@ class RefreshRequest(BaseModel):
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
     if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=429,
             detail="Too many registration attempts from this IP. Please try again later.",
         )
@@ -114,7 +115,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     try:
         return AuthStore.register(payload, db=db)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
@@ -138,7 +139,7 @@ def admin_create_user(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/login", response_model=AuthSessionResponse)
@@ -146,15 +147,17 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     from app.services.audit_log import audit_log
 
     client_ip = _get_client_ip(request)
-    
+    # The account scope the stuffing detector reasons about; it used to be
+    # referenced without ever being assigned, crashing every login with a
+    # NameError once the account-locked branch was reached.
+    account = payload.email
+
     # Credential stuffing detection
-    credential_stuffing_detector.record_attempt(
-        client_ip, payload.password, db, account=payload.email
-    )
-    if credential_stuffing_detector.detect_stuffing(
-        client_ip, db, account=payload.email
-    ):
-        lockout_minutes = settings.AUTH_LOCKOUT_DURATION_MINUTES * 4
+    credential_stuffing_detector.record_attempt(client_ip, payload.password, account=payload.email, db=db)
+    if credential_stuffing_detector.detect_stuffing(client_ip, account=payload.email):
+        # lockout_minutes() applies the AUTH_STUFFING_LOCKOUT_* cap; the
+        # hard-coded 4x multiplier here used to produce hour-long outages.
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
         audit_log.log_event(
             db,
             "suspicious_login_activity",
@@ -166,12 +169,15 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
-        raise HTTPException(
+        # credential_stuffing_detected (#569): registered code for the spray
+        # lockout, so clients can distinguish it from plain rate limiting.
+        raise CodedHTTPException(
             status_code=429,
             detail=(
                 f"Too many login attempts for this account from your address. "
                 f"Account locked for {lockout_minutes} minutes."
             ),
+            error_code="credential_stuffing_detected",
         )
 
     if credential_stuffing_detector.is_account_locked(account):
@@ -187,14 +193,14 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=429,
             detail=(
                 f"Too many login attempts for this account. "
-                f"Account locked for {lockout_minutes} minutes."
+                f"Account locked for {credential_stuffing_detector.lockout_minutes()} minutes."
             ),
         )
 
@@ -214,12 +220,16 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
-        raise HTTPException(status_code=429, detail="Too many login attempts from this IP. Please try again later.")
+        raise CodedHTTPException(
+            status_code=429, detail="Too many login attempts from this IP. Please try again later."
+        )
 
     try:
         return AuthStore.login(payload, db=db)
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        # invalid_credentials (#569): AuthStore.login raises ValueError for a
+        # bad email/password pair (docs/ERROR_CODES.md).
+        raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
 
 
 @router.post("/refresh", response_model=AuthSessionResponse)
@@ -228,15 +238,14 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
 
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}", db=db):
-        raise HTTPException(
-            status_code=429, 
-            detail="Too many refresh attempts from this IP. Please try again later."
+        raise CodedHTTPException(
+            status_code=429, detail="Too many refresh attempts from this IP. Please try again later."
         )
-    
+
     try:
         return AuthStore.refresh(payload.refresh_token, db=db)
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=401, detail=str(exc)) from exc
 
 
 @router.get("/me", response_model=AuthUser)
@@ -252,13 +261,17 @@ def update_profile(
 ):
     """Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here."""
     if payload.full_name is None and payload.stellar_wallet is None:
-        raise HTTPException(status_code=400, detail="No updatable fields provided")
+        raise CodedHTTPException(status_code=400, detail="No updatable fields provided")
 
     if payload.stellar_wallet is not None:
         try:
             normalize_wallet(payload.stellar_wallet)
         except WalletAddressError as exc:
-            raise HTTPException(status_code=422, detail=exc.reason) from exc
+            # invalid_stellar_public_key (#569): registered code for wallet
+            # address validation failures (docs/ERROR_CODES.md).
+            raise CodedHTTPException(
+                status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key"
+            ) from exc
 
     repo = UserRepository(db)
     updated = repo.update_profile(
@@ -267,7 +280,7 @@ def update_profile(
         stellar_wallet=payload.stellar_wallet,
     )
     if not updated:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise CodedHTTPException(status_code=404, detail="User not found")
 
     from app.services.audit_log import audit_log
 
@@ -382,7 +395,7 @@ def export_my_data(
     repo = UserRepository(db)
     user_orm = repo.get_by_id(current_user.id)
     if not user_orm:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise CodedHTTPException(status_code=404, detail="User not found")
 
     tarball_bytes = export_user_data(db, user_orm)
 
@@ -411,7 +424,7 @@ def erase_my_data(
     repo = UserRepository(db)
     user_orm = repo.get_by_id(current_user.id)
     if not user_orm:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise CodedHTTPException(status_code=404, detail="User not found")
 
     result = erase_user_data(db, user_orm)
     return result
@@ -455,10 +468,10 @@ def impersonate_user(
     repo = UserRepository(db)
     target = repo.get_by_id(payload.user_id)
     if not target:
-        raise HTTPException(status_code=404, detail="Target user not found")
+        raise CodedHTTPException(status_code=404, detail="Target user not found")
 
     if target.role == "admin":
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=403,
             detail="Cannot impersonate another admin user",
         )

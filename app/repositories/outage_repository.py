@@ -388,7 +388,9 @@ class OutageRepository:
         if sla_count > 0:
             return True
         try:
-            payment_count = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).count()
+            payment_count = (
+                self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).count()
+            )
             return payment_count > 0
         except Exception:
             # PaymentTransactionORM may not have outage_id in all schema versions

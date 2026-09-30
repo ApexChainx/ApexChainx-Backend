@@ -1,6 +1,5 @@
 import logging
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.core.exceptions import ApexException, ApexNotFoundError, ApexTransientError

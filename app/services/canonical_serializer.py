@@ -1,6 +1,7 @@
 """Explicit canonical serializer for audit hashing, replacing the
 default=str fallback whose stability depends on ad-hoc __str__ output.
 """
+
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum

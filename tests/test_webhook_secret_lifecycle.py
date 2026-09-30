@@ -189,7 +189,7 @@ class TestPatchSecretIsARotation:
 
         from app.api.v1.endpoints.webhooks import WebhookUpdate
 
-        _webhook, audit, _response = _patch_call(webhook, WebhookUpdate(secret="next-secret"))
+        webhook, audit, _response = _patch_call(webhook, WebhookUpdate(secret="next-secret"))
 
         event, payload = audit[-1]
         assert event == "webhook_secret_rotated"
@@ -222,9 +222,7 @@ class TestPatchSecretIsARotation:
 
         from app.api.v1.endpoints.webhooks import WebhookUpdate
 
-        webhook, _audit, _response = _patch_call(
-            webhook, WebhookUpdate(secret_grace_hours=72, secret="next-secret")
-        )
+        webhook, _audit, _response = _patch_call(webhook, WebhookUpdate(secret_grace_hours=72, secret="next-secret"))
 
         assert webhook.secret_grace_hours == 72
         # The rotation in the same request used the new window.

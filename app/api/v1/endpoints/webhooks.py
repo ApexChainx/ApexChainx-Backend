@@ -109,9 +109,7 @@ class WebhookUpdate(BaseModel):
     # #582: the per-webhook grace window used by secret rotations. None means
     # "leave unchanged"; the bound matches _apply_secret_rotation's fallback
     # rule so a value that would be ignored cannot be stored in the first place.
-    secret_grace_hours: int | None = Field(
-        default=None, ge=1, le=settings.MAX_WEBHOOK_SECRET_GRACE_HOURS
-    )
+    secret_grace_hours: int | None = Field(default=None, ge=1, le=settings.MAX_WEBHOOK_SECRET_GRACE_HOURS)
 
     @field_validator("name")
     @classmethod
@@ -416,9 +414,10 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         try:
             handle_create_integrity_error(exc)
         except DuplicateWebhookError:
-            raise HTTPException(
+            raise WebhookHTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A webhook with this url and events combination already exists.",
+                error_code=WEBHOOK_CONFLICT,
             ) from exc
         # Any other IntegrityError (e.g. FK violation) is not a duplicate —
         # re-raise and let the global handler deal with it.
@@ -751,9 +750,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     return WebhookSecretRotateResponse(
         webhook_id=webhook.id,
         new_secret=new_secret,
-        message=(
-            f"Secret rotated. Previous secret will remain valid for {grace_hours} hours."
-        ),
+        message=(f"Secret rotated. Previous secret will remain valid for {grace_hours} hours."),
     )
 
 
@@ -786,9 +783,10 @@ def retry_delivery(
             error_code=VALIDATION_ERROR,
         )
     if delivery.status == WebhookDeliveryStatus.SENDING:
-        raise HTTPException(
+        raise WebhookHTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Delivery is already being sent.",
+            error_code=WEBHOOK_CONFLICT,
         )
 
     from app.services.webhook_service import dispatch_delivery

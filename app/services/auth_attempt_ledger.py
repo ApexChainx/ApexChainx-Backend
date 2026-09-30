@@ -76,9 +76,7 @@ def record_credential_prefix(
     _prune_expired(db, now)
     scope_hash = _digest(f"stuffing:{ip}")
     prefix_hash = _digest(password[:4])
-    cutoff = now - timedelta(
-        minutes=settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES
-    )
+    cutoff = now - timedelta(minutes=settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES)
     _prune_scope(db, scope_hash, cutoff)
 
     existing = (

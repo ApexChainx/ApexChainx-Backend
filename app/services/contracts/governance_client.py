@@ -12,7 +12,6 @@ implemented).
 from __future__ import annotations
 
 import hashlib
-import secrets
 from typing import Any
 
 from app.core.config import settings
@@ -50,9 +49,7 @@ def propose_admin(new_admin_address: str) -> dict[str, Any]:
             "network": settings.STELLAR_NETWORK,
         }
 
-    raise GovernanceError(
-        f"soroban_rpc mode not yet implemented for propose_admin"
-    )
+    raise GovernanceError("soroban_rpc mode not yet implemented for propose_admin")
 
 
 def accept_admin() -> dict[str, Any]:
@@ -69,9 +66,7 @@ def accept_admin() -> dict[str, Any]:
             "network": settings.STELLAR_NETWORK,
         }
 
-    raise GovernanceError(
-        f"soroban_rpc mode not yet implemented for accept_admin"
-    )
+    raise GovernanceError("soroban_rpc mode not yet implemented for accept_admin")
 
 
 def cancel_admin_proposal() -> dict[str, Any]:
@@ -85,9 +80,7 @@ def cancel_admin_proposal() -> dict[str, Any]:
             "network": settings.STELLAR_NETWORK,
         }
 
-    raise GovernanceError(
-        f"soroban_rpc mode not yet implemented for cancel_admin_proposal"
-    )
+    raise GovernanceError("soroban_rpc mode not yet implemented for cancel_admin_proposal")
 
 
 def renounce_admin() -> dict[str, Any]:
@@ -101,9 +94,7 @@ def renounce_admin() -> dict[str, Any]:
             "network": settings.STELLAR_NETWORK,
         }
 
-    raise GovernanceError(
-        f"soroban_rpc mode not yet implemented for renounce_admin"
-    )
+    raise GovernanceError("soroban_rpc mode not yet implemented for renounce_admin")
 
 
 def propose_operator(new_operator_address: str) -> dict[str, Any]:
@@ -124,9 +115,7 @@ def propose_operator(new_operator_address: str) -> dict[str, Any]:
             "network": settings.STELLAR_NETWORK,
         }
 
-    raise GovernanceError(
-        f"soroban_rpc mode not yet implemented for propose_operator"
-    )
+    raise GovernanceError("soroban_rpc mode not yet implemented for propose_operator")
 
 
 def accept_operator() -> dict[str, Any]:
@@ -140,6 +129,4 @@ def accept_operator() -> dict[str, Any]:
             "network": settings.STELLAR_NETWORK,
         }
 
-    raise GovernanceError(
-        f"soroban_rpc mode not yet implemented for accept_operator"
-    )
+    raise GovernanceError("soroban_rpc mode not yet implemented for accept_operator")

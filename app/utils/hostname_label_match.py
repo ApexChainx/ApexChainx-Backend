@@ -10,4 +10,4 @@ def hostname_matches_allowlist(hostname: str, allowlist_entry: str) -> bool:
     if len(host_labels) < len(allow_labels):
         return False
 
-    return host_labels[-len(allow_labels):] == allow_labels
+    return host_labels[-len(allow_labels) :] == allow_labels

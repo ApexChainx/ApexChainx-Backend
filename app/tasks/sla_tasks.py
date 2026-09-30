@@ -437,15 +437,26 @@ def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correla
     sorted_ids = sorted(device_ids)
     dedup_key = ",".join(sorted_ids)
 
-    job = Job(
-        celery_task_id=task_result.id,
-        job_type=JobType.BULK_SLA_COMPUTATION,
-        payload=payload,
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+    with advisory_lock(db, f"sla-enqueue:{JobType.BULK_SLA_COMPUTATION.value}:{dedup_key}:{period}"):
+        existing = _find_inflight_sla_job(
+            db,
+            JobType.BULK_SLA_COMPUTATION,
+            lambda p: sorted(p.get("device_ids") or []) == sorted_ids and p.get("period") == period,
+        )
+        if existing:
+            return existing
+
+        task_result = compute_bulk_sla.apply_async(kwargs=payload)
+
+        job = Job(
+            celery_task_id=task_result.id,
+            job_type=JobType.BULK_SLA_COMPUTATION,
+            payload=payload,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job
 
 
 @celery_app.task(name="app.tasks.sla_tasks.warm_sla_cache_task")

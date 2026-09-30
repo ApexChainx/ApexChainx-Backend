@@ -1,4 +1,4 @@
-﻿"""Atomic outage import must be all-or-nothing (#577).
+"""Atomic outage import must be all-or-nothing (#577).
 
 ``create_or_get_existing`` used to commit every row to the database as soon
 as it was created. In ``atomic`` mode, a failure partway through a batch was

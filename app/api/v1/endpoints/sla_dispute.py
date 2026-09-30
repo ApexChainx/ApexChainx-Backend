@@ -1,10 +1,11 @@
 import json
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_admin, require_engineer, require_engineer_or_admin
 from app.db.session import get_db
 from app.models.orm.sla import SLAResultORM
@@ -97,7 +98,7 @@ def flag_dispute(
     # Check if SLA result exists
     sla_result = db.query(SLAResultORM).filter(SLAResultORM.id == sla_result_id).first()
     if not sla_result:
-        raise HTTPException(status_code=404, detail="SLA result not found")
+        raise CodedHTTPException(status_code=404, detail="SLA result not found")
 
     existing = (
         db.query(SLADispute)
@@ -108,7 +109,7 @@ def flag_dispute(
         .first()
     )
     if existing:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An active dispute already exists for this SLA result.",
         )
@@ -155,7 +156,7 @@ def create_proposed_sla(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No pending dispute found for this SLA result.",
         )
@@ -163,7 +164,7 @@ def create_proposed_sla(
     # Get baseline SLA to get outage_id
     baseline_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.baseline_sla_result_id).first()
     if not baseline_sla:
-        raise HTTPException(status_code=404, detail="Baseline SLA not found")
+        raise CodedHTTPException(status_code=404, detail="Baseline SLA not found")
 
     # Calculate new proposed SLA
     new_sla = SLACalculator.calculate(
@@ -224,7 +225,7 @@ def resolve_dispute(
     db: Session = Depends(get_db),
 ):
     if payload.status not in (DisputeStatus.RESOLVED, DisputeStatus.REJECTED):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Resolution status must be 'resolved' or 'rejected'.",
         )
@@ -238,7 +239,7 @@ def resolve_dispute(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No pending dispute found for this SLA result.",
         )
@@ -251,13 +252,13 @@ def resolve_dispute(
     # If resolving and apply_proposed is true, mark the proposed SLA as latest
     if payload.status == DisputeStatus.RESOLVED and payload.apply_proposed:
         if not dispute.proposed_sla_result_id:
-            raise HTTPException(
+            raise CodedHTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No proposed SLA result to apply.",
             )
         proposed_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.proposed_sla_result_id).first()
         if not proposed_sla:
-            raise HTTPException(status_code=404, detail="Proposed SLA not found")
+            raise CodedHTTPException(status_code=404, detail="Proposed SLA not found")
 
         # Demote existing latest
         existing_latest = (
@@ -305,7 +306,7 @@ def get_dispute(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No dispute found for this SLA result.",
         )
@@ -329,7 +330,7 @@ def get_dispute_history(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No dispute found for this SLA result.",
         )

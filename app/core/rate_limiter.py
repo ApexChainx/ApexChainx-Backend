@@ -1,5 +1,5 @@
-﻿"""Auth rate limiting with Redis and persistent database enforcement."""
-import asyncio
+"""Auth rate limiting with Redis and persistent database enforcement."""
+
 import hashlib
 import logging
 import random
@@ -103,11 +103,7 @@ class RedisRateLimiter:
         self.async_client = redis_async.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
     def _key_namespace(self, key: str) -> str:
-        bounded_key = (
-            key
-            if len(key) <= 128
-            else hashlib.sha256(key.encode("utf-8")).hexdigest()
-        )
+        bounded_key = key if len(key) <= 128 else hashlib.sha256(key.encode("utf-8")).hexdigest()
         return f"auth_rate_limiter:{bounded_key}"
 
     def _is_circuit_open(self) -> bool:
@@ -137,9 +133,7 @@ class RedisRateLimiter:
 
     async def _eval_async(self, key: str) -> bool:
         encoded_key, now_ts, window, limit, member = self._lua_args(key)
-        result = await self.async_client.eval(
-            RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member
-        )
+        result = await self.async_client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
         return bool(result)
 
     def is_allowed(self, key: str, db: Session | None = None) -> bool:

@@ -112,9 +112,7 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
         cumulative = 0
         for bucket_bound in sorted(buckets.keys()):
             cumulative += buckets[bucket_bound]
-            prometheus_lines.append(
-                f'{metric_name}_seconds_bucket{{{base_labels}le="{bucket_bound}"}} {cumulative}'
-            )
+            prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="{bucket_bound}"}} {cumulative}')
         prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="+Inf"}} {stats["count"]}')
 
     # ── Process metadata ──────────────────────────────────────────────────

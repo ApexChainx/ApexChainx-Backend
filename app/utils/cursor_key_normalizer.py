@@ -4,6 +4,7 @@ Callers of app/utils/cursor.py pass a mix of timezone-aware datetimes,
 naive datetimes, and ISO strings for the same sort key, which can raise
 TypeError or silently drop rows when compared directly.
 """
+
 from datetime import datetime, timezone
 from typing import Union
 
