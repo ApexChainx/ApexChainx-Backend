@@ -1,6 +1,7 @@
 """Generates a real Stellar ed25519 keypair address instead of a fake
 33-character 'G' + uuid string that fails the platform's own validator.
 """
+
 import base64
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

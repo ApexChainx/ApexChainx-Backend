@@ -38,9 +38,7 @@ def _version_headers() -> dict[str, str]:
     }
 
 
-def _unsupported(
-    requested: str, status_code: int, detail: str, request: Request
-) -> JSONResponse:
+def _unsupported(requested: str, status_code: int, detail: str, request: Request) -> JSONResponse:
     headers = _version_headers()
     body = {
         "type": f"https://developer.apexchainx.io/errors/{status_code}",
@@ -73,8 +71,7 @@ def reject_unsupported_version(request: Request) -> JSONResponse | None:
         return _unsupported(
             requested,
             400,
-            f"Malformed {API_VERSION_HEADER} header; expected a dotted numeric "
-            f"version such as {settings.VERSION}.",
+            f"Malformed {API_VERSION_HEADER} header; expected a dotted numeric " f"version such as {settings.VERSION}.",
             request,
         )
 

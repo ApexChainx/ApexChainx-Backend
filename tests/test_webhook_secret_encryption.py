@@ -98,9 +98,7 @@ class TestStorageLayer:
             # Pinned to version 1: this asserts which secret bytes are used, and
             # version 1 is the payload-only input (#538 added the timestamped v2).
             sig, version, _timestamp = sign_payload(loaded.secret, '{"event": "sla.violation"}', version=1)
-        expected = hmac.new(
-            b"sign-secret-abc", b'{"event": "sla.violation"}', hashlib.sha256
-        ).hexdigest()
+        expected = hmac.new(b"sign-secret-abc", b'{"event": "sla.violation"}', hashlib.sha256).hexdigest()
         assert sig == expected
         assert version == 1
 

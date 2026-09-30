@@ -109,9 +109,7 @@ class WebhookUpdate(BaseModel):
     # #582: the per-webhook grace window used by secret rotations. None means
     # "leave unchanged"; the bound matches _apply_secret_rotation's fallback
     # rule so a value that would be ignored cannot be stored in the first place.
-    secret_grace_hours: int | None = Field(
-        default=None, ge=1, le=settings.MAX_WEBHOOK_SECRET_GRACE_HOURS
-    )
+    secret_grace_hours: int | None = Field(default=None, ge=1, le=settings.MAX_WEBHOOK_SECRET_GRACE_HOURS)
 
     @field_validator("name")
     @classmethod
@@ -752,9 +750,7 @@ def rotate_webhook_secret(webhook_id: UUID, current_user=Depends(require_admin),
     return WebhookSecretRotateResponse(
         webhook_id=webhook.id,
         new_secret=new_secret,
-        message=(
-            f"Secret rotated. Previous secret will remain valid for {grace_hours} hours."
-        ),
+        message=(f"Secret rotated. Previous secret will remain valid for {grace_hours} hours."),
     )
 
 

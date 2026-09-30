@@ -76,7 +76,9 @@ class AuthStore:
         return user_orm_to_pydantic(orm_user)
 
     @classmethod
-    def admin_create_user(cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session) -> AuthUser:
+    def admin_create_user(
+        cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session
+    ) -> AuthUser:
         """Admin-only user creation with audit logging of the approving admin."""
         user_repo = UserRepository(db)
         if user_repo.get_by_email(email):
@@ -84,8 +86,7 @@ class AuthStore:
 
         if not validate_password_policy(password):
             raise ValueError(
-                "Password does not meet policy requirements (min 8 chars, "
-                "uppercase, lowercase, digit, special char)"
+                "Password does not meet policy requirements (min 8 chars, " "uppercase, lowercase, digit, special char)"
             )
 
         hashed_password = get_password_hash(password)

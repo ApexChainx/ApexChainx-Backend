@@ -56,7 +56,9 @@ class MetricsRegistry:
             key = self._make_key(name, tags)
             self._gauges[key] = value
 
-    def record_histogram(self, name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None) -> None:
+    def record_histogram(
+        self, name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None
+    ) -> None:
         """Record a histogram value with automatic bucket tracking."""
         with self._lock:
             key = self._make_key(name, tags)
@@ -150,9 +152,7 @@ class MetricsRegistry:
                     }
 
             # Real per-bucket counts for timers (Prometheus exporter)
-            summary["timer_buckets"] = {
-                key: dict(buckets) for key, buckets in self._timer_buckets.items()
-            }
+            summary["timer_buckets"] = {key: dict(buckets) for key, buckets in self._timer_buckets.items()}
 
             return summary
 
@@ -202,7 +202,9 @@ def set_gauge(name: str, value: float, tags: dict[str, str] | None = None) -> No
     metrics.set_gauge(name, value, tags)
 
 
-def record_histogram(name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None) -> None:
+def record_histogram(
+    name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None
+) -> None:
     """Record a histogram value."""
     metrics.record_histogram(name, value, tags, buckets)
 

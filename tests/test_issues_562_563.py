@@ -107,7 +107,7 @@ class TestWebhookUniqueness:
         """The real PostgreSQL wording (constraint name + DETAIL) is detected."""
         orig = Exception(
             'duplicate key value violates unique constraint "uq_webhooks_url_events_live"\n'
-            "DETAIL:  Key (url, events)=(https://hooks.example.com/e, [\"sla.violation\"])"
+            'DETAIL:  Key (url, events)=(https://hooks.example.com/e, ["sla.violation"])'
             " already exists."
         )
         real_exc = IntegrityError(statement="INSERT INTO webhooks ...", params={}, orig=orig)
@@ -149,11 +149,14 @@ class TestWebhookUniqueness:
 
         _inner_app.dependency_overrides[get_db] = lambda: mock_session
         try:
-            with patch(
-                "app.api.v1.endpoints.webhooks.validate_webhook_url",
-                return_value=["1.2.3.4"],
-            ), patch(
-                "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
+            with (
+                patch(
+                    "app.api.v1.endpoints.webhooks.validate_webhook_url",
+                    return_value=["1.2.3.4"],
+                ),
+                patch(
+                    "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
+                ),
             ):
                 with TestClient(app, raise_server_exceptions=False) as c:
                     resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
@@ -183,11 +186,14 @@ class TestWebhookUniqueness:
 
         _inner_app.dependency_overrides[get_db] = lambda: mock_session
         try:
-            with patch(
-                "app.api.v1.endpoints.webhooks.validate_webhook_url",
-                return_value=["1.2.3.4"],
-            ), patch(
-                "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
+            with (
+                patch(
+                    "app.api.v1.endpoints.webhooks.validate_webhook_url",
+                    return_value=["1.2.3.4"],
+                ),
+                patch(
+                    "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
+                ),
             ):
                 with TestClient(app, raise_server_exceptions=False) as c:
                     resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
@@ -199,9 +205,7 @@ class TestWebhookUniqueness:
     def test_session_rollback_called_on_integrity_error(self, admin_override):
         """create_webhook must roll back the session before raising 409."""
         orig = Exception("UNIQUE constraint failed")
-        integrity_error = IntegrityError(
-            statement="INSERT ...", params={}, orig=orig
-        )
+        integrity_error = IntegrityError(statement="INSERT ...", params={}, orig=orig)
 
         mock_session = MagicMock()
         mock_session.query.return_value.filter.return_value.scalar.return_value = 0
@@ -212,11 +216,14 @@ class TestWebhookUniqueness:
 
         _inner_app.dependency_overrides[get_db] = lambda: mock_session
         try:
-            with patch(
-                "app.api.v1.endpoints.webhooks.validate_webhook_url",
-                return_value=["1.2.3.4"],
-            ), patch(
-                "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
+            with (
+                patch(
+                    "app.api.v1.endpoints.webhooks.validate_webhook_url",
+                    return_value=["1.2.3.4"],
+                ),
+                patch(
+                    "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
+                ),
             ):
                 with TestClient(app, raise_server_exceptions=False) as c:
                     resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
@@ -428,6 +435,7 @@ class TestCorrelationIdInErrorResponses:
         )
 
         import json
+
         body = json.loads(resp.body)
         assert body["correlation_id"] == cid
         # Header must also carry the same value
@@ -479,10 +487,7 @@ class TestCorrelationIdInErrorResponses:
 
         # The CorrelationIdFilter stamps correlation_id from the context var,
         # which we set to cid above.
-        matching = [
-            r for r in warning_records
-            if getattr(r, "correlation_id", None) == cid
-        ]
+        matching = [r for r in warning_records if getattr(r, "correlation_id", None) == cid]
         assert matching, (
             f"No WARNING log record had correlation_id={cid!r}. "
             f"Records: {[(r.levelno, vars(r).get('correlation_id')) for r in warning_records]}"

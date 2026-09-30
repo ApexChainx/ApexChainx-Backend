@@ -1,7 +1,5 @@
 """Regression tests for build_tx_memo_from_result (#356)."""
 
-import pytest
-
 from app.models.sla import SLAResult
 from app.services.contracts.translation import build_tx_memo_from_result
 

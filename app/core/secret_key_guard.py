@@ -11,6 +11,4 @@ class InsecureSecretKeyConfig(Exception):
 
 def assert_secret_key_is_safe(app_env: str, secret_key: str) -> None:
     if app_env != "development" and secret_key == KNOWN_DEFAULT_SECRET_KEY:
-        raise InsecureSecretKeyConfig(
-            "SECRET_KEY must be overridden outside the development environment"
-        )
+        raise InsecureSecretKeyConfig("SECRET_KEY must be overridden outside the development environment")

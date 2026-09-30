@@ -63,9 +63,7 @@ def archive_old_audit_entries() -> dict:
                     }
                     fh.write(json.dumps(record, default=str) + "\n")
 
-            db.query(AuditLogORM).filter(AuditLogORM.id.in_(ids)).delete(
-                synchronize_session=False
-            )
+            db.query(AuditLogORM).filter(AuditLogORM.id.in_(ids)).delete(synchronize_session=False)
             db.commit()
             archived += len(ids)
 

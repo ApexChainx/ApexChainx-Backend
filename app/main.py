@@ -233,7 +233,6 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
 
-
 # API routes
 app.include_router(api_router, prefix="/api/v1")
 

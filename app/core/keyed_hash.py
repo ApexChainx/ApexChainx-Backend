@@ -2,6 +2,7 @@
 unsalted single-round SHA-256 that's vulnerable to offline dictionary
 attacks against a database dump.
 """
+
 import hashlib
 import hmac
 import os

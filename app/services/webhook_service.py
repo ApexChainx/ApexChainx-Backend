@@ -146,9 +146,7 @@ def _build_headers(
         headers["traceparent"] = traceparent
 
     if webhook.secret:
-        sig_hex, _version, signed_timestamp = sign_payload(
-            webhook.secret, payload, signature_version, timestamp
-        )
+        sig_hex, _version, signed_timestamp = sign_payload(webhook.secret, payload, signature_version, timestamp)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
         headers["X-Webhook-Signature-Version"] = str(signature_version)
         # Version 1 ignores the timestamp; make the mismatch impossible to miss.
@@ -280,9 +278,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         db.query(WebhookDelivery)
         .filter(
             WebhookDelivery.id == delivery_id,
-            WebhookDelivery.status.in_(
-                [WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]
-            ),
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]),
         )
         .update(
             {
@@ -436,9 +432,7 @@ def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
-            WebhookDelivery.status.in_(
-                [WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]
-            ),
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]),
             WebhookDelivery.next_retry_at <= now,
         )
         .order_by(WebhookDelivery.next_retry_at)

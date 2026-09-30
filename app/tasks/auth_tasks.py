@@ -25,12 +25,8 @@ def cleanup_expired_auth_rows() -> dict:
         deleted_sessions = SessionRepository(db).delete_expired_sessions()
         deleted_families = TokenFamilyRepository(db).delete_orphaned_families()
 
-        increment_counter(
-            "auth_rows_cleanup_deleted", value=deleted_sessions, tags={"row_type": "session"}
-        )
-        increment_counter(
-            "auth_rows_cleanup_deleted", value=deleted_families, tags={"row_type": "token_family"}
-        )
+        increment_counter("auth_rows_cleanup_deleted", value=deleted_sessions, tags={"row_type": "session"})
+        increment_counter("auth_rows_cleanup_deleted", value=deleted_families, tags={"row_type": "token_family"})
 
         if deleted_sessions or deleted_families:
             audit_log.log_event(

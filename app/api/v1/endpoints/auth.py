@@ -153,12 +153,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     account = payload.email
 
     # Credential stuffing detection
-    credential_stuffing_detector.record_attempt(
-        client_ip, payload.password, account=payload.email, db=db
-    )
-    if credential_stuffing_detector.detect_stuffing(
-        client_ip, account=payload.email
-    ):
+    credential_stuffing_detector.record_attempt(client_ip, payload.password, account=payload.email, db=db)
+    if credential_stuffing_detector.detect_stuffing(client_ip, account=payload.email):
         # lockout_minutes() applies the AUTH_STUFFING_LOCKOUT_* cap; the
         # hard-coded 4x multiplier here used to produce hour-long outages.
         lockout_minutes = credential_stuffing_detector.lockout_minutes()
@@ -197,7 +193,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
-    
+
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
         raise CodedHTTPException(
@@ -224,7 +220,9 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}"):
-        raise CodedHTTPException(status_code=429, detail="Too many login attempts from this IP. Please try again later.")
+        raise CodedHTTPException(
+            status_code=429, detail="Too many login attempts from this IP. Please try again later."
+        )
 
     try:
         return AuthStore.login(payload, db=db)
@@ -241,10 +239,9 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"refresh_ip_{client_ip}", db=db):
         raise CodedHTTPException(
-            status_code=429, 
-            detail="Too many refresh attempts from this IP. Please try again later."
+            status_code=429, detail="Too many refresh attempts from this IP. Please try again later."
         )
-    
+
     try:
         return AuthStore.refresh(payload.refresh_token, db=db)
     except ValueError as exc:
@@ -272,7 +269,9 @@ def update_profile(
         except WalletAddressError as exc:
             # invalid_stellar_public_key (#569): registered code for wallet
             # address validation failures (docs/ERROR_CODES.md).
-            raise CodedHTTPException(status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key") from exc
+            raise CodedHTTPException(
+                status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key"
+            ) from exc
 
     repo = UserRepository(db)
     updated = repo.update_profile(
