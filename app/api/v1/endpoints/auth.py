@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -65,6 +67,9 @@ Configuration (in app.core.config):
 """
 
 
+logger = logging.getLogger(__name__)
+
+
 def _get_client_ip(request: Request) -> str:
     """
     Extract the real client IP, respecting TRUSTED_PROXY_COUNT.
@@ -112,10 +117,14 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
             detail="Too many registration attempts from this IP. Please try again later.",
         )
 
+    logger.info("auth_register_called", extra={"event": "auth_register", "ip": client_ip})
+
     try:
         return AuthStore.register(payload, db=db)
     except ValueError as exc:
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
@@ -225,10 +234,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
 
     try:
-        return AuthStore.login(payload, db=db)
+        result = AuthStore.login(payload, db=db)
+        logger.info("auth_login_success", extra={"event": "auth_login", "ip": client_ip, "email": payload.email})
+        return result
     except ValueError as exc:
-        # invalid_credentials (#569): AuthStore.login raises ValueError for a
-        # bad email/password pair (docs/ERROR_CODES.md).
+        logger.warning("auth_login_failed", extra={"event": "auth_login_failed", "ip": client_ip, "email": payload.email})
         raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
 
 
@@ -243,9 +253,12 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
         )
 
     try:
-        return AuthStore.refresh(payload.refresh_token, db=db)
+        result = AuthStore.refresh(payload.refresh_token, db=db)
+        return result
     except ValueError as exc:
         raise CodedHTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get("/me", response_model=AuthUser)
@@ -526,9 +539,13 @@ def revoke_token(
     will receive 401 'Token revoked' response."""
     from app.services.auth_store import TOKEN_TTL_SECONDS
 
-    token = _extract_bearer_token(authorization)
-    revoke(hash_token(token), TOKEN_TTL_SECONDS)
-    from app.services.audit_log import audit_log
+    try:
+        token = _extract_bearer_token(authorization)
+        revoke(hash_token(token), TOKEN_TTL_SECONDS)
+        from app.services.audit_log import audit_log
 
-    audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+        audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+        logger.info("auth_token_revoked", extra={"event": "auth_token_revoked", "email": current_user.email})
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
     return RevokeResponse(message="Token revoked successfully")
