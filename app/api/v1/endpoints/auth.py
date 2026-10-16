@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Header, Request, status
+import re
+
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -6,6 +8,7 @@ from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
+from app.core.tracing import traced
 from app.db.session import get_db
 from app.models.auth import (
     AdminCreateUserRequest,
@@ -99,6 +102,20 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
+_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _validate_user_id(user_id: str) -> str:
+    """Reject user-id values carrying characters outside a safe allowlist (#684).
+
+    Lookups are already parameterised by SQLAlchemy, so this is defence-in-depth
+    against malformed/injected identifiers reaching the data layer.
+    """
+    if not _USER_ID_PATTERN.match(user_id):
+        raise CodedHTTPException(status_code=422, detail="Invalid user id")
+    return user_id
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
@@ -140,6 +157,18 @@ def admin_create_user(
         )
     except ValueError as exc:
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/admin/users", response_model=list[AuthUser])
+def admin_list_users(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin-only paginated listing of user accounts (#685)."""
+    repo = UserRepository(db)
+    return [user_orm_to_pydantic(u) for u in repo.list_users(limit=limit, offset=offset)]
 
 
 @router.post("/login", response_model=AuthSessionResponse)
@@ -249,11 +278,13 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
 
 
 @router.get("/me", response_model=AuthUser)
+@traced("user.me")
 def me(current_user: AuthUser = Depends(get_current_user)):
     return current_user
 
 
 @router.patch("/me/profile", response_model=AuthUser)
+@traced("user.update_profile")
 def update_profile(
     payload: ProfileUpdateRequest,
     current_user: AuthUser = Depends(get_current_user),
@@ -300,6 +331,7 @@ def logout(authorization: str | None = Header(default=None), db: Session = Depen
 
 
 @router.get("/sessions", response_model=SessionInventoryResponse)
+@traced("user.sessions")
 def get_session_inventory(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -366,6 +398,12 @@ def admin_logout_all_sessions(
 @router.get("/ping")
 def auth_ping():
     return {"message": "auth ok"}
+
+
+@router.get("/users/health")
+def users_health():
+    """Lightweight health probe for the User API surface (#682)."""
+    return {"service": "users", "status": "ok"}
 
 
 # --------------------------------------------------------------------------- #
@@ -466,7 +504,7 @@ def impersonate_user(
     from app.services.audit_log import audit_log
 
     repo = UserRepository(db)
-    target = repo.get_by_id(payload.user_id)
+    target = repo.get_by_id(_validate_user_id(payload.user_id))
     if not target:
         raise CodedHTTPException(status_code=404, detail="Target user not found")
 

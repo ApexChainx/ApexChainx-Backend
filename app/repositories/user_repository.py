@@ -28,6 +28,16 @@ class UserRepository:
     def get_by_id(self, user_id: str) -> UserORM | None:
         return self.db.query(UserORM).filter(UserORM.id == user_id).first()
 
+    def list_users(self, limit: int = 50, offset: int = 0) -> list[UserORM]:
+        """Return a page of users, newest first (#685)."""
+        return (
+            self.db.query(UserORM)
+            .order_by(UserORM.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
     def create(self, user_id: str, email: str, hashed_password: str, full_name: str, role: Role) -> UserORM:
         user = UserORM(id=user_id, email=email, hashed_password=hashed_password, full_name=full_name, role=role)
         self.db.add(user)
