@@ -99,11 +99,73 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
+def _enforce_login_rate_limits(payload: LoginRequest, client_ip: str, db: Session) -> None:
+    """Apply credential-stuffing detection and account-scoped lockouts (#664).
+
+    Extracted from the ``login`` handler so it stays a thin coordinator rather
+    than a long chain of conditionals. Raises ``CodedHTTPException(429)`` when
+    the request should be rejected.
+    """
+    from app.services.audit_log import audit_log
+
+    credential_stuffing_detector.record_attempt(client_ip, payload.password, account=payload.email, db=db)
+    if credential_stuffing_detector.detect_stuffing(client_ip, account=payload.email):
+        # lockout_minutes() applies the AUTH_STUFFING_LOCKOUT_* cap; the
+        # hard-coded 4x multiplier here used to produce hour-long outages.
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "ip": client_ip,
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(
+                    client_ip, db, account=payload.email
+                ),
+                "action": f"account_locked_{lockout_minutes}_minutes",
+            },
+        )
+        # credential_stuffing_detected (#569): registered code for the spray
+        # lockout, so clients can distinguish it from plain rate limiting.
+        raise CodedHTTPException(
+            status_code=429,
+            detail=(
+                f"Too many login attempts for this account from your address. "
+                f"Account locked for {lockout_minutes} minutes."
+            ),
+            error_code="credential_stuffing_detected",
+        )
+
+    if credential_stuffing_detector.is_account_locked(payload.email):
+        # Distributed spray: each source IP stays under the pair threshold, so
+        # only the account-scoped counter sees it.
+        lockout_minutes = credential_stuffing_detector.lockout_minutes()
+        audit_log.log_event(
+            db,
+            "suspicious_login_activity",
+            details={
+                "scope": "account",
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(payload.email),
+                "action": f"account_locked_{lockout_minutes}_minutes",
+            },
+        )
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
 
-@router.post("/register", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=AuthUser,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new user",
+    description="Create a new engineer account and return its public profile. Rate-limited per client IP.",
+    responses={
+        201: {"description": "User created"},
+        400: {"description": "User already exists or password fails policy"},
+        429: {"description": "Too many registration attempts from this IP"},
+    },
+)
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
     if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
@@ -142,57 +204,27 @@ def admin_create_user(
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/login", response_model=AuthSessionResponse)
+@router.post(
+    "/login",
+    response_model=AuthSessionResponse,
+    summary="Authenticate a user",
+    description=(
+        "Exchange email/password credentials for an access and refresh token pair. "
+        "Rate-limited per IP and guarded by credential-stuffing detection."
+    ),
+    responses={
+        200: {"description": "Authentication succeeded"},
+        401: {"description": "Invalid credentials"},
+        429: {"description": "Too many attempts or account temporarily locked"},
+    },
+)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.services.audit_log import audit_log
 
     client_ip = _get_client_ip(request)
-    # The account scope the stuffing detector reasons about; it used to be
-    # referenced without ever being assigned, crashing every login with a
-    # NameError once the account-locked branch was reached.
-    account = payload.email
 
-    # Credential stuffing detection
-    credential_stuffing_detector.record_attempt(client_ip, payload.password, account=payload.email, db=db)
-    if credential_stuffing_detector.detect_stuffing(client_ip, account=payload.email):
-        # lockout_minutes() applies the AUTH_STUFFING_LOCKOUT_* cap; the
-        # hard-coded 4x multiplier here used to produce hour-long outages.
-        lockout_minutes = credential_stuffing_detector.lockout_minutes()
-        audit_log.log_event(
-            db,
-            "suspicious_login_activity",
-            details={
-                "ip": client_ip,
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_ip_count(
-                    client_ip, db, account=payload.email
-                ),
-                "action": f"account_locked_{lockout_minutes}_minutes",
-            },
-        )
-        # credential_stuffing_detected (#569): registered code for the spray
-        # lockout, so clients can distinguish it from plain rate limiting.
-        raise CodedHTTPException(
-            status_code=429,
-            detail=(
-                f"Too many login attempts for this account from your address. "
-                f"Account locked for {lockout_minutes} minutes."
-            ),
-            error_code="credential_stuffing_detected",
-        )
-
-    if credential_stuffing_detector.is_account_locked(account):
-        # Distributed spray: each source IP stays under the pair threshold, so
-        # only the account-scoped counter sees it.
-        lockout_minutes = credential_stuffing_detector.lockout_minutes()
-        audit_log.log_event(
-            db,
-            "suspicious_login_activity",
-            details={
-                "scope": "account",
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(account),
-                "action": f"account_locked_{lockout_minutes}_minutes",
-            },
-        )
+    # Credential-stuffing detection and account lockouts (#664).
+    _enforce_login_rate_limits(payload, client_ip, db)
 
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
