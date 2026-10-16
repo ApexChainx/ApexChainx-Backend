@@ -22,6 +22,7 @@ from app.models.auth import (
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.metrics import increment_counter
 from app.services.token_revocation import revoke
 from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
@@ -260,6 +261,9 @@ def update_profile(
     db: Session = Depends(get_db),
 ):
     """Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here."""
+    if not rate_limiter.is_allowed(f"profile_update_{current_user.id}", db=db):
+        raise CodedHTTPException(status_code=429, detail="Too many profile updates. Please try again later.")
+
     if payload.full_name is None and payload.stellar_wallet is None:
         raise CodedHTTPException(status_code=400, detail="No updatable fields provided")
 
@@ -288,6 +292,7 @@ def update_profile(
     audit_log.log_event(
         db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())}
     )
+    increment_counter("user_profile_update_total")
 
     return user_orm_to_pydantic(updated)
 
@@ -305,10 +310,14 @@ def get_session_inventory(
     db: Session = Depends(get_db),
 ):
     """Get all active sessions for the current user."""
+    if not rate_limiter.is_allowed(f"sessions_{current_user.id}", db=db):
+        raise CodedHTTPException(status_code=429, detail="Too many session lookups. Please try again later.")
+
     sessions = AuthStore.get_user_sessions(current_user.email, db=db)
 
     session_infos = [SessionInfo(**s) for s in sessions]
     active_count = sum(1 for s in session_infos if s.is_active)
+    increment_counter("user_session_inventory_total")
 
     return SessionInventoryResponse(
         sessions=session_infos,

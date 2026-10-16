@@ -14,6 +14,7 @@ from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.audit_log import audit_log
+from app.services.user_cache import UserCache
 
 TOKEN_TTL_SECONDS = 3600
 
@@ -353,12 +354,22 @@ class AuthStore:
             audit_log.log_event(db, "logout", email=email)
 
     @classmethod
-    def get_user_sessions(cls, email: str, db: Session = None) -> list:
+    def get_user_sessions(cls, email: str, db: Session = None, cache: UserCache | None = None) -> list:
         """Get all active sessions for a user (without token material)."""
+        if cache is not None:
+            cached = cache.get_sessions(email)
+            if cached is not None:
+                return cached
+
         if db is None:
             with SessionLocal() as db:
-                return cls._get_user_sessions_with_db(email, db)
-        return cls._get_user_sessions_with_db(email, db)
+                sessions = cls._get_user_sessions_with_db(email, db)
+        else:
+            sessions = cls._get_user_sessions_with_db(email, db)
+
+        if cache is not None:
+            cache.set_sessions(email, sessions)
+        return sessions
 
     @classmethod
     def _get_user_sessions_with_db(cls, email: str, db: Session) -> list:
