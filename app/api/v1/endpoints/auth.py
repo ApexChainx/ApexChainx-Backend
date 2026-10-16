@@ -22,6 +22,7 @@ from app.models.auth import (
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.metrics import increment_counter, timer
 from app.services.token_revocation import revoke
 from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
@@ -113,9 +114,13 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         )
 
     try:
-        return AuthStore.register(payload, db=db)
+        with timer("auth_register_duration", {"endpoint": "register"}):
+            user = AuthStore.register(payload, db=db)
     except ValueError as exc:
+        increment_counter("auth_register_total", tags={"status": "error"})
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+    increment_counter("auth_register_total", tags={"status": "success"})
+    return user
 
 
 @router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
@@ -224,12 +229,16 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             status_code=429, detail="Too many login attempts from this IP. Please try again later."
         )
 
-    try:
-        return AuthStore.login(payload, db=db)
-    except ValueError as exc:
-        # invalid_credentials (#569): AuthStore.login raises ValueError for a
-        # bad email/password pair (docs/ERROR_CODES.md).
-        raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
+    with timer("auth_login_duration", {"endpoint": "login"}):
+        try:
+            session = AuthStore.login(payload, db=db)
+        except ValueError as exc:
+            increment_counter("auth_login_total", tags={"status": "failure"})
+            # invalid_credentials (#569): AuthStore.login raises ValueError for a
+            # bad email/password pair (docs/ERROR_CODES.md).
+            raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
+        increment_counter("auth_login_total", tags={"status": "success"})
+        return session
 
 
 @router.post("/refresh", response_model=AuthSessionResponse)
@@ -464,6 +473,12 @@ def impersonate_user(
     - Reason is mandatory and recorded in the audit log
     """
     from app.services.audit_log import audit_log
+
+    # Rate-limit impersonation attempts per admin (#661).
+    if not rate_limiter.is_allowed(f"impersonate_{admin_user.id}", db=db):
+        raise CodedHTTPException(
+            status_code=429, detail="Too many impersonation attempts. Please try again later."
+        )
 
     repo = UserRepository(db)
     target = repo.get_by_id(payload.user_id)
