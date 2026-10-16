@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models.enums import Role
 
@@ -121,3 +121,19 @@ class ProfileUpdateRequest(BaseModel):
 
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
     stellar_wallet: str | None = Field(default=None, max_length=255)
+
+    @field_validator("full_name", "stellar_wallet", mode="before")
+    @classmethod
+    def _strip_whitespace(cls, value):
+        """Trim surrounding whitespace on user-supplied profile fields (#679)."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("full_name")
+    @classmethod
+    def _reject_control_chars(cls, value):
+        """Reject control characters that could corrupt logs or downstream stores (#679)."""
+        if value is not None and any(not ch.isprintable() for ch in value):
+            raise ValueError("full_name must contain printable characters only")
+        return value
