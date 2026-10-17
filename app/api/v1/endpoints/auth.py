@@ -31,6 +31,8 @@ from app.utils.wallet_address import WalletAddressError, normalize as normalize_
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
+
 """
 Auth Rate Limiting and Lockout Strategy:
 
@@ -324,11 +326,15 @@ def update_profile(
             ) from exc
 
     repo = UserRepository(db)
-    updated = repo.update_profile(
-        user_id=current_user.id,
-        full_name=payload.full_name,
-        stellar_wallet=payload.stellar_wallet,
-    )
+    try:
+        updated = repo.update_profile(
+            user_id=current_user.id,
+            full_name=payload.full_name,
+            stellar_wallet=payload.stellar_wallet,
+        )
+    except Exception as exc:
+        logger.error("profile_update_failed", extra={"event": "profile_update_failed", "email": current_user.email})
+        raise CodedHTTPException(status_code=500, detail="Failed to update profile") from exc
     if not updated:
         raise CodedHTTPException(status_code=404, detail="User not found")
 
@@ -337,6 +343,10 @@ def update_profile(
     changed = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
     audit_log.log_event(
         db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())}
+    )
+    logger.info(
+        "profile_updated",
+        extra={"event": "profile_updated", "email": current_user.email, "changed_fields": list(changed.keys())},
     )
 
     return user_orm_to_pydantic(updated)
@@ -461,7 +471,12 @@ def export_my_data(
     if not user_orm:
         raise CodedHTTPException(status_code=404, detail="User not found")
 
-    tarball_bytes = export_user_data(db, user_orm)
+    try:
+        tarball_bytes = export_user_data(db, user_orm)
+    except Exception as exc:
+        logger.error("data_export_failed", extra={"event": "data_export_failed", "email": current_user.email})
+        raise CodedHTTPException(status_code=500, detail="Failed to export user data") from exc
+    logger.info("data_exported", extra={"event": "data_exported", "email": current_user.email})
 
     def _iter():
         yield tarball_bytes
@@ -490,7 +505,12 @@ def erase_my_data(
     if not user_orm:
         raise CodedHTTPException(status_code=404, detail="User not found")
 
-    result = erase_user_data(db, user_orm)
+    try:
+        result = erase_user_data(db, user_orm)
+    except Exception as exc:
+        logger.error("data_erase_failed", extra={"event": "data_erase_failed", "email": current_user.email})
+        raise CodedHTTPException(status_code=500, detail="Failed to erase user data") from exc
+    logger.info("data_erased", extra={"event": "data_erased", "email": current_user.email})
     return result
 
 
