@@ -577,7 +577,7 @@ def impersonate_user(
         )
 
     repo = UserRepository(db)
-    target = repo.get_by_id(payload.user_id)
+    target = repo.get_by_id(_validate_user_id(payload.user_id))
     if not target:
         raise CodedHTTPException(status_code=404, detail="Target user not found")
 
