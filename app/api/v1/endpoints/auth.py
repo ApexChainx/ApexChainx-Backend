@@ -1,6 +1,6 @@
-import re
+import logging
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,7 @@ from app.models.auth import (
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.metrics import increment_counter, timer
 from app.services.token_revocation import revoke
 from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
@@ -68,6 +69,9 @@ Configuration (in app.core.config):
 """
 
 
+logger = logging.getLogger(__name__)
+
+
 def _get_client_ip(request: Request) -> str:
     """
     Extract the real client IP, respecting TRUSTED_PROXY_COUNT.
@@ -102,78 +106,15 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+def _enforce_login_rate_limits(payload: LoginRequest, client_ip: str, db: Session) -> None:
+    """Apply credential-stuffing detection and account-scoped lockouts (#664).
 
-
-def _validate_email_param(email: str) -> str:
-    """Validate an email path parameter before it reaches the data layer (#668).
-
-    The repositories already use parameterised SQLAlchemy queries, so this is
-    defence-in-depth: it rejects syntactically invalid values (including strings
-    carrying SQL metacharacters) with a 422 rather than passing them through.
+    Extracted from the ``login`` handler so it stays a thin coordinator rather
+    than a long chain of conditionals. Raises ``CodedHTTPException(429)`` when
+    the request should be rejected.
     """
-    cleaned = email.strip().lower()
-    if not _EMAIL_PATTERN.match(cleaned):
-        raise CodedHTTPException(status_code=422, detail="Invalid email address")
-    return cleaned
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-@router.post("/register", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
-@traced("auth.register")
-def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
-    client_ip = _get_client_ip(request)
-    if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
-        raise CodedHTTPException(
-            status_code=429,
-            detail="Too many registration attempts from this IP. Please try again later.",
-        )
-
-    try:
-        return AuthStore.register(payload, db=db)
-    except ValueError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
-def admin_create_user(
-    payload: AdminCreateUserRequest,
-    admin_user: AuthUser = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin-only endpoint to create a user with an explicit role.
-
-    Every creation is audit-logged with the approving admin's identity.
-    """
-    try:
-        return AuthStore.admin_create_user(
-            email=payload.email,
-            password=payload.password,
-            full_name=payload.full_name,
-            role=payload.role,
-            actor_id=admin_user.id,
-            actor_email=admin_user.email,
-            db=db,
-        )
-    except ValueError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/login", response_model=AuthSessionResponse)
-@traced("auth.login")
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.services.audit_log import audit_log
 
-    client_ip = _get_client_ip(request)
-    # The account scope the stuffing detector reasons about; it used to be
-    # referenced without ever being assigned, crashing every login with a
-    # NameError once the account-locked branch was reached.
-    account = payload.email
-
-    # Credential stuffing detection
     credential_stuffing_detector.record_attempt(client_ip, payload.password, account=payload.email, db=db)
     if credential_stuffing_detector.detect_stuffing(client_ip, account=payload.email):
         # lockout_minutes() applies the AUTH_STUFFING_LOCKOUT_* cap; the
@@ -201,7 +142,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             error_code="credential_stuffing_detected",
         )
 
-    if credential_stuffing_detector.is_account_locked(account):
+    if credential_stuffing_detector.is_account_locked(payload.email):
         # Distributed spray: each source IP stays under the pair threshold, so
         # only the account-scoped counter sees it.
         lockout_minutes = credential_stuffing_detector.lockout_minutes()
@@ -210,10 +151,93 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "suspicious_login_activity",
             details={
                 "scope": "account",
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(account),
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(payload.email),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post(
+    "/register",
+    response_model=AuthUser,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new user",
+    description="Create a new engineer account and return its public profile. Rate-limited per client IP.",
+    responses={
+        201: {"description": "User created"},
+        400: {"description": "User already exists or password fails policy"},
+        429: {"description": "Too many registration attempts from this IP"},
+    },
+)
+def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = _get_client_ip(request)
+    if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
+        raise CodedHTTPException(
+            status_code=429,
+            detail="Too many registration attempts from this IP. Please try again later.",
+        )
+
+    logger.info("auth_register_called", extra={"event": "auth_register", "ip": client_ip})
+
+    try:
+        with timer("auth_register_duration", {"endpoint": "register"}):
+            user = AuthStore.register(payload, db=db)
+    except ValueError as exc:
+        increment_counter("auth_register_total", tags={"status": "error"})
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
+def admin_create_user(
+    payload: AdminCreateUserRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin-only endpoint to create a user with an explicit role.
+
+    Every creation is audit-logged with the approving admin's identity.
+    """
+    try:
+        return AuthStore.admin_create_user(
+            email=payload.email,
+            password=payload.password,
+            full_name=payload.full_name,
+            role=payload.role,
+            actor_id=admin_user.id,
+            actor_email=admin_user.email,
+            db=db,
+        )
+    except ValueError as exc:
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/login",
+    response_model=AuthSessionResponse,
+    summary="Authenticate a user",
+    description=(
+        "Exchange email/password credentials for an access and refresh token pair. "
+        "Rate-limited per IP and guarded by credential-stuffing detection."
+    ),
+    responses={
+        200: {"description": "Authentication succeeded"},
+        401: {"description": "Invalid credentials"},
+        429: {"description": "Too many attempts or account temporarily locked"},
+    },
+)
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    from app.services.audit_log import audit_log
+
+    client_ip = _get_client_ip(request)
+
+    # Credential-stuffing detection and account lockouts (#664).
+    _enforce_login_rate_limits(payload, client_ip, db)
 
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
@@ -246,10 +270,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
 
     try:
-        return AuthStore.login(payload, db=db)
+        result = AuthStore.login(payload, db=db)
+        logger.info("auth_login_success", extra={"event": "auth_login", "ip": client_ip, "email": payload.email})
+        return result
     except ValueError as exc:
-        # invalid_credentials (#569): AuthStore.login raises ValueError for a
-        # bad email/password pair (docs/ERROR_CODES.md).
+        logger.warning("auth_login_failed", extra={"event": "auth_login_failed", "ip": client_ip, "email": payload.email})
         raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
 
 
@@ -265,9 +290,12 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
         )
 
     try:
-        return AuthStore.refresh(payload.refresh_token, db=db)
+        result = AuthStore.refresh(payload.refresh_token, db=db)
+        return result
     except ValueError as exc:
         raise CodedHTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get("/me", response_model=AuthUser)
@@ -501,6 +529,12 @@ def impersonate_user(
     """
     from app.services.audit_log import audit_log
 
+    # Rate-limit impersonation attempts per admin (#661).
+    if not rate_limiter.is_allowed(f"impersonate_{admin_user.id}", db=db):
+        raise CodedHTTPException(
+            status_code=429, detail="Too many impersonation attempts. Please try again later."
+        )
+
     repo = UserRepository(db)
     target = repo.get_by_id(payload.user_id)
     if not target:
@@ -562,9 +596,13 @@ def revoke_token(
     will receive 401 'Token revoked' response."""
     from app.services.auth_store import TOKEN_TTL_SECONDS
 
-    token = _extract_bearer_token(authorization)
-    revoke(hash_token(token), TOKEN_TTL_SECONDS)
-    from app.services.audit_log import audit_log
+    try:
+        token = _extract_bearer_token(authorization)
+        revoke(hash_token(token), TOKEN_TTL_SECONDS)
+        from app.services.audit_log import audit_log
 
-    audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+        audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+        logger.info("auth_token_revoked", extra={"event": "auth_token_revoked", "email": current_user.email})
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
     return RevokeResponse(message="Token revoked successfully")

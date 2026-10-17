@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.db_retry import run_with_db_retry
 from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
 from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
@@ -14,8 +17,11 @@ from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.audit_log import audit_log
+from app.services.auth_cache import AuthCache
 
 TOKEN_TTL_SECONDS = 3600
+
+logger = logging.getLogger(__name__)
 
 
 class AuthStore:
@@ -35,6 +41,16 @@ class AuthStore:
         else:
             expires_at = expires_at.astimezone(UTC)
         return current > expires_at
+
+    @staticmethod
+    def _is_locked(user) -> bool:
+        """Evaluate the account lock in Python from an already-loaded row (#659)."""
+        if user.locked_until is None:
+            return False
+        locked_until = user.locked_until
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=UTC)
+        return locked_until > datetime.now(UTC)
 
     @classmethod
     def register(cls, payload: RegisterRequest, db: Session = None) -> AuthUser:
@@ -122,12 +138,16 @@ class AuthStore:
         user_repo = UserRepository(db)
         session_repo = SessionRepository(db)
 
+        # Fetch the account once and evaluate the lock in Python. The previous
+        # code issued a separate ``is_account_locked`` query and then fetched the
+        # same row again, doubling DB round-trips on every login (#659).
+        stored_user = user_repo.get_by_email(payload.email)
+
         # Check if account is locked
-        if user_repo.is_account_locked(payload.email):
+        if stored_user is not None and cls._is_locked(stored_user):
             audit_log.log_event(db, "login_failed_locked", email=payload.email, details={"reason": "account_locked"})
             raise ValueError("Account is temporarily locked due to too many failed login attempts")
 
-        stored_user = user_repo.get_by_email(payload.email)
         if not stored_user or not verify_password(payload.password, stored_user.hashed_password):
             # Increment failed attempts
             user_repo.increment_failed_attempts(payload.email)
@@ -189,20 +209,21 @@ class AuthStore:
         )
 
     @classmethod
-    def get_user_for_token(cls, token: str, db: Session = None) -> AuthUser | None:
+    def get_user_for_token(cls, token: str, db: Session = None, cache: AuthCache | None = None) -> AuthUser | None:
         if db is None:
             with SessionLocal() as db:
-                return cls._get_user_for_token_with_db(token, db)
-        return cls._get_user_for_token_with_db(token, db)
+                return cls._get_user_for_token_with_db(token, db, cache=cache)
+        return cls._get_user_for_token_with_db(token, db, cache=cache)
 
     @classmethod
-    def _get_user_for_token_with_db(cls, token: str, db: Session) -> AuthUser | None:
+    def _get_user_for_token_with_db(cls, token: str, db: Session, cache: AuthCache | None = None) -> AuthUser | None:
         session_repo = SessionRepository(db)
         user_repo = UserRepository(db)
         token_family_repo = TokenFamilyRepository(db)
 
         hashed_token = hash_token(token)
-        session = session_repo.get_session(hashed_token)
+        # Wrap the session lookup in the shared transient-error retry policy (#665).
+        session = run_with_db_retry(session_repo.get_session, hashed_token)
         if not session:
             return None
 
@@ -227,8 +248,21 @@ class AuthStore:
             )
             return None
 
+        if cache is not None:
+            cached = cache.get_user(session.email)
+            if cached is not None:
+                try:
+                    return AuthUser.model_validate(cached)
+                except ValueError:
+                    logger.warning("Ignoring malformed auth cache entry for %s", session.email)
+
         stored_user = user_repo.get_by_email(session.email)
-        return user_orm_to_pydantic(stored_user) if stored_user else None
+        if not stored_user:
+            return None
+        user = user_orm_to_pydantic(stored_user)
+        if cache is not None:
+            cache.set_user(session.email, user.model_dump(mode="json"))
+        return user
 
     @classmethod
     def refresh(cls, refresh_token: str, db: Session = None) -> AuthSessionResponse:
