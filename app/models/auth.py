@@ -40,6 +40,14 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6)
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, value):
+        """Trim surrounding whitespace and lowercase the address (#663)."""
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
 
 class RegisterRequest(LoginRequest):
     model_config = ConfigDict(
@@ -56,6 +64,17 @@ class RegisterRequest(LoginRequest):
     # role is intentionally omitted — public registration always creates
     # an engineer account.  Admin users must be created via the admin-only
     # POST /auth/admin/users endpoint.
+
+    @field_validator("full_name")
+    @classmethod
+    def _sanitize_full_name(cls, value: str) -> str:
+        """Strip surrounding whitespace and reject control characters (#663)."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("full_name must not be empty")
+        if any(not ch.isprintable() for ch in cleaned):
+            raise ValueError("full_name must contain printable characters only")
+        return cleaned
 
 
 class AuthSessionResponse(BaseModel):
