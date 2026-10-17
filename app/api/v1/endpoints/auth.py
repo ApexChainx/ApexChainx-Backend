@@ -1,11 +1,12 @@
-import re
+import logging
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
+from app.core.db_retry import run_with_db_retry
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
 from app.core.tracing import traced
@@ -25,10 +26,13 @@ from app.models.auth import (
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.metrics import increment_counter, timer
 from app.services.token_revocation import revoke
 from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 """
 Auth Rate Limiting and Lockout Strategy:
@@ -68,6 +72,9 @@ Configuration (in app.core.config):
 """
 
 
+logger = logging.getLogger(__name__)
+
+
 def _get_client_ip(request: Request) -> str:
     """
     Extract the real client IP, respecting TRUSTED_PROXY_COUNT.
@@ -102,86 +109,15 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
+def _enforce_login_rate_limits(payload: LoginRequest, client_ip: str, db: Session) -> None:
+    """Apply credential-stuffing detection and account-scoped lockouts (#664).
 
-
-def _validate_user_id(user_id: str) -> str:
-    """Reject user-id values carrying characters outside a safe allowlist (#684).
-
-    Lookups are already parameterised by SQLAlchemy, so this is defence-in-depth
-    against malformed/injected identifiers reaching the data layer.
+    Extracted from the ``login`` handler so it stays a thin coordinator rather
+    than a long chain of conditionals. Raises ``CodedHTTPException(429)`` when
+    the request should be rejected.
     """
-    if not _USER_ID_PATTERN.match(user_id):
-        raise CodedHTTPException(status_code=422, detail="Invalid user id")
-    return user_id
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-@router.post("/register", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
-    client_ip = _get_client_ip(request)
-    if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
-        raise CodedHTTPException(
-            status_code=429,
-            detail="Too many registration attempts from this IP. Please try again later.",
-        )
-
-    try:
-        return AuthStore.register(payload, db=db)
-    except ValueError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
-def admin_create_user(
-    payload: AdminCreateUserRequest,
-    admin_user: AuthUser = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin-only endpoint to create a user with an explicit role.
-
-    Every creation is audit-logged with the approving admin's identity.
-    """
-    try:
-        return AuthStore.admin_create_user(
-            email=payload.email,
-            password=payload.password,
-            full_name=payload.full_name,
-            role=payload.role,
-            actor_id=admin_user.id,
-            actor_email=admin_user.email,
-            db=db,
-        )
-    except ValueError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/admin/users", response_model=list[AuthUser])
-def admin_list_users(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    admin_user: AuthUser = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin-only paginated listing of user accounts (#685)."""
-    repo = UserRepository(db)
-    return [user_orm_to_pydantic(u) for u in repo.list_users(limit=limit, offset=offset)]
-
-
-@router.post("/login", response_model=AuthSessionResponse)
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.services.audit_log import audit_log
 
-    client_ip = _get_client_ip(request)
-    # The account scope the stuffing detector reasons about; it used to be
-    # referenced without ever being assigned, crashing every login with a
-    # NameError once the account-locked branch was reached.
-    account = payload.email
-
-    # Credential stuffing detection
     credential_stuffing_detector.record_attempt(client_ip, payload.password, account=payload.email, db=db)
     if credential_stuffing_detector.detect_stuffing(client_ip, account=payload.email):
         # lockout_minutes() applies the AUTH_STUFFING_LOCKOUT_* cap; the
@@ -209,7 +145,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             error_code="credential_stuffing_detected",
         )
 
-    if credential_stuffing_detector.is_account_locked(account):
+    if credential_stuffing_detector.is_account_locked(payload.email):
         # Distributed spray: each source IP stays under the pair threshold, so
         # only the account-scoped counter sees it.
         lockout_minutes = credential_stuffing_detector.lockout_minutes()
@@ -218,10 +154,93 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "suspicious_login_activity",
             details={
                 "scope": "account",
-                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(account),
+                "unique_prefix_count": credential_stuffing_detector.get_suspicious_account_count(payload.email),
                 "action": f"account_locked_{lockout_minutes}_minutes",
             },
         )
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@router.post(
+    "/register",
+    response_model=AuthUser,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new user",
+    description="Create a new engineer account and return its public profile. Rate-limited per client IP.",
+    responses={
+        201: {"description": "User created"},
+        400: {"description": "User already exists or password fails policy"},
+        429: {"description": "Too many registration attempts from this IP"},
+    },
+)
+def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    client_ip = _get_client_ip(request)
+    if not rate_limiter.is_allowed(f"register_ip_{client_ip}", db=db):
+        raise CodedHTTPException(
+            status_code=429,
+            detail="Too many registration attempts from this IP. Please try again later.",
+        )
+
+    logger.info("auth_register_called", extra={"event": "auth_register", "ip": client_ip})
+
+    try:
+        with timer("auth_register_duration", {"endpoint": "register"}):
+            user = AuthStore.register(payload, db=db)
+    except ValueError as exc:
+        increment_counter("auth_register_total", tags={"status": "error"})
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/admin/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)
+def admin_create_user(
+    payload: AdminCreateUserRequest,
+    admin_user: AuthUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin-only endpoint to create a user with an explicit role.
+
+    Every creation is audit-logged with the approving admin's identity.
+    """
+    try:
+        return AuthStore.admin_create_user(
+            email=payload.email,
+            password=payload.password,
+            full_name=payload.full_name,
+            role=payload.role,
+            actor_id=admin_user.id,
+            actor_email=admin_user.email,
+            db=db,
+        )
+    except ValueError as exc:
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/login",
+    response_model=AuthSessionResponse,
+    summary="Authenticate a user",
+    description=(
+        "Exchange email/password credentials for an access and refresh token pair. "
+        "Rate-limited per IP and guarded by credential-stuffing detection."
+    ),
+    responses={
+        200: {"description": "Authentication succeeded"},
+        401: {"description": "Invalid credentials"},
+        429: {"description": "Too many attempts or account temporarily locked"},
+    },
+)
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    from app.services.audit_log import audit_log
+
+    client_ip = _get_client_ip(request)
+
+    # Credential-stuffing detection and account lockouts (#664).
+    _enforce_login_rate_limits(payload, client_ip, db)
 
     # Rate limit by IP
     if not rate_limiter.is_allowed(f"login_ip_{client_ip}", db=db):
@@ -254,14 +273,16 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         )
 
     try:
-        return AuthStore.login(payload, db=db)
+        result = AuthStore.login(payload, db=db)
+        logger.info("auth_login_success", extra={"event": "auth_login", "ip": client_ip, "email": payload.email})
+        return result
     except ValueError as exc:
-        # invalid_credentials (#569): AuthStore.login raises ValueError for a
-        # bad email/password pair (docs/ERROR_CODES.md).
+        logger.warning("auth_login_failed", extra={"event": "auth_login_failed", "ip": client_ip, "email": payload.email})
         raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
 
 
 @router.post("/refresh", response_model=AuthSessionResponse)
+@traced("auth.refresh")
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
 
@@ -272,44 +293,62 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
         )
 
     try:
-        return AuthStore.refresh(payload.refresh_token, db=db)
+        result = AuthStore.refresh(payload.refresh_token, db=db)
+        return result
     except ValueError as exc:
         raise CodedHTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
 
 
-@router.get("/me", response_model=AuthUser)
-@traced("user.me")
+@router.get(
+    "/me",
+    response_model=AuthUser,
+    summary="Get the current user",
+    description="Return the profile of the user identified by the bearer token.",
+    responses={200: {"description": "Current user profile"}, 401: {"description": "Missing or invalid token"}},
+)
 def me(current_user: AuthUser = Depends(get_current_user)):
     return current_user
 
 
-@router.patch("/me/profile", response_model=AuthUser)
-@traced("user.update_profile")
+@router.patch(
+    "/me/profile",
+    response_model=AuthUser,
+    summary="Update the current user's profile",
+    description="Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable.",
+    responses={
+        200: {"description": "Profile updated"},
+        400: {"description": "No updatable fields provided"},
+        404: {"description": "User not found"},
+        422: {"description": "Invalid stellar wallet address"},
+    },
+)
 def update_profile(
     payload: ProfileUpdateRequest,
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here."""
+    if not rate_limiter.is_allowed(f"profile_update_{current_user.id}", db=db):
+        raise CodedHTTPException(status_code=429, detail="Too many profile updates. Please try again later.")
+
     if payload.full_name is None and payload.stellar_wallet is None:
         raise CodedHTTPException(status_code=400, detail="No updatable fields provided")
 
     if payload.stellar_wallet is not None:
-        try:
-            normalize_wallet(payload.stellar_wallet)
-        except WalletAddressError as exc:
-            # invalid_stellar_public_key (#569): registered code for wallet
-            # address validation failures (docs/ERROR_CODES.md).
-            raise CodedHTTPException(
-                status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key"
-            ) from exc
+        _validate_wallet_or_422(payload.stellar_wallet)
 
     repo = UserRepository(db)
-    updated = repo.update_profile(
-        user_id=current_user.id,
-        full_name=payload.full_name,
-        stellar_wallet=payload.stellar_wallet,
-    )
+    try:
+        updated = repo.update_profile(
+            user_id=current_user.id,
+            full_name=payload.full_name,
+            stellar_wallet=payload.stellar_wallet,
+        )
+    except Exception as exc:
+        logger.error("profile_update_failed", extra={"event": "profile_update_failed", "email": current_user.email})
+        raise CodedHTTPException(status_code=500, detail="Failed to update profile") from exc
     if not updated:
         raise CodedHTTPException(status_code=404, detail="User not found")
 
@@ -318,6 +357,10 @@ def update_profile(
     changed = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
     audit_log.log_event(
         db, "profile_updated", email=current_user.email, details={"changed_fields": list(changed.keys())}
+    )
+    logger.info(
+        "profile_updated",
+        extra={"event": "profile_updated", "email": current_user.email, "changed_fields": list(changed.keys())},
     )
 
     return user_orm_to_pydantic(updated)
@@ -330,21 +373,30 @@ def logout(authorization: str | None = Header(default=None), db: Session = Depen
     return AuthLogoutResponse(message="Logged out successfully")
 
 
-@router.get("/sessions", response_model=SessionInventoryResponse)
-@traced("user.sessions")
+@router.get(
+    "/sessions",
+    response_model=SessionInventoryResponse,
+    summary="Get the current user's sessions",
+    description="Return all active sessions for the authenticated user.",
+    responses={200: {"description": "Session inventory"}, 401: {"description": "Missing or invalid token"}},
+)
 def get_session_inventory(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get all active sessions for the current user."""
+    """Get all active sessions for the current user (paginated, #669)."""
     sessions = AuthStore.get_user_sessions(current_user.email, db=db)
+    page = sessions[offset : offset + limit]
 
-    session_infos = [SessionInfo(**s) for s in sessions]
+    session_infos = [SessionInfo(**s) for s in page]
     active_count = sum(1 for s in session_infos if s.is_active)
+    increment_counter("user_session_inventory_total")
 
     return SessionInventoryResponse(
         sessions=session_infos,
-        total_count=len(session_infos),
+        total_count=len(sessions),
         active_count=active_count,
     )
 
@@ -352,18 +404,22 @@ def get_session_inventory(
 @router.get("/admin/sessions/{email}", response_model=SessionInventoryResponse)
 def get_admin_session_inventory(
     email: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     admin_user: AuthUser = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin endpoint to get all sessions for a specific user."""
+    """Admin endpoint to get all sessions for a specific user (paginated)."""
+    email = _validate_email_param(email)
     sessions = AuthStore.get_user_sessions(email, db=db)
+    page = sessions[offset : offset + limit]
 
-    session_infos = [SessionInfo(**s) for s in sessions]
+    session_infos = [SessionInfo(**s) for s in page]
     active_count = sum(1 for s in session_infos if s.is_active)
 
     return SessionInventoryResponse(
         sessions=session_infos,
-        total_count=len(session_infos),
+        total_count=len(sessions),
         active_count=active_count,
     )
 
@@ -388,6 +444,7 @@ def admin_logout_all_sessions(
     db: Session = Depends(get_db),
 ):
     """Admin endpoint to invalidate all sessions for a specific user."""
+    email = _validate_email_param(email)
     count = AuthStore.logout_all_sessions(email, db=db)
     return LogoutAllSessionsResponse(
         message=f"Logged out user {email} from {count} session(s)",
@@ -400,10 +457,10 @@ def auth_ping():
     return {"message": "auth ok"}
 
 
-@router.get("/users/health")
-def users_health():
-    """Lightweight health probe for the User API surface (#682)."""
-    return {"service": "users", "status": "ok"}
+@router.get("/health")
+def auth_health():
+    """Lightweight health probe for the Auth API surface (#666)."""
+    return {"service": "auth", "status": "ok"}
 
 
 # --------------------------------------------------------------------------- #
@@ -435,7 +492,12 @@ def export_my_data(
     if not user_orm:
         raise CodedHTTPException(status_code=404, detail="User not found")
 
-    tarball_bytes = export_user_data(db, user_orm)
+    try:
+        tarball_bytes = export_user_data(db, user_orm)
+    except Exception as exc:
+        logger.error("data_export_failed", extra={"event": "data_export_failed", "email": current_user.email})
+        raise CodedHTTPException(status_code=500, detail="Failed to export user data") from exc
+    logger.info("data_exported", extra={"event": "data_exported", "email": current_user.email})
 
     def _iter():
         yield tarball_bytes
@@ -464,7 +526,12 @@ def erase_my_data(
     if not user_orm:
         raise CodedHTTPException(status_code=404, detail="User not found")
 
-    result = erase_user_data(db, user_orm)
+    try:
+        result = erase_user_data(db, user_orm)
+    except Exception as exc:
+        logger.error("data_erase_failed", extra={"event": "data_erase_failed", "email": current_user.email})
+        raise CodedHTTPException(status_code=500, detail="Failed to erase user data") from exc
+    logger.info("data_erased", extra={"event": "data_erased", "email": current_user.email})
     return result
 
 
@@ -502,6 +569,12 @@ def impersonate_user(
     - Reason is mandatory and recorded in the audit log
     """
     from app.services.audit_log import audit_log
+
+    # Rate-limit impersonation attempts per admin (#661).
+    if not rate_limiter.is_allowed(f"impersonate_{admin_user.id}", db=db):
+        raise CodedHTTPException(
+            status_code=429, detail="Too many impersonation attempts. Please try again later."
+        )
 
     repo = UserRepository(db)
     target = repo.get_by_id(_validate_user_id(payload.user_id))
@@ -564,9 +637,13 @@ def revoke_token(
     will receive 401 'Token revoked' response."""
     from app.services.auth_store import TOKEN_TTL_SECONDS
 
-    token = _extract_bearer_token(authorization)
-    revoke(hash_token(token), TOKEN_TTL_SECONDS)
-    from app.services.audit_log import audit_log
+    try:
+        token = _extract_bearer_token(authorization)
+        revoke(hash_token(token), TOKEN_TTL_SECONDS)
+        from app.services.audit_log import audit_log
 
-    audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+        audit_log.log_event(db, "token_revoked", email=current_user.email, actor_id=current_user.id)
+        logger.info("auth_token_revoked", extra={"event": "auth_token_revoked", "email": current_user.email})
+    except Exception as exc:
+        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
     return RevokeResponse(message="Token revoked successfully")
