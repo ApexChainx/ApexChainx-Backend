@@ -312,6 +312,9 @@ def update_profile(
     db: Session = Depends(get_db),
 ):
     """Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here."""
+    if not rate_limiter.is_allowed(f"profile_update_{current_user.id}", db=db):
+        raise CodedHTTPException(status_code=429, detail="Too many profile updates. Please try again later.")
+
     if payload.full_name is None and payload.stellar_wallet is None:
         raise CodedHTTPException(status_code=400, detail="No updatable fields provided")
 
@@ -372,6 +375,7 @@ def get_session_inventory(
 
     session_infos = [SessionInfo(**s) for s in page]
     active_count = sum(1 for s in session_infos if s.is_active)
+    increment_counter("user_session_inventory_total")
 
     return SessionInventoryResponse(
         sessions=session_infos,
