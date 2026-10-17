@@ -24,6 +24,7 @@ from app.models.auth import (
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
+from app.services.metrics import increment_counter, timer
 from app.services.token_revocation import revoke
 from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
 
@@ -182,8 +183,10 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     logger.info("auth_register_called", extra={"event": "auth_register", "ip": client_ip})
 
     try:
-        return AuthStore.register(payload, db=db)
+        with timer("auth_register_duration", {"endpoint": "register"}):
+            user = AuthStore.register(payload, db=db)
     except ValueError as exc:
+        increment_counter("auth_register_total", tags={"status": "error"})
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
@@ -509,6 +512,12 @@ def impersonate_user(
     - Reason is mandatory and recorded in the audit log
     """
     from app.services.audit_log import audit_log
+
+    # Rate-limit impersonation attempts per admin (#661).
+    if not rate_limiter.is_allowed(f"impersonate_{admin_user.id}", db=db):
+        raise CodedHTTPException(
+            status_code=429, detail="Too many impersonation attempts. Please try again later."
+        )
 
     repo = UserRepository(db)
     target = repo.get_by_id(payload.user_id)
