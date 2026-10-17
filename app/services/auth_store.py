@@ -6,6 +6,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.db_retry import run_with_db_retry
 from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
 from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
@@ -202,7 +203,8 @@ class AuthStore:
         token_family_repo = TokenFamilyRepository(db)
 
         hashed_token = hash_token(token)
-        session = session_repo.get_session(hashed_token)
+        # Wrap the session lookup in the shared transient-error retry policy (#665).
+        session = run_with_db_retry(session_repo.get_session, hashed_token)
         if not session:
             return None
 
