@@ -3,6 +3,8 @@
 All handlers now pass a request-scoped database session to WalletRegistry.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,8 @@ from app.services.wallet_registry import WalletRegistry
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
+
 
 @router.post("/create", response_model=WalletCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_wallet(
@@ -38,7 +42,16 @@ def create_wallet(
     (issue #531). One user gets one wallet, and a retried registration is told
     which address already exists instead of creating a second row.
     """
-    return WalletRegistry.create_wallet(db, payload)
+    try:
+        wallet = WalletRegistry.create_wallet(db, payload)
+    except ApexConflictError:
+        # Preserve the registry's intended 409 (wallet_already_exists).
+        raise
+    except Exception as exc:
+        logger.error("wallet_create_failed", extra={"event": "wallet_create_failed", "user_id": payload.user_id})
+        raise CodedHTTPException(status_code=500, detail="Failed to create wallet") from exc
+    logger.info("wallet_created", extra={"event": "wallet_created", "user_id": payload.user_id})
+    return wallet
 
 
 @router.post("/link", response_model=Wallet)
@@ -48,13 +61,19 @@ def link_wallet(
     current_user=Depends(require_engineer),
 ) -> Wallet:
     try:
-        return WalletRegistry.link_wallet(db, payload)
+        wallet = WalletRegistry.link_wallet(db, payload)
     except ApexConflictError as exc:
         # wallet_already_linked (#569): the registry rejects linking a user or
         # address that is already bound to a different entity.
+        logger.warning("wallet_link_conflict", extra={"event": "wallet_link_conflict", "user_id": payload.user_id})
         raise CodedHTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc), error_code="wallet_already_linked"
         )
+    except Exception as exc:
+        logger.error("wallet_link_failed", extra={"event": "wallet_link_failed", "user_id": payload.user_id})
+        raise CodedHTTPException(status_code=500, detail="Failed to link wallet") from exc
+    logger.info("wallet_linked", extra={"event": "wallet_linked", "user_id": payload.user_id})
+    return wallet
 
 
 @router.get("/ping")
@@ -68,8 +87,15 @@ def get_wallet(
     db: Session = Depends(get_db),
     current_user=Depends(require_engineer),
 ) -> Wallet:
-    wallet = WalletRegistry.get_wallet(db, user_id)
+    try:
+        wallet = WalletRegistry.get_wallet(db, user_id)
+    except CodedHTTPException:
+        raise
+    except Exception as exc:
+        logger.error("wallet_lookup_failed", extra={"event": "wallet_lookup_failed", "user_id": user_id})
+        raise CodedHTTPException(status_code=500, detail="Failed to fetch wallet") from exc
     if not wallet:
+        logger.warning("wallet_not_found", extra={"event": "wallet_not_found", "user_id": user_id})
         raise CodedHTTPException(status_code=404, detail="Wallet not found", error_code="wallet_not_found")
     return wallet
 
