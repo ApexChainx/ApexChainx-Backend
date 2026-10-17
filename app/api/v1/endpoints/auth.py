@@ -8,6 +8,7 @@ from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
+from app.core.tracing import traced
 from app.db.session import get_db
 from app.models.auth import (
     AdminCreateUserRequest,
@@ -278,6 +279,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 
 @router.post("/refresh", response_model=AuthSessionResponse)
+@traced("auth.refresh")
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
 
@@ -349,18 +351,21 @@ def logout(authorization: str | None = Header(default=None), db: Session = Depen
 
 @router.get("/sessions", response_model=SessionInventoryResponse)
 def get_session_inventory(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get all active sessions for the current user."""
+    """Get all active sessions for the current user (paginated, #669)."""
     sessions = AuthStore.get_user_sessions(current_user.email, db=db)
+    page = sessions[offset : offset + limit]
 
-    session_infos = [SessionInfo(**s) for s in sessions]
+    session_infos = [SessionInfo(**s) for s in page]
     active_count = sum(1 for s in session_infos if s.is_active)
 
     return SessionInventoryResponse(
         sessions=session_infos,
-        total_count=len(session_infos),
+        total_count=len(sessions),
         active_count=active_count,
     )
 
@@ -368,18 +373,22 @@ def get_session_inventory(
 @router.get("/admin/sessions/{email}", response_model=SessionInventoryResponse)
 def get_admin_session_inventory(
     email: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     admin_user: AuthUser = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin endpoint to get all sessions for a specific user."""
+    """Admin endpoint to get all sessions for a specific user (paginated)."""
+    email = _validate_email_param(email)
     sessions = AuthStore.get_user_sessions(email, db=db)
+    page = sessions[offset : offset + limit]
 
-    session_infos = [SessionInfo(**s) for s in sessions]
+    session_infos = [SessionInfo(**s) for s in page]
     active_count = sum(1 for s in session_infos if s.is_active)
 
     return SessionInventoryResponse(
         sessions=session_infos,
-        total_count=len(session_infos),
+        total_count=len(sessions),
         active_count=active_count,
     )
 
@@ -404,6 +413,7 @@ def admin_logout_all_sessions(
     db: Session = Depends(get_db),
 ):
     """Admin endpoint to invalidate all sessions for a specific user."""
+    email = _validate_email_param(email)
     count = AuthStore.logout_all_sessions(email, db=db)
     return LogoutAllSessionsResponse(
         message=f"Logged out user {email} from {count} session(s)",
@@ -414,6 +424,12 @@ def admin_logout_all_sessions(
 @router.get("/ping")
 def auth_ping():
     return {"message": "auth ok"}
+
+
+@router.get("/health")
+def auth_health():
+    """Lightweight health probe for the Auth API surface (#666)."""
+    return {"service": "auth", "status": "ok"}
 
 
 # --------------------------------------------------------------------------- #
