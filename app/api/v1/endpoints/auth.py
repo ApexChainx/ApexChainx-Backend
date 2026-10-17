@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
+from app.core.db_retry import run_with_db_retry
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
 from app.core.tracing import traced
@@ -300,12 +301,29 @@ def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get
         raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
 
 
-@router.get("/me", response_model=AuthUser)
+@router.get(
+    "/me",
+    response_model=AuthUser,
+    summary="Get the current user",
+    description="Return the profile of the user identified by the bearer token.",
+    responses={200: {"description": "Current user profile"}, 401: {"description": "Missing or invalid token"}},
+)
 def me(current_user: AuthUser = Depends(get_current_user)):
     return current_user
 
 
-@router.patch("/me/profile", response_model=AuthUser)
+@router.patch(
+    "/me/profile",
+    response_model=AuthUser,
+    summary="Update the current user's profile",
+    description="Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable.",
+    responses={
+        200: {"description": "Profile updated"},
+        400: {"description": "No updatable fields provided"},
+        404: {"description": "User not found"},
+        422: {"description": "Invalid stellar wallet address"},
+    },
+)
 def update_profile(
     payload: ProfileUpdateRequest,
     current_user: AuthUser = Depends(get_current_user),
@@ -319,14 +337,7 @@ def update_profile(
         raise CodedHTTPException(status_code=400, detail="No updatable fields provided")
 
     if payload.stellar_wallet is not None:
-        try:
-            normalize_wallet(payload.stellar_wallet)
-        except WalletAddressError as exc:
-            # invalid_stellar_public_key (#569): registered code for wallet
-            # address validation failures (docs/ERROR_CODES.md).
-            raise CodedHTTPException(
-                status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key"
-            ) from exc
+        _validate_wallet_or_422(payload.stellar_wallet)
 
     repo = UserRepository(db)
     try:
@@ -362,7 +373,13 @@ def logout(authorization: str | None = Header(default=None), db: Session = Depen
     return AuthLogoutResponse(message="Logged out successfully")
 
 
-@router.get("/sessions", response_model=SessionInventoryResponse)
+@router.get(
+    "/sessions",
+    response_model=SessionInventoryResponse,
+    summary="Get the current user's sessions",
+    description="Return all active sessions for the authenticated user.",
+    responses={200: {"description": "Session inventory"}, 401: {"description": "Missing or invalid token"}},
+)
 def get_session_inventory(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
