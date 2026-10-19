@@ -24,7 +24,7 @@ dependencies = [
     "celery==5.4.0",
     "httpx==0.28.1",
     "python-multipart==0.0.19",
-    "PyJWT==2.8.0",
+    "PyJWT==2.15.1",
     "email-validator>=2.0",
     "passlib[bcrypt]==1.7.4",
     # passlib 1.7.4 is incompatible with bcrypt 5.x: its backend verification
