@@ -24,6 +24,13 @@ Design notes
 * Parsing is deliberately strict: a record without a ``transaction_hash`` would
   break the upsert's conflict target, so it fails the batch instead of writing
   a row that can never be deduplicated.
+* Tracing (#715) follows the project-wide OTel setup in ``app/core/tracing.py``:
+  each pass is one ``tx_indexer.run_once`` span with ``fetch_page`` and
+  ``persist`` children, retries are span events, failures set the span status
+  to ERROR with the exception recorded, and the W3C ``traceparent`` of the
+  active span is forwarded to Horizon so the upstream call joins the same
+  trace. The tracer is injectable, so tests assert spans without touching the
+  process-global provider.
 """
 
 from __future__ import annotations
@@ -39,8 +46,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 import httpx
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode, Tracer
 
 from app.core.config import settings
+from app.core.tracing import get_current_traceparent
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +119,18 @@ class RetryPolicy:
         factor = 1.0 + self.jitter_ratio * (2.0 * self.rng() - 1.0)
         return min(max(raw * factor, 0.0), self.max_delay)
 
-    def call(self, fn: Callable[[], Any], *, description: str) -> Any:
-        """Run *fn*, retrying transient failures with backoff."""
+    def call(
+        self,
+        fn: Callable[[], Any],
+        *,
+        description: str,
+        on_retry: Callable[[int, float, BaseException], None] | None = None,
+    ) -> Any:
+        """Run *fn*, retrying transient failures with backoff.
+
+        *on_retry* is invoked with (attempt, delay, error) before each sleep so
+        callers can attach span events without this class depending on OTel.
+        """
         attempt = 0
         while True:
             attempt += 1
@@ -134,6 +154,8 @@ class RetryPolicy:
                         ) from exc
                     raise
                 delay = self.compute_delay(attempt)
+                if on_retry is not None:
+                    on_retry(attempt, delay, exc)
                 logger.warning(
                     "tx_indexer_retry",
                     extra={
@@ -270,7 +292,11 @@ class HorizonPaymentSource:
         params: dict[str, str] = {"order": "asc", "limit": str(limit)}
         if cursor:
             params["cursor"] = cursor
-        response = self._client.get(f"{self._base_url}/payments", params=params)
+        # Forward the active trace context (when there is one) so Horizon-side
+        # instrumentation and our span join the same distributed trace.
+        traceparent = get_current_traceparent()
+        headers = {"traceparent": traceparent} if traceparent else None
+        response = self._client.get(f"{self._base_url}/payments", params=params, headers=headers)
         # 4xx/5xx become HTTPStatusError; RetryPolicy decides whether it is
         # transient (429/5xx) or final (400 from a malformed cursor).
         response.raise_for_status()
@@ -294,10 +320,12 @@ class TxIndexer:
         policy: RetryPolicy | None = None,
         batch_size: int | None = None,
         state_recorder: StateRecorder | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self._source = source
         self._sink = sink
         self._state_recorder = state_recorder
+        self._tracer = tracer or trace.get_tracer(__name__)
         self._policy = policy or RetryPolicy(
             max_attempts=settings.TX_INDEXER_MAX_ATTEMPTS,
             base_delay=settings.TX_INDEXER_BACKOFF_BASE_SECONDS,
@@ -312,39 +340,75 @@ class TxIndexer:
 
     def fetch_page(self, cursor: str | None) -> FetchedPage:
         """Fetch one page, retrying transient Horizon failures."""
-        return self._policy.call(
-            lambda: self._source.fetch_payments(cursor=cursor, limit=self._batch_size),
-            description=f"horizon payments fetch (cursor={cursor or 'start'})",
-        )
+        with self._tracer.start_as_current_span("tx_indexer.fetch_page") as span:
+            span.set_attribute("tx_indexer.component", "tx-indexer")
+            span.set_attribute("tx_indexer.batch_size", self._batch_size)
+            span.set_attribute("tx_indexer.cursor_present", cursor is not None)
+
+            def _record_retry(attempt: int, delay: float, error: BaseException) -> None:
+                span.add_event(
+                    "retry",
+                    {
+                        "attempt": attempt,
+                        "delay_seconds": round(delay, 3),
+                        "error.type": type(error).__name__,
+                    },
+                )
+
+            try:
+                page = self._policy.call(
+                    lambda: self._source.fetch_payments(cursor=cursor, limit=self._batch_size),
+                    description=f"horizon payments fetch (cursor={cursor or 'start'})",
+                    on_retry=_record_retry,
+                )
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
+
+            span.set_attribute("tx_indexer.fetched", len(page.records))
+            span.set_attribute("tx_indexer.next_cursor_present", page.next_cursor is not None)
+            return page
 
     def run_once(self, cursor: str | None = None) -> IndexResult:
         """Index a single page and return the cursor the next pass should use."""
-        try:
-            page = self.fetch_page(cursor)
-            transactions = [parse_horizon_record(record) for record in page.records]
-            inserted = self._sink.upsert_many(transactions)
-        except Exception as exc:
-            # Every failure path (retries exhausted, unparseable record, write
-            # error) is visible to the health probe, not just transport errors.
-            self._record_failure(str(exc))
-            raise
+        with self._tracer.start_as_current_span("tx_indexer.run_once") as span:
+            span.set_attribute("tx_indexer.component", "tx-indexer")
+            span.set_attribute("tx_indexer.cursor_present", cursor is not None)
+            try:
+                page = self.fetch_page(cursor)
+                transactions = [parse_horizon_record(record) for record in page.records]
+                with self._tracer.start_as_current_span("tx_indexer.persist") as persist_span:
+                    persist_span.set_attribute("tx_indexer.fetched", len(transactions))
+                    inserted = self._sink.upsert_many(transactions)
+                    persist_span.set_attribute("tx_indexer.inserted", inserted)
+            except Exception as exc:
+                # Every failure path (retries exhausted, unparseable record,
+                # write error) is visible to the health probe and to the trace.
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                self._record_failure(str(exc))
+                raise
 
-        logger.info(
-            "tx_indexer_batch_indexed",
-            extra={
-                "event": "tx_indexer_batch_indexed",
-                "fetched": len(transactions),
-                "inserted": inserted,
-                "cursor": cursor,
-                "next_cursor": page.next_cursor,
-            },
-        )
-        self._record_success(cursor=page.next_cursor, inserted=inserted)
-        return IndexResult(
-            fetched=len(transactions),
-            inserted=inserted,
-            next_cursor=page.next_cursor,
-        )
+            span.set_attribute("tx_indexer.fetched", len(transactions))
+            span.set_attribute("tx_indexer.inserted", inserted)
+
+            logger.info(
+                "tx_indexer_batch_indexed",
+                extra={
+                    "event": "tx_indexer_batch_indexed",
+                    "fetched": len(transactions),
+                    "inserted": inserted,
+                    "cursor": cursor,
+                    "next_cursor": page.next_cursor,
+                },
+            )
+            self._record_success(cursor=page.next_cursor, inserted=inserted)
+            return IndexResult(
+                fetched=len(transactions),
+                inserted=inserted,
+                next_cursor=page.next_cursor,
+            )
 
     def _record_success(self, *, cursor: str | None, inserted: int) -> None:
         if self._state_recorder is not None:
