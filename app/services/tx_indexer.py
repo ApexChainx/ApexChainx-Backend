@@ -79,6 +79,60 @@ class TxIndexerTransportError(TxIndexerError):
     """Horizon could not be reached, or answered with an error status."""
 
 
+def _parse_transaction_hash(record: Mapping[str, Any]) -> str:
+    """Return the record's canonical transaction hash."""
+    return _sanitize_record_field(
+        record.get("transaction_hash"),
+        sanitizer=sanitize_transaction_hash,
+        error="record has no transaction_hash",
+    )
+
+
+def _parse_amount(raw: Any) -> int:
+    """Convert Horizon's decimal amount string to stroops."""
+    try:
+        amount = int(Decimal(str(raw)) * STROOPS_PER_UNIT)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise TxIndexerRecordError(f"invalid amount: {raw!r}") from exc
+
+    if amount < 0:
+        raise TxIndexerRecordError(f"negative amount: {raw!r}")
+    if amount > MAX_AMOUNT_STROOPS:
+        raise TxIndexerRecordError(f"amount out of range: {raw!r}")
+    return amount
+
+
+def _parse_accounts(record: Mapping[str, Any]) -> tuple[str, str]:
+    """Return the (source, destination) account pair for the payment type."""
+    source = record.get("from") or record.get("source_account") or record.get("funder")
+    destination = record.get("to") or record.get("account")
+    if not source or not destination:
+        raise TxIndexerRecordError("record has no from/to account pair")
+
+    return (
+        _sanitize_record_field(source, sanitizer=sanitize_account, error="invalid source account"),
+        _sanitize_record_field(destination, sanitizer=sanitize_account, error="invalid destination account"),
+    )
+
+
+def _parse_asset_code(record: Mapping[str, Any]) -> str:
+    """Return the asset code, defaulting native payments to ``XLM``."""
+    return _sanitize_record_field(
+        record.get("asset_code") or NATIVE_ASSET_CODE,
+        sanitizer=sanitize_asset_code,
+        error="invalid asset_code",
+    )
+
+
+def _parse_operation_type(record: Mapping[str, Any]) -> str:
+    """Return the operation type, defaulting to ``payment``."""
+    return _sanitize_record_field(
+        record.get("type") or "payment",
+        sanitizer=sanitize_operation_type,
+        error="invalid operation type",
+    )
+
+
 def _sanitize_record_field(
     value: Any,
     *,
@@ -131,51 +185,23 @@ class IndexedTransaction:
     def from_horizon_record(cls, record: Mapping[str, Any]) -> IndexedTransaction:
         """Normalize one Horizon payment record.
 
+        The field parsers are separate functions so this method stays a flat
+        list of "what a record needs" rather than a nested decision tree
+        (#712); each parser owns one field and one reason to fail.
+
         Raises:
             TxIndexerRecordError: the record is missing a field the ledger of
                 record relies on, or a field cannot be parsed.
         """
-        transaction_hash = _sanitize_record_field(
-            record.get("transaction_hash"),
-            sanitizer=sanitize_transaction_hash,
-            error="record has no transaction_hash",
-        )
-
-        try:
-            amount = int(Decimal(str(record.get("amount"))) * STROOPS_PER_UNIT)
-        except (InvalidOperation, TypeError, ValueError) as exc:
-            raise TxIndexerRecordError(f"invalid amount: {record.get('amount')!r}") from exc
-        if amount < 0:
-            raise TxIndexerRecordError(f"negative amount: {record.get('amount')!r}")
-        if amount > MAX_AMOUNT_STROOPS:
-            raise TxIndexerRecordError(f"amount out of range: {record.get('amount')!r}")
-
-        source = record.get("from") or record.get("source_account") or record.get("funder")
-        destination = record.get("to") or record.get("account")
-        if not source or not destination:
-            raise TxIndexerRecordError("record has no from/to account pair")
-
-        from_address = _sanitize_record_field(source, sanitizer=sanitize_account, error="invalid source account")
-        to_address = _sanitize_record_field(
-            destination, sanitizer=sanitize_account, error="invalid destination account"
-        )
-        asset_code = _sanitize_record_field(
-            record.get("asset_code") or NATIVE_ASSET_CODE,
-            sanitizer=sanitize_asset_code,
-            error="invalid asset_code",
-        )
-        operation_type = _sanitize_record_field(
-            record.get("type") or "payment",
-            sanitizer=sanitize_operation_type,
-            error="invalid operation type",
-        )
+        transaction_hash = _parse_transaction_hash(record)
+        from_address, to_address = _parse_accounts(record)
 
         return cls(
             id=f"idx_{transaction_hash}",
             transaction_hash=transaction_hash,
-            type=operation_type,
-            amount=amount,
-            asset_code=asset_code,
+            type=_parse_operation_type(record),
+            amount=_parse_amount(record.get("amount")),
+            asset_code=_parse_asset_code(record),
             from_address=from_address,
             to_address=to_address,
             created_at=_parse_created_at(record.get("created_at")),
@@ -225,26 +251,40 @@ class HorizonClient:
         limit: int,
     ) -> tuple[list[Mapping[str, Any]], str | None]:
         """Fetch up to *limit* payments, returning them plus the next cursor."""
-        params: dict[str, Any] = {"order": "asc", "limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-
-        try:
-            if self._client is not None:
-                response = self._client.get("/payments", params=params)
-            else:
-                with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
-                    response = client.get("/payments", params=params)
-        except httpx.HTTPError as exc:  # transport failures
-            raise TxIndexerTransportError(f"Horizon request failed: {exc}") from exc
-
+        response = self._get_page(cursor, limit)
         if response.status_code >= 400:
             raise TxIndexerTransportError(f"Horizon returned HTTP {response.status_code}")
+        return _decode_page(response.json())
 
-        payload = response.json()
-        records = payload.get("_embedded", {}).get("records", []) or []
-        next_cursor = records[-1].get("paging_token") if records else None
-        return [record for record in records if isinstance(record, Mapping)], next_cursor
+    def _get_page(self, cursor: str | None, limit: int) -> httpx.Response:
+        """Issue the request, translating transport failures into domain errors."""
+        try:
+            return self._send(_page_params(cursor, limit))
+        except httpx.HTTPError as exc:
+            raise TxIndexerTransportError(f"Horizon request failed: {exc}") from exc
+
+    def _send(self, params: dict[str, Any]) -> httpx.Response:
+        """Send with either the injected client or a short-lived one."""
+        if self._client is not None:
+            return self._client.get("/payments", params=params)
+        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
+            return client.get("/payments", params=params)
+
+
+def _page_params(cursor: str | None, limit: int) -> dict[str, Any]:
+    """Build Horizon's query string for one page."""
+    params: dict[str, Any] = {"order": "asc", "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    return params
+
+
+def _decode_page(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], str | None]:
+    """Extract the records and the resume cursor from a Horizon page."""
+    embedded = payload.get("_embedded") or {}
+    records = embedded.get("records") or []
+    next_cursor = records[-1].get("paging_token") if records else None
+    return [record for record in records if isinstance(record, Mapping)], next_cursor
 
 
 class TxIndexer:

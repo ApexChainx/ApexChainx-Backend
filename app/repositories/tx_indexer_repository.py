@@ -14,10 +14,12 @@ read-then-insert in the same transaction.
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -28,6 +30,22 @@ from app.services.tx_indexer import IndexedTransaction
 
 class TxIndexerRepository:
     """Idempotent sink and read model for indexed chain transactions."""
+
+    #: Exact-match filters the read API exposes. Keeping them as a table means
+    #: adding a filter is one dict entry instead of another branch in
+    #: ``build_query`` (#712).
+    EQUALITY_COLUMNS = {
+        "transaction_hash": PaymentTransactionORM.transaction_hash,
+        "asset_code": PaymentTransactionORM.asset_code,
+        "status": PaymentTransactionORM.status,
+        "type": PaymentTransactionORM.type,
+    }
+
+    #: (filter name, comparison) pairs applied to the ledger close time.
+    DATE_BOUNDS = (
+        ("created_after", operator.ge),
+        ("created_before", operator.le),
+    )
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -159,21 +177,43 @@ class TxIndexerRepository:
     ) -> Any:
         """Build the filtered query shared by the list and count paths."""
         query = self.db.query(PaymentTransactionORM)
+        query = self._apply_equalities(
+            query,
+            {
+                "transaction_hash": transaction_hash,
+                "asset_code": asset_code,
+                "status": status,
+                "type": transaction_type,
+            },
+        )
+        query = self._apply_account(query, account)
+        return self._apply_bounds(
+            query,
+            {"created_after": created_after, "created_before": created_before},
+        )
 
-        if transaction_hash:
-            query = query.filter(PaymentTransactionORM.transaction_hash == transaction_hash)
-        if account:
-            query = query.filter(
-                (PaymentTransactionORM.from_address == account) | (PaymentTransactionORM.to_address == account)
+    def _apply_equalities(self, query: Any, values: dict[str, Any]) -> Any:
+        """Apply every supplied exact-match filter."""
+        for name, value in values.items():
+            if value:
+                query = query.filter(self.EQUALITY_COLUMNS[name] == value)
+        return query
+
+    def _apply_account(self, query: Any, account: str | None) -> Any:
+        """Match *account* against either side of the payment."""
+        if not account:
+            return query
+        return query.filter(
+            or_(
+                PaymentTransactionORM.from_address == account,
+                PaymentTransactionORM.to_address == account,
             )
-        if asset_code:
-            query = query.filter(PaymentTransactionORM.asset_code == asset_code)
-        if status:
-            query = query.filter(PaymentTransactionORM.status == status)
-        if transaction_type:
-            query = query.filter(PaymentTransactionORM.type == transaction_type)
-        if created_after:
-            query = query.filter(PaymentTransactionORM.created_at >= created_after)
-        if created_before:
-            query = query.filter(PaymentTransactionORM.created_at <= created_before)
+        )
+
+    def _apply_bounds(self, query: Any, bounds: dict[str, datetime | None]) -> Any:
+        """Apply the inclusive ledger-close-time window."""
+        for name, compare in self.DATE_BOUNDS:
+            bound = bounds[name]
+            if bound is not None:
+                query = query.filter(compare(PaymentTransactionORM.created_at, bound))
         return query

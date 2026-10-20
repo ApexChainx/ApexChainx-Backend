@@ -138,12 +138,39 @@ row the ledger cannot represent.
 Errors use the RFC 7807 envelope described in
 [docs/RFC7807.md](RFC7807.md).
 
+## Complexity budget
+
+The indexer's modules are kept deliberately flat (`app/services/tx_indexer.py`,
+`app/services/tx_indexer_input.py`, `app/repositories/tx_indexer_repository.py`,
+`app/api/v1/endpoints/indexer.py`). Rather than refactor once and let nesting
+creep back, `tests/test_tx_indexer_complexity.py` measures every function with
+the standard McCabe count and fails above **8**:
+
+```
+complexity = 1 + decision points (if/elif, for, while, except,
+             conditional expression, assert, match cases, extra boolean
+             operands, comprehensions)
+```
+
+Single-purpose helpers keep each unit small:
+
+| Was | Now |
+|-----|-----|
+| `IndexedTransaction.from_horizon_record` (11) | one parser per field: `_parse_transaction_hash`, `_parse_amount`, `_parse_accounts`, `_parse_asset_code`, `_parse_operation_type` |
+| `HorizonClient.fetch_payments` (9) | `_get_page` (transport + error mapping), `_send`, `_page_params`, `_decode_page` |
+| `TxIndexerRepository.build_query` (8) | `_apply_equalities`, `_apply_account`, `_apply_bounds`, driven by the `EQUALITY_COLUMNS` / `DATE_BOUNDS` tables |
+
+The guard is part of the normal test run — no extra tooling, no new
+dependency — and fails with the offending function names and scores.
+
 ## Tests
 
 | File | Covers |
 |------|--------|
 | `tests/test_tx_indexer_ingest.py` | Record normalization, stroop conversion, skip behaviour, cursor advance |
 | `tests/test_tx_indexer_openapi.py` | OpenAPI document: paths, parameters, descriptions, response codes, examples |
+| `tests/test_tx_indexer_input_sanitization.py` | Allow-list sanitizers and their HTTP/ingest failure modes |
+| `tests/test_tx_indexer_complexity.py` | Cyclomatic-complexity budget for every indexer module |
 
 No network access is needed: the Horizon transport is injectable and the sink is
 a fake.
