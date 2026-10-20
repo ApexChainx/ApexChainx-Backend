@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
+    # TxIndexer (#710): where one ingest pass reads from and how much it reads.
+    # ``TX_INDEXER_BATCH_SIZE`` mirrors Horizon's own page cap of 200; asking
+    # for more is rejected by Horizon, so the default is the maximum.
+    TX_INDEXER_HORIZON_URL: str = "https://horizon-testnet.stellar.org"
+    TX_INDEXER_BATCH_SIZE: int = 200
     # Trusted-proxy settings (#205)
     # Number of trusted reverse-proxy hops in front of this app.
     # Set to 0 when running without a proxy (uses direct connection IP).
@@ -307,6 +312,14 @@ def validate_critical_settings(config: Settings) -> None:
             f"inline and disables retry/backoff, breaker and dead-letter handling. "
             f"ENVIRONMENT={config.ENVIRONMENT!r} is not one of {sorted(DEV_ENVIRONMENTS)}."
         )
+
+    if not 1 <= config.TX_INDEXER_BATCH_SIZE <= 200:
+        errors.append(
+            f"TX_INDEXER_BATCH_SIZE must be between 1 and 200 (Horizon's page cap), "
+            f"got {config.TX_INDEXER_BATCH_SIZE}."
+        )
+    if not config.TX_INDEXER_HORIZON_URL.strip():
+        errors.append("TX_INDEXER_HORIZON_URL must not be empty.")
 
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")

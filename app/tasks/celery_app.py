@@ -12,6 +12,9 @@ celery_app = Celery(
         "app.tasks.audit_tasks",
         "app.tasks.oauth_tasks",
         "app.tasks.sla_tasks",
+        # #710: TxIndexer ingest pass. Not on the beat schedule: a deployment
+        # runs it from its own scheduler with the cursor it last persisted.
+        "app.tasks.tx_indexer_tasks",
         # #566: imported (only) by workers so its ``worker_ready`` handler is
         # registered before the signal fires; web/beat imports never load it.
         "app.tasks.sla_cache_warmup_bootstrap",

@@ -99,6 +99,7 @@ Current active routes:
 - `/api/v1/sla/disputes` — file, list, and resolve SLA disputes
 - `/api/v1/auth`
 - `/api/v1/payments`
+- `/api/v1/indexer` — read access to transactions ingested by TxIndexer ([docs](docs/TX_INDEXER.md))
 - `/api/v1/webhooks`
 - `/api/v1/wallets`
 

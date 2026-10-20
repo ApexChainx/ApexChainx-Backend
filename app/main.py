@@ -44,7 +44,25 @@ install_signal_handlers()
 init_tracing()
 
 
-app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
+# #710: tag descriptions feed the generated Swagger UI grouping. Without them
+# the indexer routes appear as a bare "indexer" section with no explanation of
+# what the component does or where its write path lives.
+OPENAPI_TAGS = [
+    {
+        "name": "indexer",
+        "description": (
+            "Read access to the transactions TxIndexer has ingested from Stellar Horizon. "
+            "The ingest task writes into the same payment ledger the /payments routes read."
+        ),
+    },
+]
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description="ApexChainx Backend API",
+    openapi_tags=OPENAPI_TAGS,
+)
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)

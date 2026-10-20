@@ -961,6 +961,95 @@
         "title": "ImportRowResult",
         "type": "object"
       },
+      "IndexedTransactionResponse": {
+        "description": "An on-chain transaction as stored by the indexer.",
+        "example": {
+          "amount": 150000000,
+          "asset_code": "USDC",
+          "confirmed_at": "2026-10-20T12:00:05Z",
+          "created_at": "2026-10-20T12:00:00Z",
+          "from_address": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+          "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+          "status": "confirmed",
+          "to_address": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBXY",
+          "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+          "type": "payment"
+        },
+        "properties": {
+          "amount": {
+            "description": "Amount in stroops. 1 unit = 10^7 stroops.",
+            "title": "Amount",
+            "type": "integer"
+          },
+          "asset_code": {
+            "description": "Asset code; ``XLM`` for native payments.",
+            "title": "Asset Code",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the indexer stored the row. Not the on-chain confirmation time.",
+            "title": "Confirmed At"
+          },
+          "created_at": {
+            "description": "Ledger close time reported by Horizon (UTC).",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "from_address": {
+            "description": "Source Stellar account of the payment.",
+            "title": "From Address",
+            "type": "string"
+          },
+          "id": {
+            "description": "Index row id, derived from the transaction hash (``idx_<hash>``).",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "description": "Ledger status of the indexed row; always ``confirmed``.",
+            "title": "Status",
+            "type": "string"
+          },
+          "to_address": {
+            "description": "Destination Stellar account of the payment.",
+            "title": "To Address",
+            "type": "string"
+          },
+          "transaction_hash": {
+            "description": "Stellar transaction hash. Unique in the index.",
+            "title": "Transaction Hash",
+            "type": "string"
+          },
+          "type": {
+            "description": "Horizon operation type that was indexed, e.g. ``payment``.",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "transaction_hash",
+          "type",
+          "amount",
+          "asset_code",
+          "from_address",
+          "to_address",
+          "status",
+          "created_at"
+        ],
+        "title": "IndexedTransactionResponse",
+        "type": "object"
+      },
       "JobCleanupRequest": {
         "description": "Request parameters for job cleanup.",
         "properties": {
@@ -1788,6 +1877,48 @@
           }
         },
         "title": "OutageUpdate",
+        "type": "object"
+      },
+      "PaginatedDisputeList": {
+        "description": "Envelope for `GET /sla/disputes` (#580).\n\nThe endpoint used to answer with a bare array materialized from\n``query.all()`` \u2014 every dispute in one response, with no way to page or to\ntell \"end of list\" from \"this page happens to be short\". The items array\nis still present, under `items`, alongside the metadata needed to page\ncorrectly (same shape as the webhook list envelope, #554).",
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DisputeResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "returned",
+          "has_more"
+        ],
+        "title": "PaginatedDisputeList",
         "type": "object"
       },
       "PaginatedWebhookDeliveries": {
@@ -3370,6 +3501,7 @@
       "WebhookDeliveryStatus": {
         "enum": [
           "pending",
+          "sending",
           "success",
           "failed",
           "retrying",
@@ -3609,6 +3741,19 @@
               }
             ],
             "title": "Secret"
+          },
+          "secret_grace_hours": {
+            "anyOf": [
+              {
+                "maximum": 168.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret Grace Hours"
           },
           "url": {
             "anyOf": [
@@ -4264,7 +4409,7 @@
     },
     "/api/v1/auth/admin/sessions/{email}": {
       "get": {
-        "description": "Admin endpoint to get all sessions for a specific user.",
+        "description": "Admin endpoint to get all sessions for a specific user (paginated).",
         "operationId": "get_admin_session_inventory_api_v1_auth_admin_sessions__email__get",
         "parameters": [
           {
@@ -4274,6 +4419,29 @@
             "schema": {
               "title": "Email",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           },
           {
@@ -4381,6 +4549,26 @@
         ]
       }
     },
+    "/api/v1/auth/health": {
+      "get": {
+        "description": "Lightweight health probe for the Auth API surface (#666).",
+        "operationId": "auth_health_api_v1_auth_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Auth Health",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/impersonate": {
       "post": {
         "description": "Admin endpoint to impersonate a non-admin user (audit-logged).\n\nReturns a short-lived JWT (15 min) with an ``act`` claim set to the\nadmin's id so that every action performed during impersonation is\nattributable.\n\nAcceptance criteria:\n- Cannot impersonate another admin\n- Reason is mandatory and recorded in the audit log",
@@ -4443,6 +4631,7 @@
     },
     "/api/v1/auth/login": {
       "post": {
+        "description": "Exchange email/password credentials for an access and refresh token pair. Rate-limited per IP and guarded by credential-stuffing detection.",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -4463,7 +4652,10 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Authentication succeeded"
+          },
+          "401": {
+            "description": "Invalid credentials"
           },
           "422": {
             "content": {
@@ -4474,9 +4666,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Too many attempts or account temporarily locked"
           }
         },
-        "summary": "Login",
+        "summary": "Authenticate a user",
         "tags": [
           "auth"
         ]
@@ -4583,6 +4778,7 @@
     },
     "/api/v1/auth/me": {
       "get": {
+        "description": "Return the profile of the user identified by the bearer token.",
         "operationId": "me_api_v1_auth_me_get",
         "parameters": [
           {
@@ -4611,7 +4807,10 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Current user profile"
+          },
+          "401": {
+            "description": "Missing or invalid token"
           },
           "422": {
             "content": {
@@ -4624,7 +4823,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Me",
+        "summary": "Get the current user",
         "tags": [
           "auth"
         ]
@@ -4730,7 +4929,7 @@
     },
     "/api/v1/auth/me/profile": {
       "patch": {
-        "description": "Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable here.",
+        "description": "Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable.",
         "operationId": "update_profile_api_v1_auth_me_profile_patch",
         "parameters": [
           {
@@ -4769,20 +4968,19 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Profile updated"
+          },
+          "400": {
+            "description": "No updatable fields provided"
+          },
+          "404": {
+            "description": "User not found"
           },
           "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
+            "description": "Invalid stellar wallet address"
           }
         },
-        "summary": "Update Profile",
+        "summary": "Update the current user's profile",
         "tags": [
           "auth"
         ]
@@ -4850,6 +5048,7 @@
     },
     "/api/v1/auth/register": {
       "post": {
+        "description": "Create a new engineer account and return its public profile. Rate-limited per client IP.",
         "operationId": "register_api_v1_auth_register_post",
         "requestBody": {
           "content": {
@@ -4870,7 +5069,10 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "User created"
+          },
+          "400": {
+            "description": "User already exists or password fails policy"
           },
           "422": {
             "content": {
@@ -4881,9 +5083,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Too many registration attempts from this IP"
           }
         },
-        "summary": "Register",
+        "summary": "Register a new user",
         "tags": [
           "auth"
         ]
@@ -4941,9 +5146,32 @@
     },
     "/api/v1/auth/sessions": {
       "get": {
-        "description": "Get all active sessions for the current user.",
+        "description": "Return all active sessions for the authenticated user.",
         "operationId": "get_session_inventory_api_v1_auth_sessions_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",
@@ -4970,7 +5198,10 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Session inventory"
+          },
+          "401": {
+            "description": "Missing or invalid token"
           },
           "422": {
             "content": {
@@ -4983,9 +5214,290 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Session Inventory",
+        "summary": "Get the current user's sessions",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/indexer/transactions": {
+      "get": {
+        "description": "Return the transactions the indexer has stored, newest first. All filters are optional and combine with AND. Results are paged with ``limit``/``offset``; the maximum page size is 200 rows. Requires an engineer or admin bearer token.",
+        "operationId": "listIndexedTransactions",
+        "parameters": [
+          {
+            "description": "Exact Stellar transaction hash to look up.",
+            "in": "query",
+            "name": "transaction_hash",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact Stellar transaction hash to look up.",
+              "title": "Transaction Hash"
+            }
+          },
+          {
+            "description": "Stellar account; matches either ``from_address`` or ``to_address``.",
+            "in": "query",
+            "name": "account",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Stellar account; matches either ``from_address`` or ``to_address``.",
+              "title": "Account"
+            }
+          },
+          {
+            "description": "Asset code filter, for example ``USDC`` or ``XLM``.",
+            "in": "query",
+            "name": "asset_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Asset code filter, for example ``USDC`` or ``XLM``.",
+              "title": "Asset Code"
+            }
+          },
+          {
+            "description": "Ledger status filter. Indexed rows are always ``confirmed``.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ledger status filter. Indexed rows are always ``confirmed``.",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Horizon operation type filter, for example ``payment``.",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 50,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Horizon operation type filter, for example ``payment``.",
+              "title": "Type"
+            }
+          },
+          {
+            "description": "Only rows whose ledger close time is at or after this UTC timestamp.",
+            "in": "query",
+            "name": "created_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows whose ledger close time is at or after this UTC timestamp.",
+              "title": "Created After"
+            }
+          },
+          {
+            "description": "Only rows whose ledger close time is at or before this UTC timestamp.",
+            "in": "query",
+            "name": "created_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only rows whose ledger close time is at or before this UTC timestamp.",
+              "title": "Created Before"
+            }
+          },
+          {
+            "description": "Maximum number of rows to return (1-200).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Maximum number of rows to return (1-200).",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of matching rows to skip before the page.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of matching rows to skip before the page.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IndexedTransactionResponse"
+                  },
+                  "title": "Response Listindexedtransactions",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Matching indexed transactions."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "403": {
+            "description": "The caller's role cannot read the transaction index."
+          },
+          "422": {
+            "description": "A query parameter failed validation (for example ``limit=0``)."
+          }
+        },
+        "summary": "List indexed Stellar transactions",
+        "tags": [
+          "indexer"
+        ]
+      }
+    },
+    "/api/v1/indexer/transactions/{transaction_hash}": {
+      "get": {
+        "description": "Return a single indexed transaction by its Stellar transaction hash. Returns 404 when the indexer has not stored that hash (either it is not a payment, or the ingest cursor has not reached it yet).",
+        "operationId": "getIndexedTransaction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_hash",
+            "required": true,
+            "schema": {
+              "title": "Transaction Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexedTransactionResponse"
+                }
+              }
+            },
+            "description": "The indexed transaction."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "403": {
+            "description": "The caller's role cannot read the transaction index."
+          },
+          "404": {
+            "description": "No indexed transaction exists for that hash."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get one indexed transaction",
+        "tags": [
+          "indexer"
         ]
       }
     },
@@ -9283,6 +9795,7 @@
     },
     "/api/v1/sla/disputes": {
       "get": {
+        "description": "List SLA disputes, paginated (#580).\n\nThe endpoint used to return ``query.all()`` \u2014 every dispute serialized into\none unbounded response, so a large disputes table turned the list call into\na full-table dump. Pages are now capped by the shared MAX_PAGE_SIZE (200,\nsame constant the audit list enforces) and answer with the standard\nenvelope (items/total/page/page_size/returned/has_more).",
         "operationId": "list_disputes_api_v1_sla_disputes_get",
         "parameters": [
           {
@@ -9299,6 +9812,33 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "description": "Page number (1-indexed)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number (1-indexed)",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page (shared list cap: 200). Values above it are rejected with 422.",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page (shared list cap: 200). Values above it are rejected with 422.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
             }
           },
           {
@@ -9323,11 +9863,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/DisputeResponse"
-                  },
-                  "title": "Response List Disputes Api V1 Sla Disputes Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/PaginatedDisputeList"
                 }
               }
             },
@@ -11153,7 +11689,7 @@
     },
     "/api/v1/webhooks/{webhook_id}/rotate-secret": {
       "post": {
-        "description": "Rotate the webhook signing secret with a grace period overlap window.\n\nThe previous secret is stored (hashed) and remains valid for WEBHOOK_SECRET_GRACE_HOURS,\nenabling zero-downtime rotation for consumers.\n\n#502: previous_secrets entries that are past their grace window are pruned\non every rotation, so the JSONB history stays bounded instead of growing for\nthe lifetime of the webhook.\n\nBE-034: Emits durable audit information with timestamp and actor context.",
+        "description": "Rotate the webhook signing secret with a grace period overlap window.\n\nThe previous secret is stored (hashed) and remains valid for the webhook's\n``secret_grace_hours`` (falling back to WEBHOOK_SECRET_GRACE_HOURS when the\ncolumn is unset or out of range), enabling zero-downtime rotation for\nconsumers (#582).\n\nPATCH with a ``secret`` field goes through the same lifecycle (#581).\n\n#502: previous_secrets entries that are past their grace window are pruned\non every rotation, so the JSONB history stays bounded instead of growing for\nthe lifetime of the webhook.\n\nBE-034: Emits durable audit information with timestamp and actor context.",
         "operationId": "rotate_webhook_secret_api_v1_webhooks__webhook_id__rotate_secret_post",
         "parameters": [
           {
@@ -11243,5 +11779,11 @@
         "summary": "Readiness"
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "description": "Read access to the transactions TxIndexer has ingested from Stellar Horizon. The ingest task writes into the same payment ledger the /payments routes read.",
+      "name": "indexer"
+    }
+  ]
 }
