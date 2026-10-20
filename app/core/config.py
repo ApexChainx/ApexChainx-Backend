@@ -182,6 +182,17 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
     WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
+    # Event listener fan-out budget (#741).
+    # How many events a single subscriber may receive per window. The number
+    # of emissions is not under the subscriber's control (one event per
+    # affected device), so without a budget one subscriber can amplify the
+    # whole fan-out. The default is deliberately generous -- an incident that
+    # affects a hundred devices emits a hundred events to the same subscriber
+    # -- and only exists to stop a runaway fan-out.
+    EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER: int = 600
+    # Length of the subscriber event budget window, in seconds.
+    EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
     # Fix #576: hard cap on how many completed Idempotency-Key records are
@@ -375,6 +386,12 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))
