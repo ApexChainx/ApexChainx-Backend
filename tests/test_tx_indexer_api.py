@@ -76,10 +76,12 @@ class TestListTransactions:
 
         assert response.status_code == 200
         body = response.json()
-        assert isinstance(body, list) and len(body) == 1
-        assert body[0]["transaction_hash"] == HASH
-        assert body[0]["amount"] == 100_000_000
-        assert body[0]["status"] == "confirmed"
+        assert len(body["items"]) == 1
+        assert body["items"][0]["transaction_hash"] == HASH
+        assert body["items"][0]["amount"] == 100_000_000
+        assert body["items"][0]["status"] == "confirmed"
+        assert body["has_more"] is False
+        assert body["next_cursor"] is None
 
     def test_forwards_every_filter_to_the_repository(self, client, repo_calls):
         response = client.get(
@@ -104,8 +106,10 @@ class TestListTransactions:
         assert forwarded["asset_code"] == "USDC"
         assert forwarded["status"] == "confirmed"
         assert forwarded["transaction_type"] == "payment"
-        assert forwarded["limit"] == 25
+        # One extra row is fetched to decide ``has_more`` without a count query.
+        assert forwarded["limit"] == 26
         assert forwarded["offset"] == 50
+        assert forwarded["after"] is None
         assert forwarded["created_after"] is not None
         assert forwarded["created_before"] is not None
 

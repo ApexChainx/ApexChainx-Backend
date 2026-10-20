@@ -86,10 +86,15 @@ class TestResponsesAreDocumented:
         assert {"200", "401", "403", "404"} <= set(responses)
         assert "index" in responses["404"]["description"].lower()
 
-    def test_list_response_is_a_documented_array_of_transactions(self):
+    def test_list_response_documents_the_page_envelope(self):
         response = _operation(LIST_PATH)["responses"]["200"]
         schema_ref = response["content"]["application/json"]["schema"]
-        assert schema_ref["items"]["$ref"].endswith("/IndexedTransactionResponse")
+        assert schema_ref["$ref"].endswith("/IndexedTransactionPage")
+
+        page = SCHEMA["components"]["schemas"]["IndexedTransactionPage"]["properties"]
+        assert page["items"]["items"]["$ref"].endswith("/IndexedTransactionResponse")
+        assert page["next_cursor"]["description"].strip()
+        assert page["has_more"]["description"].strip()
 
     def test_detail_response_is_a_single_transaction(self):
         response = _operation(DETAIL_PATH)["responses"]["200"]

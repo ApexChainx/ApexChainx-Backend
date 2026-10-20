@@ -83,13 +83,38 @@ Both routes require an engineer or admin bearer token.
 
 | Route | Purpose |
 |-------|---------|
-| `GET /api/v1/indexer/transactions` | Filtered, offset-paginated list, newest first |
+| `GET /api/v1/indexer/transactions` | Filtered, cursor-paginated page of transactions, newest first |
 | `GET /api/v1/indexer/transactions/{transaction_hash}` | One transaction, 404 when not indexed |
 
 Filters: `transaction_hash`, `account` (matches sender or recipient),
-`asset_code`, `status`, `type`, `created_after`, `created_before`. Paging:
-`limit` (1–200, default 50) and `offset` (≥ 0). A `created_after` later than
-`created_before` returns `422`.
+`asset_code`, `status`, `type`, `created_after`, `created_before`. A
+`created_after` later than `created_before` returns `422`.
+
+### Pagination
+
+List responses use a page envelope:
+
+```json
+{
+  "items": [ ... ],
+  "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9",
+  "has_more": true
+}
+```
+
+* `limit` — 1–200, default 50.
+* `cursor` — pass the previous page's `next_cursor` back unchanged. The cursor
+  encodes the `(created_at, id)` of the last row, and the next query is a
+  strict "older than that row" predicate. Rows inserted while a client pages
+  therefore cannot shift or duplicate results, which is the failure mode of
+  `OFFSET` pagination on a table that is being written continuously.
+* `offset` — still accepted for callers that cannot hold a cursor. When
+  `cursor` is present it takes precedence and `offset` is ignored.
+* `has_more` is derived by fetching one row beyond `limit`, so a page never
+  reports `has_more: true` without a next page and never needs a `COUNT(*)`.
+* A cursor that cannot be decoded, or whose position is not a timestamp, is a
+  `422 Invalid cursor` — silently restarting at page one would make a client
+  loop over the same rows forever.
 
 Request and response fields are described in the generated OpenAPI document
 (`/openapi.json`, Swagger UI at `/docs`) and in
@@ -133,7 +158,7 @@ row the ledger cannot represent.
 | 401 | `unauthorized` | Missing or invalid bearer token |
 | 403 | `forbidden` | Caller's role cannot read the index |
 | 404 | `not_found` | Hash is not indexed |
-| 422 | `unprocessable_entity` | A filter does not match its allow-list, or `created_after` > `created_before` |
+| 422 | `unprocessable_entity` | A filter does not match its allow-list, `created_after` > `created_before`, or `cursor` is invalid |
 
 Errors use the RFC 7807 envelope described in
 [docs/RFC7807.md](RFC7807.md).

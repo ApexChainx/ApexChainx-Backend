@@ -961,6 +961,60 @@
         "title": "ImportRowResult",
         "type": "object"
       },
+      "IndexedTransactionPage": {
+        "description": "One page of the transaction index.",
+        "example": {
+          "has_more": true,
+          "items": [
+            {
+              "amount": 150000000,
+              "asset_code": "USDC",
+              "confirmed_at": "2026-10-20T12:00:05Z",
+              "created_at": "2026-10-20T12:00:00Z",
+              "from_address": "GAAAA...",
+              "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+              "status": "confirmed",
+              "to_address": "GBBBB...",
+              "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+              "type": "payment"
+            }
+          ],
+          "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9"
+        },
+        "properties": {
+          "has_more": {
+            "description": "True when at least one more row matches the filters.",
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "Rows on this page, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/IndexedTransactionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque cursor for the next page. Pass it back as ``cursor``. Null when this is the last page.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "has_more"
+        ],
+        "title": "IndexedTransactionPage",
+        "type": "object"
+      },
       "IndexedTransactionResponse": {
         "description": "An on-chain transaction as stored by the indexer.",
         "example": {
@@ -5222,7 +5276,7 @@
     },
     "/api/v1/indexer/transactions": {
       "get": {
-        "description": "Return the transactions the indexer has stored, newest first. All filters are optional and combine with AND. Results are paged with ``limit``/``offset``; the maximum page size is 200 rows. Requires an engineer or admin bearer token.",
+        "description": "Return the transactions the indexer has stored, newest first. All filters are optional and combine with AND.\n\nPaging is cursor based: send ``limit`` (1-200, default 50) and pass the returned ``next_cursor`` back as ``cursor`` until ``has_more`` is false. The cursor encodes the ``(created_at, id)`` of the last row, so rows inserted while a client pages do not shift or duplicate results. ``offset`` is still accepted for callers that cannot hold a cursor; when ``cursor`` is present it takes precedence and ``offset`` is ignored.\n\nRequires an engineer or admin bearer token.",
         "operationId": "listIndexedTransactions",
         "parameters": [
           {
@@ -5373,13 +5427,31 @@
             }
           },
           {
-            "description": "Number of matching rows to skip before the page.",
+            "description": "Opaque cursor from a previous page's ``next_cursor``. Takes precedence over ``offset``.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from a previous page's ``next_cursor``. Takes precedence over ``offset``.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Rows to skip when paging by offset. Ignored when ``cursor`` is supplied.",
             "in": "query",
             "name": "offset",
             "required": false,
             "schema": {
               "default": 0,
-              "description": "Number of matching rows to skip before the page.",
+              "description": "Rows to skip when paging by offset. Ignored when ``cursor`` is supplied.",
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
@@ -5407,15 +5479,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/IndexedTransactionResponse"
-                  },
-                  "title": "Response Listindexedtransactions",
-                  "type": "array"
+                  "$ref": "#/components/schemas/IndexedTransactionPage"
                 }
               }
             },
-            "description": "Matching indexed transactions."
+            "description": "One page of matching indexed transactions."
           },
           "401": {
             "description": "Missing or invalid bearer token."
@@ -5424,7 +5492,7 @@
             "description": "The caller's role cannot read the transaction index."
           },
           "422": {
-            "description": "A query parameter failed validation (for example ``limit=0``)."
+            "description": "A query parameter failed validation (for example ``limit=0``), the date window is reversed, or ``cursor`` is not a cursor issued by this endpoint."
           }
         },
         "summary": "List indexed Stellar transactions",

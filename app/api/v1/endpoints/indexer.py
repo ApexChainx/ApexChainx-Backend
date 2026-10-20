@@ -18,8 +18,9 @@ Both routes are documented for OpenAPI/Swagger generation on purpose:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_engineer
 from app.db.session import get_db
+from app.models.orm.payment import PaymentTransactionORM
 from app.repositories.tx_indexer_repository import TxIndexerRepository
 from app.services.tx_indexer_input import (
     MAX_ACCOUNT_LENGTH,
@@ -38,6 +40,7 @@ from app.services.tx_indexer_input import (
     TxIndexFilters,
     sanitize_transaction_hash,
 )
+from app.utils.cursor import decode_cursor, encode_cursor
 
 router = APIRouter()
 
@@ -84,9 +87,87 @@ class IndexedTransactionResponse(BaseModel):
     )
 
 
+class IndexedTransactionPage(BaseModel):
+    """One page of the transaction index."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "items": [
+                    {
+                        "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+                        "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+                        "type": "payment",
+                        "amount": 150000000,
+                        "asset_code": "USDC",
+                        "from_address": "GAAAA...",
+                        "to_address": "GBBBB...",
+                        "status": "confirmed",
+                        "created_at": "2026-10-20T12:00:00Z",
+                        "confirmed_at": "2026-10-20T12:00:05Z",
+                    }
+                ],
+                "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9",
+                "has_more": True,
+            }
+        }
+    )
+
+    items: list[IndexedTransactionResponse] = Field(description="Rows on this page, newest first.")
+    next_cursor: str | None = Field(
+        default=None,
+        description=(
+            "Opaque cursor for the next page. Pass it back as ``cursor``. Null when this is " "the last page."
+        ),
+    )
+    has_more: bool = Field(description="True when at least one more row matches the filters.")
+
+
 def _to_response(row: object) -> IndexedTransactionResponse:
     """Validate one ORM row against the response model."""
     return IndexedTransactionResponse.model_validate(row)
+
+
+def _decode_cursor_param(cursor: str | None) -> tuple[datetime, str] | None:
+    """Decode the opaque ``cursor`` query parameter into a keyset position.
+
+    A cursor that cannot be decoded is a 422 rather than a silent first page:
+    restarting from the top makes a client loop over the same rows forever
+    while believing it is paging forward.
+    """
+    if cursor is None:
+        return None
+
+    decoded = decode_cursor(cursor)
+    if decoded is None:
+        raise CodedHTTPException(status_code=422, detail="Invalid cursor")
+
+    row_id, sort_value = decoded
+    try:
+        created_at = datetime.fromisoformat(str(sort_value))
+    except (TypeError, ValueError) as exc:
+        raise CodedHTTPException(status_code=422, detail="Invalid cursor") from exc
+
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return created_at, str(row_id)
+
+
+def _build_page(rows: Sequence[PaymentTransactionORM], limit: int) -> IndexedTransactionPage:
+    """Trim a ``limit + 1`` result set into a page plus its continuation cursor."""
+    has_more = len(rows) > limit
+    page_rows = list(rows[:limit])
+
+    next_cursor = None
+    if has_more and page_rows:
+        last = page_rows[-1]
+        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+    return IndexedTransactionPage(
+        items=[_to_response(row) for row in page_rows],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 def _validated_filters(**raw: object) -> TxIndexFilters:
@@ -107,20 +188,30 @@ def _validated_filters(**raw: object) -> TxIndexFilters:
 
 @router.get(
     "/transactions",
-    response_model=list[IndexedTransactionResponse],
+    response_model=IndexedTransactionPage,
     summary="List indexed Stellar transactions",
     description=(
         "Return the transactions the indexer has stored, newest first. All filters are optional "
-        "and combine with AND. Results are paged with ``limit``/``offset``; the maximum page size "
-        "is 200 rows. Requires an engineer or admin bearer token."
+        "and combine with AND.\n\n"
+        "Paging is cursor based: send ``limit`` (1-200, default 50) and pass the returned "
+        "``next_cursor`` back as ``cursor`` until ``has_more`` is false. The cursor encodes the "
+        "``(created_at, id)`` of the last row, so rows inserted while a client pages do not "
+        "shift or duplicate results. ``offset`` is still accepted for callers that cannot hold "
+        "a cursor; when ``cursor`` is present it takes precedence and ``offset`` is ignored.\n\n"
+        "Requires an engineer or admin bearer token."
     ),
-    response_description="Matching indexed transactions, ordered by ledger close time descending.",
+    response_description="One page of matching indexed transactions, plus the cursor for the next page.",
     operation_id="listIndexedTransactions",
     responses={
-        200: {"description": "Matching indexed transactions."},
+        200: {"description": "One page of matching indexed transactions."},
         401: {"description": "Missing or invalid bearer token."},
         403: {"description": "The caller's role cannot read the transaction index."},
-        422: {"description": "A query parameter failed validation (for example ``limit=0``)."},
+        422: {
+            "description": (
+                "A query parameter failed validation (for example ``limit=0``), the date window is "
+                "reversed, or ``cursor`` is not a cursor issued by this endpoint."
+            )
+        },
     },
 )
 def list_indexed_transactions(
@@ -166,15 +257,19 @@ def list_indexed_transactions(
         le=MAX_PAGE_SIZE,
         description=f"Maximum number of rows to return (1-{MAX_PAGE_SIZE}).",
     ),
+    cursor: str | None = Query(
+        default=None,
+        description=("Opaque cursor from a previous page's ``next_cursor``. Takes precedence over ``offset``."),
+    ),
     offset: int = Query(
         default=0,
         ge=0,
-        description="Number of matching rows to skip before the page.",
+        description="Rows to skip when paging by offset. Ignored when ``cursor`` is supplied.",
     ),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
-) -> list[IndexedTransactionResponse]:
-    """List indexed transactions with filtering and offset pagination."""
+) -> IndexedTransactionPage:
+    """List indexed transactions with filtering and cursor-first pagination."""
     filters = _validated_filters(
         transaction_hash=transaction_hash,
         account=account,
@@ -184,9 +279,15 @@ def list_indexed_transactions(
         created_after=created_after,
         created_before=created_before,
     )
+    after = _decode_cursor_param(cursor)
 
-    rows = TxIndexerRepository(db).list_indexed(**asdict(filters), limit=limit, offset=offset)
-    return [_to_response(row) for row in rows]
+    rows = TxIndexerRepository(db).list_indexed(
+        **asdict(filters),
+        limit=limit + 1,
+        offset=0 if after else offset,
+        after=after,
+    )
+    return _build_page(rows, limit)
 
 
 @router.get(

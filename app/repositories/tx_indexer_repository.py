@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -138,8 +138,15 @@ class TxIndexerRepository:
         created_before: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
+        after: tuple[datetime, str] | None = None,
     ) -> list[PaymentTransactionORM]:
-        """Return indexed transactions matching every supplied filter."""
+        """Return indexed transactions matching every supplied filter.
+
+        ``after`` is a keyset position ``(created_at, id)`` from a previous
+        page. It is applied as a strict "older than this row" predicate, so
+        inserts that land while a client pages cannot shift or duplicate the
+        results the way an ``OFFSET`` can.
+        """
         query = self.build_query(
             transaction_hash=transaction_hash,
             account=account,
@@ -149,11 +156,28 @@ class TxIndexerRepository:
             created_after=created_after,
             created_before=created_before,
         )
+        query = self._apply_cursor(query, after)
         return list(
             query.order_by(PaymentTransactionORM.created_at.desc(), PaymentTransactionORM.id.desc())
             .offset(offset)
             .limit(limit)
             .all()
+        )
+
+    def _apply_cursor(self, query: Any, after: tuple[datetime, str] | None) -> Any:
+        """Restrict the query to rows older than the cursor position."""
+        if after is None:
+            return query
+
+        created_at, row_id = after
+        return query.filter(
+            or_(
+                PaymentTransactionORM.created_at < created_at,
+                and_(
+                    PaymentTransactionORM.created_at == created_at,
+                    PaymentTransactionORM.id < row_id,
+                ),
+            )
         )
 
     def get_by_hash(self, transaction_hash: str) -> PaymentTransactionORM | None:

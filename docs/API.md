@@ -634,33 +634,43 @@ List indexed transactions, newest first. All filters combine with AND.
 
 | Parameter | Type | Default | Notes |
 |-----------|------|---------|-------|
-| `transaction_hash` | string (max 255) | — | Exact hash lookup |
-| `account` | string (max 255) | — | Matches `from_address` **or** `to_address` |
-| `asset_code` | string (max 20) | — | `USDC`, `XLM`, ... |
-| `status` | string (max 50) | — | Indexed rows are always `confirmed` |
-| `type` | string (max 50) | — | Horizon operation type, e.g. `payment` |
+| `transaction_hash` | 64 hex chars | — | Exact hash lookup (normalized to lower case) |
+| `account` | string (max 69) | — | Matches `from_address` **or** `to_address` |
+| `asset_code` | string (max 12) | — | `USDC`, `XLM`, ... (normalized to upper case) |
+| `status` | string (max 32) | — | Indexed rows are always `confirmed` |
+| `type` | string (max 32) | — | Horizon operation type, e.g. `payment` |
 | `created_after` | ISO-8601 timestamp | — | Inclusive lower bound on ledger close time |
 | `created_before` | ISO-8601 timestamp | — | Inclusive upper bound; `created_after` after it returns 422 |
 | `limit` | integer 1-200 | 50 | Rows per page |
-| `offset` | integer ≥ 0 | 0 | Rows to skip |
+| `cursor` | opaque string | — | `next_cursor` from the previous page; overrides `offset` |
+| `offset` | integer ≥ 0 | 0 | Rows to skip (ignored when `cursor` is sent) |
 
 **Response (200 OK):**
 ```json
-[
-  {
-    "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
-    "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
-    "type": "payment",
-    "amount": 150000000,
-    "asset_code": "USDC",
-    "from_address": "GAAAA...",
-    "to_address": "GBBBB...",
-    "status": "confirmed",
-    "created_at": "2026-10-20T12:00:00Z",
-    "confirmed_at": "2026-10-20T12:00:05Z"
-  }
-]
+{
+  "items": [
+    {
+      "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+      "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+      "type": "payment",
+      "amount": 150000000,
+      "asset_code": "USDC",
+      "from_address": "GAAAA...",
+      "to_address": "GBBBB...",
+      "status": "confirmed",
+      "created_at": "2026-10-20T12:00:00Z",
+      "confirmed_at": "2026-10-20T12:00:05Z"
+    }
+  ],
+  "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9",
+  "has_more": true
+}
 ```
+
+Pagination is cursor based: pass `next_cursor` back as `cursor` until
+`has_more` is `false`. The cursor is a keyset over `(created_at, id)`, so rows
+written while a client pages cannot shift or duplicate results. An unreadable
+cursor returns `422 Invalid cursor`.
 
 `amount` is an integer in **stroops** (1 unit = 10⁷ stroops), matching the
 ledger column and the payments API.
