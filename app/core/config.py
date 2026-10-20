@@ -182,7 +182,11 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
     WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
-    # Event listener fan-out budget (#741).
+    # Event listener fan-out policy (#740, #741).
+    # How long a resolved subscriber list is considered fresh. The webhook rows
+    # themselves are always re-read from the database, so this only bounds how
+    # long a registration change takes to be noticed.
+    EVENT_LISTENER_CACHE_TTL_SECONDS: int = 15
     # How many events a single subscriber may receive per window. The number
     # of emissions is not under the subscriber's control (one event per
     # affected device), so without a budget one subscriber can amplify the
@@ -386,6 +390,9 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.EVENT_LISTENER_CACHE_TTL_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_CACHE_TTL_SECONDS must be > 0.")
 
     if config.EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER <= 0:
         errors.append("EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER must be > 0.")
