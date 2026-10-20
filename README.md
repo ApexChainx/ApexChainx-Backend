@@ -101,6 +101,7 @@ Current active routes:
 - `/api/v1/payments`
 - `/api/v1/webhooks`
 - `/api/v1/wallets`
+- `/api/v1/block-poller` — health of the payment-confirmation poller
 
 Module maturity:
 

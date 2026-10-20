@@ -437,6 +437,46 @@ async def process_outage_resolution(outage_id: str):
 
 ---
 
+## Payment Confirmation Polling
+
+A payment row is written the moment an SLA payout is decided, but the
+settlement only becomes real once the transaction is confirmed on-chain. The
+**block poller** (`app/services/block_poller.py`) is the component that closes
+that gap: it looks at the payments that are still `pending` and asks the
+network about them.
+
+```python
+from app.services.block_poller import BlockPoller
+
+poller = BlockPoller(db, horizon_client=horizon)
+report = poller.poll_once(limit=50)
+# report.checked / report.confirmed / report.failed / report.skipped
+```
+
+### Tracing
+
+Every poll cycle runs inside an OpenTelemetry span (`block_poller.poll` and
+`block_poller.pending_payments`), and the span carries the poll limit as an
+attribute. The time the poller spends waiting on Horizon is therefore visible
+next to the time the API spends on the same request, instead of being
+invisible in between. `BlockPoller.traceparent()` returns the trace context
+of the running poll so an outbound request can be linked to it.
+
+### Health
+
+`GET /api/v1/block-poller/health` reports whether the poller is keeping up:
+how many payments are still waiting and how old the oldest one is. A backlog
+that is not draining is reported as `warn`; a database the poller cannot read
+is reported as `down` (`503`). The response carries aggregate numbers only.
+
+### Failure handling
+
+A transaction the network cannot be reached for is counted as *skipped* and
+the reason is reported: one unreachable transaction never aborts the cycle, so
+the remaining payments are still settled.
+
+---
+
 ## Smart Contracts
 
 ### SLA Calculator Contract

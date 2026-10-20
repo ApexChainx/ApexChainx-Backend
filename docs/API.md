@@ -11,6 +11,7 @@ Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (
 - [Root Cause Analysis (RCA)](#root-cause-analysis-rca)
 - [SLA Management](#sla-management)
 - [Stellar Payments](#stellar-payments)
+- [Block Poller](#block-poller)
 - [Wallet Management](#wallet-management)
 - [Smart Contracts](#smart-contracts)
 - [Analytics](#analytics)
@@ -606,6 +607,55 @@ Get payment transaction history.
   }
 }
 ```
+
+---
+
+## Block Poller
+
+The block poller settles the payments that are still waiting for their
+confirmation on the Stellar network. Its health endpoint answers the
+question an operator actually has: *is the poller keeping up?*
+
+### GET `/api/v1/block-poller/health`
+
+**Authentication:** none — the endpoint exposes aggregate numbers only, so a
+monitoring system can scrape it without credentials. No payment ids and no
+transaction hashes are returned.
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "components": {
+    "block_poller.backlog": {
+      "status": "ok",
+      "pending_payments": 3,
+      "oldest_pending_age_seconds": 12.4,
+      "max_pending_age_seconds": 300
+    }
+  },
+  "timestamp": "2026-01-01T00:00:00+00:00"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `ok`, `warn` or `down` |
+| `pending_payments` | Payments that are still waiting for their confirmation |
+| `oldest_pending_age_seconds` | How long the oldest pending payment has been waiting (`null` when there is none) |
+| `max_pending_age_seconds` | The age above which the backlog is reported as degraded |
+
+**Status codes:**
+
+| Code | When |
+| --- | --- |
+| `200` | The poller is healthy (`ok`) or degraded (`warn`) |
+| `503` | The poller's own bookkeeping cannot be read (`down`) |
+
+A backlog that is not draining -- a payment that was submitted long ago and
+is still `pending` -- is reported as `warn` rather than `down`, so a
+partially degraded poller does not take the instance out of the load
+balancer rotation.
 
 ---
 
