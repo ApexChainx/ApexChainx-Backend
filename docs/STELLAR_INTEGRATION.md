@@ -956,6 +956,55 @@ The backend polls Horizon for transaction confirmation after submission. Confirm
 
 ---
 
+## Ledger Polling (BlockPoller)
+
+`app/services/block_poller.py` provides a resumable ledger poller for workers
+that need to react to on-chain activity:
+
+```python
+from app.services.block_poller import BlockPoller, HorizonBlockSource
+
+
+def handle_ledger(block):
+    # Process the ledger at block.height / block.payload.
+    pass
+
+
+with HorizonBlockSource("https://horizon-testnet.stellar.org") as source:
+    poller = BlockPoller(source, handle_ledger, batch_size=50)
+    poller.run()  # call poller.stop() or set a stop event to shut down
+```
+
+`HorizonBlockSource` reads `/ledgers` in ascending order (`order=asc`) and maps
+each record's `paging_token` to `Block.cursor`. `BlockPoller` only advances its
+cursor after the handler returns successfully, so a handler crash re-reads the
+failed ledger on the next cycle instead of silently skipping it. Persist
+`poller.cursor` if the worker must resume across restarts, then pass it back as
+`start_cursor`.
+
+Error handling:
+
+- `BlockFetchError` carries `retryable` and `status_code`. Network errors,
+  HTTP 408/429, and 5xx responses are retried with bounded exponential backoff
+  (`retry_base_delay_seconds`, `retry_max_delay_seconds`, `max_attempts`); other
+  4xx responses and malformed bodies fail immediately.
+- `BlockHandlerError` identifies the ledger that could not be processed and
+  leaves the cursor on the previous successfully processed ledger.
+- `run()` keeps the worker alive after a failed poll, while `health()` exposes
+  `status`, `cursor`, `last_success_at`, `last_error`, and
+  `consecutive_failures` for monitoring/alerting.
+
+Structured logging uses JSON events (`poll_completed`, `fetch_retry`,
+`fetch_failed`, `handler_failed`, `block_processed`) with the cursor, ledger
+height, attempt count, delay, and error type. Raw ledger payloads are never
+logged.
+
+Unit and integration coverage lives in `tests/test_block_poller.py`; the
+integration tests exercise the Horizon query parameters, cursor pagination, and
+HTTP error classification through `httpx.MockTransport` without a live network.
+
+---
+
 ## Minimum Account Reserve
 
 Stellar accounts require a minimum XLM balance (currently 1 XLM base reserve plus 0.5 XLM per trustline). Recipient wallets must meet this requirement before a USDC payment can be received. Validate wallet activation before executing SLA payments in production.
