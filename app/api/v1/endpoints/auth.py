@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
