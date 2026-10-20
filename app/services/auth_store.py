@@ -18,6 +18,7 @@ from app.repositories.token_family_repository import TokenFamilyRepository
 from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.audit_log import audit_log
 from app.services.auth_cache import AuthCache
+from app.services.user_cache import UserCache
 
 TOKEN_TTL_SECONDS = 3600
 
