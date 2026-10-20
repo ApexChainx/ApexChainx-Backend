@@ -95,7 +95,7 @@ The API enforces strict limits on request payloads and input data to prevent abu
 
 This document mixes current runtime endpoints with some roadmap-style descriptions. For contributor onboarding, use the following status guide first:
 
-- active and routed: `auth`, `audit`, `jobs`, `outages`, `payments`, `sla`, `sla disputes`, `wallets`, `webhooks`
+- active and routed: `auth`, `audit`, `events`, `jobs`, `outages`, `payments`, `sla`, `sla disputes`, `wallets`, `webhooks`
 - strongest current domains: `outages`, `sla`, `audit`, analytics under `/api/v1/sla/*`
 - active but lighter-weight domains: `auth`, `payments`, `wallets`
 - active but operationally dependent: `jobs`, `webhooks`, `sla disputes`
@@ -1735,6 +1735,34 @@ Attach a root cause analysis to a resolved outage.
   "remediation": "BGP config reviewed and hardened; runbook updated"
 }
 ```
+
+---
+
+## Events
+
+The `EventListener` is an in-process, topic-based event bus.  It records every
+processed event in an append-only in-memory history and fans events out to
+subscribers registered per topic (or the `*` wildcard).
+
+### GET `/api/v1/events/health`
+
+Health snapshot for the event bus.  The snapshot is computed from memory only —
+it never touches the database, Redis, or the network — so it is safe to use from
+a liveness probe.
+
+```json
+{
+  "status": "ok",
+  "total_events": 42,
+  "topic_count": 3
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `status` | string | Always `"ok"` when the service can serve the request. |
+| `total_events` | integer | Number of events held in the in-memory history. |
+| `topic_count` | integer | Number of distinct topics seen in the history. |
 
 ---
 
