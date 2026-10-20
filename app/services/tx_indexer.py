@@ -31,13 +31,21 @@ Design notes
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 import httpx
+
+from app.services.tx_indexer_input import (
+    TxIndexerValidationError,
+    sanitize_account,
+    sanitize_asset_code,
+    sanitize_operation_type,
+    sanitize_transaction_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +61,11 @@ NATIVE_ASSET_CODE = "XLM"
 #: Indexed rows are confirmed by definition — they come from a closed ledger.
 INDEXED_STATUS = "confirmed"
 
+#: ``payment_transactions.amount`` is a signed 64-bit column. A Horizon value
+#: that would overflow it is rejected at normalization time instead of raising a
+#: database error that aborts the whole batch.
+MAX_AMOUNT_STROOPS = 2**63 - 1
+
 
 class TxIndexerError(RuntimeError):
     """Base class for every failure raised by the indexer."""
@@ -64,6 +77,29 @@ class TxIndexerRecordError(TxIndexerError):
 
 class TxIndexerTransportError(TxIndexerError):
     """Horizon could not be reached, or answered with an error status."""
+
+
+def _sanitize_record_field(
+    value: Any,
+    *,
+    sanitizer: Callable[[str | None], str | None],
+    error: str,
+) -> str:
+    """Run one allow-list sanitizer over a Horizon field.
+
+    Horizon values are untrusted input: they are the remote half of the ingest
+    path. A value that fails the allow-list is a record error, so the batch
+    skips it instead of writing something the ledger cannot represent.
+    """
+    if value is None or str(value).strip() == "":
+        raise TxIndexerRecordError(error)
+    try:
+        sanitized = sanitizer(str(value))
+    except TxIndexerValidationError as exc:
+        raise TxIndexerRecordError(f"{error}: {exc.reason}") from exc
+    if not sanitized:
+        raise TxIndexerRecordError(error)
+    return sanitized
 
 
 def _parse_created_at(value: Any) -> datetime:
@@ -99,9 +135,11 @@ class IndexedTransaction:
             TxIndexerRecordError: the record is missing a field the ledger of
                 record relies on, or a field cannot be parsed.
         """
-        transaction_hash = str(record.get("transaction_hash") or "").strip()
-        if not transaction_hash:
-            raise TxIndexerRecordError("record has no transaction_hash")
+        transaction_hash = _sanitize_record_field(
+            record.get("transaction_hash"),
+            sanitizer=sanitize_transaction_hash,
+            error="record has no transaction_hash",
+        )
 
         try:
             amount = int(Decimal(str(record.get("amount"))) * STROOPS_PER_UNIT)
@@ -109,20 +147,37 @@ class IndexedTransaction:
             raise TxIndexerRecordError(f"invalid amount: {record.get('amount')!r}") from exc
         if amount < 0:
             raise TxIndexerRecordError(f"negative amount: {record.get('amount')!r}")
+        if amount > MAX_AMOUNT_STROOPS:
+            raise TxIndexerRecordError(f"amount out of range: {record.get('amount')!r}")
 
         source = record.get("from") or record.get("source_account") or record.get("funder")
         destination = record.get("to") or record.get("account")
         if not source or not destination:
             raise TxIndexerRecordError("record has no from/to account pair")
 
+        from_address = _sanitize_record_field(source, sanitizer=sanitize_account, error="invalid source account")
+        to_address = _sanitize_record_field(
+            destination, sanitizer=sanitize_account, error="invalid destination account"
+        )
+        asset_code = _sanitize_record_field(
+            record.get("asset_code") or NATIVE_ASSET_CODE,
+            sanitizer=sanitize_asset_code,
+            error="invalid asset_code",
+        )
+        operation_type = _sanitize_record_field(
+            record.get("type") or "payment",
+            sanitizer=sanitize_operation_type,
+            error="invalid operation type",
+        )
+
         return cls(
             id=f"idx_{transaction_hash}",
             transaction_hash=transaction_hash,
-            type=str(record.get("type") or "payment"),
+            type=operation_type,
             amount=amount,
-            asset_code=str(record.get("asset_code") or NATIVE_ASSET_CODE),
-            from_address=str(source),
-            to_address=str(destination),
+            asset_code=asset_code,
+            from_address=from_address,
+            to_address=to_address,
             created_at=_parse_created_at(record.get("created_at")),
         )
 

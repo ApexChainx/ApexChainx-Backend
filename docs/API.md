@@ -665,6 +665,14 @@ List indexed transactions, newest first. All filters combine with AND.
 `amount` is an integer in **stroops** (1 unit = 10⁷ stroops), matching the
 ledger column and the payments API.
 
+Filters are validated against an allow-list before any query runs: a hash must
+be 64 hexadecimal characters (any case, normalized to lower case), an asset
+code 1-12 alphanumerics (normalized to upper case), status/type lower snake_case
+tokens, and an account at most 69 characters drawn from letters, digits, `_`,
+`*` and `:`. Anything else — including quotes, semicolons, comment markers or
+control characters — returns `422` with a message naming the offending field
+rather than an empty result set.
+
 ### GET `/api/v1/indexer/transactions/{transaction_hash}`
 
 One indexed transaction by hash. Returns `404` when the indexer has not stored

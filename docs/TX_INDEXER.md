@@ -95,6 +95,37 @@ Request and response fields are described in the generated OpenAPI document
 (`/openapi.json`, Swagger UI at `/docs`) and in
 [docs/API.md](API.md#transaction-indexer-txindexer).
 
+### Input validation
+
+Both sides of the indexer treat input as untrusted: query filters on the read
+API and every field of a Horizon record. Validation is **allow-list based**
+(`app/services/tx_indexer_input.py`), so a value either canonicalizes to the
+form the database expects or the request is rejected.
+
+| Field | Accepted form | Normalization |
+|-------|---------------|---------------|
+| `transaction_hash` | 64 hexadecimal characters | lower-cased |
+| `account` | letters, digits, `_`, `*`, `:`; max 69 | — |
+| `asset_code` | 1-12 alphanumerics | upper-cased |
+| `status`, `type` | `lower_snake_case` tokens, max 32 | lower-cased |
+| `created_after`, `created_before` | ISO-8601 | naive timestamps become UTC; offsets convert to UTC |
+
+Additional rules:
+
+* surrounding whitespace is stripped; a value that is empty after stripping is
+  rejected rather than treated as "no filter";
+* NUL and any other control/format character is rejected;
+* quotes, semicolons and comment markers cannot survive the allow-list, so an
+  injection attempt is a `422` instead of a silently empty result set;
+* validation runs **before** the repository is called — a malformed filter
+  never reaches the database.
+
+On the ingest path the same allow-list applies to `transaction_hash`,
+`asset_code`, operation type and account fields, and amounts are bounded to a
+signed 64-bit stroop value. A record that fails is logged as
+`tx_indexer_skipped_record` and dropped; it never aborts the batch or writes a
+row the ledger cannot represent.
+
 ### Error responses
 
 | Status | `error_code` | When |
@@ -102,7 +133,7 @@ Request and response fields are described in the generated OpenAPI document
 | 401 | `unauthorized` | Missing or invalid bearer token |
 | 403 | `forbidden` | Caller's role cannot read the index |
 | 404 | `not_found` | Hash is not indexed |
-| 422 | `unprocessable_entity` | Query validation failed, or `created_after` > `created_before` |
+| 422 | `unprocessable_entity` | A filter does not match its allow-list, or `created_after` > `created_before` |
 
 Errors use the RFC 7807 envelope described in
 [docs/RFC7807.md](RFC7807.md).

@@ -5226,21 +5226,21 @@
         "operationId": "listIndexedTransactions",
         "parameters": [
           {
-            "description": "Exact Stellar transaction hash to look up.",
+            "description": "Exact Stellar transaction hash to look up: 64 hexadecimal characters (case-insensitive; normalized to lower case).",
             "in": "query",
             "name": "transaction_hash",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 255,
+                  "maxLength": 64,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Exact Stellar transaction hash to look up.",
+              "description": "Exact Stellar transaction hash to look up: 64 hexadecimal characters (case-insensitive; normalized to lower case).",
               "title": "Transaction Hash"
             }
           },
@@ -5252,7 +5252,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 255,
+                  "maxLength": 69,
                   "type": "string"
                 },
                 {
@@ -5264,21 +5264,21 @@
             }
           },
           {
-            "description": "Asset code filter, for example ``USDC`` or ``XLM``.",
+            "description": "Asset code filter, for example ``USDC`` or ``XLM`` (normalized to upper case).",
             "in": "query",
             "name": "asset_code",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 20,
+                  "maxLength": 12,
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Asset code filter, for example ``USDC`` or ``XLM``.",
+              "description": "Asset code filter, for example ``USDC`` or ``XLM`` (normalized to upper case).",
               "title": "Asset Code"
             }
           },
@@ -5290,7 +5290,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 50,
+                  "maxLength": 32,
                   "type": "string"
                 },
                 {
@@ -5309,7 +5309,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 50,
+                  "maxLength": 32,
                   "type": "string"
                 },
                 {
@@ -5485,14 +5485,7 @@
             "description": "No indexed transaction exists for that hash."
           },
           "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
+            "description": "The hash is not a 64-character hexadecimal Stellar transaction hash."
           }
         },
         "summary": "Get one indexed transaction",

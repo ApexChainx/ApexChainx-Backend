@@ -18,6 +18,7 @@ Both routes are documented for OpenAPI/Swagger generation on purpose:
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
@@ -28,6 +29,15 @@ from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_engineer
 from app.db.session import get_db
 from app.repositories.tx_indexer_repository import TxIndexerRepository
+from app.services.tx_indexer_input import (
+    MAX_ACCOUNT_LENGTH,
+    MAX_ASSET_CODE_LENGTH,
+    MAX_HASH_LENGTH,
+    MAX_TOKEN_LENGTH,
+    TxIndexerValidationError,
+    TxIndexFilters,
+    sanitize_transaction_hash,
+)
 
 router = APIRouter()
 
@@ -79,6 +89,22 @@ def _to_response(row: object) -> IndexedTransactionResponse:
     return IndexedTransactionResponse.model_validate(row)
 
 
+def _validated_filters(**raw: object) -> TxIndexFilters:
+    """Sanitize query values, mapping the first invalid one to a 422.
+
+    Validation happens before the repository is touched, so a malformed filter
+    never reaches SQL and never costs a query.
+    """
+    try:
+        filters = TxIndexFilters.from_query(**raw)  # type: ignore[arg-type]
+    except TxIndexerValidationError as exc:
+        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
+
+    if filters.created_after and filters.created_before and filters.created_after > filters.created_before:
+        raise CodedHTTPException(status_code=422, detail="created_after cannot be after created_before")
+    return filters
+
+
 @router.get(
     "/transactions",
     response_model=list[IndexedTransactionResponse],
@@ -100,27 +126,30 @@ def _to_response(row: object) -> IndexedTransactionResponse:
 def list_indexed_transactions(
     transaction_hash: str | None = Query(
         default=None,
-        max_length=255,
-        description="Exact Stellar transaction hash to look up.",
+        max_length=MAX_HASH_LENGTH,
+        description=(
+            "Exact Stellar transaction hash to look up: 64 hexadecimal characters "
+            "(case-insensitive; normalized to lower case)."
+        ),
     ),
     account: str | None = Query(
         default=None,
-        max_length=255,
+        max_length=MAX_ACCOUNT_LENGTH,
         description="Stellar account; matches either ``from_address`` or ``to_address``.",
     ),
     asset_code: str | None = Query(
         default=None,
-        max_length=20,
-        description="Asset code filter, for example ``USDC`` or ``XLM``.",
+        max_length=MAX_ASSET_CODE_LENGTH,
+        description="Asset code filter, for example ``USDC`` or ``XLM`` (normalized to upper case).",
     ),
     status: str | None = Query(
         default=None,
-        max_length=50,
+        max_length=MAX_TOKEN_LENGTH,
         description="Ledger status filter. Indexed rows are always ``confirmed``.",
     ),
     type: str | None = Query(
         default=None,
-        max_length=50,
+        max_length=MAX_TOKEN_LENGTH,
         description="Horizon operation type filter, for example ``payment``.",
     ),
     created_after: datetime | None = Query(
@@ -146,13 +175,7 @@ def list_indexed_transactions(
     db: Session = Depends(get_db),
 ) -> list[IndexedTransactionResponse]:
     """List indexed transactions with filtering and offset pagination."""
-    if created_after and created_before and created_after > created_before:
-        raise CodedHTTPException(
-            status_code=422,
-            detail="created_after cannot be after created_before",
-        )
-
-    rows = TxIndexerRepository(db).list_indexed(
+    filters = _validated_filters(
         transaction_hash=transaction_hash,
         account=account,
         asset_code=asset_code,
@@ -160,9 +183,9 @@ def list_indexed_transactions(
         transaction_type=type,
         created_after=created_after,
         created_before=created_before,
-        limit=limit,
-        offset=offset,
     )
+
+    rows = TxIndexerRepository(db).list_indexed(**asdict(filters), limit=limit, offset=offset)
     return [_to_response(row) for row in rows]
 
 
@@ -182,6 +205,7 @@ def list_indexed_transactions(
         401: {"description": "Missing or invalid bearer token."},
         403: {"description": "The caller's role cannot read the transaction index."},
         404: {"description": "No indexed transaction exists for that hash."},
+        422: {"description": "The hash is not a 64-character hexadecimal Stellar transaction hash."},
     },
 )
 def get_indexed_transaction(
@@ -190,7 +214,13 @@ def get_indexed_transaction(
     db: Session = Depends(get_db),
 ) -> IndexedTransactionResponse:
     """Return one indexed transaction by hash."""
-    row = TxIndexerRepository(db).get_by_hash(transaction_hash)
+    try:
+        canonical_hash = sanitize_transaction_hash(transaction_hash)
+    except TxIndexerValidationError as exc:
+        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
+
+    assert canonical_hash is not None  # a path parameter is always present
+    row = TxIndexerRepository(db).get_by_hash(canonical_hash)
     if row is None:
         raise CodedHTTPException(status_code=404, detail="Indexed transaction not found")
     return _to_response(row)
