@@ -24,6 +24,11 @@ class ConfigValidationTests(unittest.TestCase):
             "WEBHOOK_SECRET_ENCRYPTION_KEY": "V5OOA_Ao70n9OxGEbj1WmRsZX6vI4IdtuJ_jYcIhNDg=",
         }
         defaults.update(overrides)
+        # #510: eager Celery is rejected outside local/test. Tests that target a
+        # non-dev environment usually do not care about the eager flag, so give
+        # them the production-valid default unless the test overrides it.
+        if defaults["ENVIRONMENT"] not in {"local", "test"} and "CELERY_TASK_ALWAYS_EAGER" not in overrides:
+            defaults["CELERY_TASK_ALWAYS_EAGER"] = False
         return Settings.model_construct(**defaults)
 
     def test_valid_settings_pass(self):

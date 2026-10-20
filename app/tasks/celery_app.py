@@ -8,6 +8,7 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=[
         "app.tasks.auth_tasks",
+        "app.tasks.block_poller_tasks",
         "app.tasks.outage_tasks",
         "app.tasks.audit_tasks",
         "app.tasks.oauth_tasks",
@@ -63,6 +64,11 @@ celery_app.conf.update(
         "warm-sla-cache": {
             "task": "app.tasks.sla_tasks.warm_sla_cache_task",
             "schedule": 86400.0,  # every day
+        },
+        # #722-#726: tail Horizon ledgers to confirm pending payments.
+        "poll-stellar-blocks": {
+            "task": "app.tasks.block_poller_tasks.poll_stellar_blocks",
+            "schedule": float(settings.BLOCK_POLLER_INTERVAL_SECONDS),
         },
     },
 )

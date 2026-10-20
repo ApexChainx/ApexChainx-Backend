@@ -607,6 +607,31 @@ Get payment transaction history.
 }
 ```
 
+### GET `/api/v1/block-poller/status`
+
+Return the most recent Stellar block poller checkpoint. Requires the
+`engineer` role. The endpoint reads the cached summary from Redis and does not
+contact Horizon or PostgreSQL.
+
+**Response (200 OK):**
+```json
+{
+  "enabled": true,
+  "cursor": "51234567",
+  "last_poll_at": "2026-10-20T15:30:00+00:00",
+  "last_ledger_sequence": 51234567,
+  "ledgers_processed": 3,
+  "transactions_scanned": 42,
+  "payments_confirmed": 2,
+  "cache_hits": 1,
+  "cache_misses": 2,
+  "error": null
+}
+```
+
+See [BLOCK_POLLER.md](BLOCK_POLLER.md) for configuration, metrics and
+operational behaviour.
+
 ---
 
 ## Wallet Management

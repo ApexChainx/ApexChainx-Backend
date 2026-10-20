@@ -209,6 +209,11 @@ def record_histogram(
     metrics.record_histogram(name, value, tags, buckets)
 
 
+def record_timer(name: str, duration_ms: float, tags: dict[str, str] | None = None) -> None:
+    """Record a timer measurement without a context manager."""
+    metrics.record_timer(name, duration_ms, tags)
+
+
 # --- SLA Dispute Metrics ---
 SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL = "sladispute_notification_attempt_total"
 SLADISPUTE_NOTIFICATION_DURATION_MS = "sladispute_notification_duration_ms"
