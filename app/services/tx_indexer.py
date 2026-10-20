@@ -241,6 +241,14 @@ class TransactionSink(Protocol):
     def upsert_many(self, transactions: Sequence[IndexedTransaction]) -> int: ...
 
 
+class StateRecorder(Protocol):
+    """Publishes the outcome of a pass for the health probe (#714)."""
+
+    def record_success(self, *, cursor: str | None, inserted: int) -> None: ...
+
+    def record_failure(self, *, error: str) -> None: ...
+
+
 class HorizonPaymentSource:
     """Thin Horizon ``/payments`` client.
 
@@ -285,9 +293,11 @@ class TxIndexer:
         sink: TransactionSink,
         policy: RetryPolicy | None = None,
         batch_size: int | None = None,
+        state_recorder: StateRecorder | None = None,
     ) -> None:
         self._source = source
         self._sink = sink
+        self._state_recorder = state_recorder
         self._policy = policy or RetryPolicy(
             max_attempts=settings.TX_INDEXER_MAX_ATTEMPTS,
             base_delay=settings.TX_INDEXER_BACKOFF_BASE_SECONDS,
@@ -309,9 +319,15 @@ class TxIndexer:
 
     def run_once(self, cursor: str | None = None) -> IndexResult:
         """Index a single page and return the cursor the next pass should use."""
-        page = self.fetch_page(cursor)
-        transactions = [parse_horizon_record(record) for record in page.records]
-        inserted = self._sink.upsert_many(transactions)
+        try:
+            page = self.fetch_page(cursor)
+            transactions = [parse_horizon_record(record) for record in page.records]
+            inserted = self._sink.upsert_many(transactions)
+        except Exception as exc:
+            # Every failure path (retries exhausted, unparseable record, write
+            # error) is visible to the health probe, not just transport errors.
+            self._record_failure(str(exc))
+            raise
 
         logger.info(
             "tx_indexer_batch_indexed",
@@ -323,8 +339,17 @@ class TxIndexer:
                 "next_cursor": page.next_cursor,
             },
         )
+        self._record_success(cursor=page.next_cursor, inserted=inserted)
         return IndexResult(
             fetched=len(transactions),
             inserted=inserted,
             next_cursor=page.next_cursor,
         )
+
+    def _record_success(self, *, cursor: str | None, inserted: int) -> None:
+        if self._state_recorder is not None:
+            self._state_recorder.record_success(cursor=cursor, inserted=inserted)
+
+    def _record_failure(self, error: str) -> None:
+        if self._state_recorder is not None:
+            self._state_recorder.record_failure(error=error)
