@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
+    # TxIndexer (#713): the chain-ingest loop fetches one page of payments per
+    # pass and retries transient Horizon failures with exponential backoff.
+    # The delay before retry N is BATCH-independent: min(base * 2**(N-1), max)
+    # with +/- TX_INDEXER_BACKOFF_JITTER_RATIO jitter on top.
+    TX_INDEXER_BATCH_SIZE: int = 50  # payments fetched per Horizon page
+    TX_INDEXER_MAX_ATTEMPTS: int = 4  # total attempts per page fetch (first try included)
+    TX_INDEXER_BACKOFF_BASE_SECONDS: float = 0.5  # delay before the first retry
+    TX_INDEXER_BACKOFF_MAX_SECONDS: float = 8.0  # ceiling for any single backoff
+    TX_INDEXER_BACKOFF_JITTER_RATIO: float = 0.5  # +/- fraction applied to each delay
+    TX_INDEXER_TIMEOUT_SECONDS: float = 10.0  # Horizon HTTP timeout
     # Trusted-proxy settings (#205)
     # Number of trusted reverse-proxy hops in front of this app.
     # Set to 0 when running without a proxy (uses direct connection IP).
@@ -317,6 +327,22 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.TRUSTED_PROXY_COUNT < 0:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
+
+    # #713: a nonsensical backoff profile either spins (base <= 0 with jitter)
+    # or hides a transient outage behind an unbounded pause, so reject it at
+    # boot instead of at the first failed Horizon call.
+    if not 1 <= config.TX_INDEXER_BATCH_SIZE <= 200:
+        errors.append("TX_INDEXER_BATCH_SIZE must be between 1 and 200.")
+    if not 1 <= config.TX_INDEXER_MAX_ATTEMPTS <= 10:
+        errors.append("TX_INDEXER_MAX_ATTEMPTS must be between 1 and 10.")
+    if config.TX_INDEXER_BACKOFF_BASE_SECONDS <= 0:
+        errors.append("TX_INDEXER_BACKOFF_BASE_SECONDS must be > 0.")
+    if config.TX_INDEXER_BACKOFF_MAX_SECONDS < config.TX_INDEXER_BACKOFF_BASE_SECONDS:
+        errors.append("TX_INDEXER_BACKOFF_MAX_SECONDS must be >= TX_INDEXER_BACKOFF_BASE_SECONDS.")
+    if not 0 <= config.TX_INDEXER_BACKOFF_JITTER_RATIO <= 1:
+        errors.append("TX_INDEXER_BACKOFF_JITTER_RATIO must be between 0 and 1.")
+    if config.TX_INDEXER_TIMEOUT_SECONDS <= 0:
+        errors.append("TX_INDEXER_TIMEOUT_SECONDS must be > 0.")
 
     if config.ENVIRONMENT not in {"local", "test"}:
         if (
