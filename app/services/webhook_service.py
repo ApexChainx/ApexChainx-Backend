@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+from app.services.event_listener import EventListener
+from app.services.event_listener_metrics import EventListenerMetrics
 from app.services.formatters import canonical_json
-from app.services.metrics import increment_counter
 from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
@@ -26,6 +27,15 @@ from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
+
+# The listener is shared by every path that emits a domain event: which
+# subscribers hear about an event is the same question no matter who asked.
+_event_listener_metrics = EventListenerMetrics()
+
+
+def build_event_listener(db: Session) -> EventListener:
+    """Build the listener used by every path that emits a domain event."""
+    return EventListener(db, metrics=_event_listener_metrics)
 
 
 class WebhookDispatchLimiter:
@@ -155,24 +165,14 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
-    # NOTE: full-table scan + per-row json.loads is a known N+1 (issue #294).
-    # The durable fix (JSONB column + SQL containment filter, or a normalized
-    # webhook_events join table) needs a schema migration and is tracked
-    # separately; this only stops corrupt rows from being silently dropped.
-    # #518: `is_active` already excludes soft-deleted webhooks because delete
-    # clears it, but the tombstone filter is stated explicitly so a future
-    # caller that reactivates a row cannot resurrect its deliveries.
-    webhooks = db.query(Webhook).filter(Webhook.is_active).filter(Webhook.deleted_at.is_(None)).all()
-    result = []
-    for webhook in webhooks:
-        try:
-            events = json.loads(webhook.events)
-            if event.value in events:
-                result.append(webhook)
-        except (json.JSONDecodeError, TypeError):
-            logger.error("Webhook %s has invalid events JSON, skipping.", webhook.id)
-            increment_counter("webhook.events_json.corrupt", tags={"webhook_id": str(webhook.id)})
-    return result
+    """Return the active webhooks that are subscribed to ``event``.
+
+    The resolution lives in :class:`app.services.event_listener.EventListener`
+    so that every path which emits an event resolves the subscribers the same
+    way -- with one statement, and with the subscription filter pushed into
+    SQL instead of a per-row JSON parse in Python (issue #739).
+    """
+    return build_event_listener(db).subscribers(event)
 
 
 def create_delivery(
@@ -373,7 +373,8 @@ def trigger_sla_violation_webhooks(
         - Timestamp is immutable across retries (idempotency support)
         - Future signing changes can use new version without breaking existing consumers
     """
-    webhooks = get_active_webhooks_for_event(db, event)
+    listener = build_event_listener(db)
+    decisions = listener.dispatch_plan(event)
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
@@ -394,7 +395,13 @@ def trigger_sla_violation_webhooks(
     except (ImportError, AttributeError):
         pass
 
-    for webhook in webhooks:
+    for decision in decisions:
+        if not decision.allowed:
+            # The fan-out policy refused this subscriber. The listener already
+            # logged and counted it; skipping keeps the rest of the fan-out
+            # going instead of failing the whole event.
+            continue
+        webhook = decision.webhook
         delivery = create_delivery(
             db,
             webhook,

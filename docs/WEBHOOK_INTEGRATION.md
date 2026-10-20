@@ -351,6 +351,39 @@ Track these metrics:
 - Average delivery latency
 - Dead-letter rate (indicator of persistent problems)
 
+### Event Listener Observability
+
+Every domain event is fanned out by the **event listener**
+(`app/services/event_listener.py`). It resolves the subscribers of the event
+and reports what it did, so the fan-out can be watched without reading logs.
+
+**Prometheus series** (exposed by `GET /api/v1/metrics/prometheus`, tagged with
+the domain event):
+
+| Series | Meaning |
+| --- | --- |
+| `event_listener_resolution_total` | Subscriptions that were resolved |
+| `event_listener_resolution_duration_seconds` | How long a resolution took (histogram) |
+| `event_listener_subscribers` | Subscribers a resolution returned (gauge) |
+| `event_listener_dispatch_total` | Deliveries the listener handed to the delivery pipeline |
+| `event_listener_subscriber_skipped_total` | Subscribers that did not receive the event, tagged with the reason |
+| `event_listener_error_total` | Failures, tagged with the stage they happened in |
+
+**Structured log lines.** The listener logs through
+`app/services/event_listener_logging.py`, so every line carries a stable
+`event_name` next to the domain event it is about:
+
+| `event_name` | Emitted when |
+| --- | --- |
+| `event_listener.resolve_started` | The listener started resolving the subscribers |
+| `event_listener.resolve_completed` | The subscribers were resolved (with the count and the duration) |
+| `event_listener.resolve_failed` | The subscribers could not be resolved |
+| `event_listener.dispatch_completed` | The deliveries were handed over |
+| `event_listener.subscriber_skipped` | A subscriber did not receive the event |
+
+The correlation id is attached by the shared structured logger, so a line can
+always be tied back to the request or task that caused it.
+
 ### Timestamp Handling in Receivers
 
 - Parse using ISO 8601 library (don't regex parse)
