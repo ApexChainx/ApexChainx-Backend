@@ -5,6 +5,9 @@ from alembic.script import ScriptDirectory
 
 from app.core.config import settings
 
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 
 @pytest.mark.skipif(
     "sqlite" in settings.DATABASE_URL,
@@ -20,7 +23,9 @@ class TestMigrationRoundTrip:
     @pytest.fixture(scope="class")
     def all_revisions(self, alembic_cfg):
         script = ScriptDirectory.from_config(alembic_cfg)
-        return [rev.revision for rev in script.walk_revisions()]
+        # Revision objects, not bare IDs: the round-trip tests read
+        # `.revision` and `.down_revision` off each item.
+        return list(script.walk_revisions())
 
     def test_each_migration_upgrade_and_downgrade(self, alembic_cfg):
         script = ScriptDirectory.from_config(alembic_cfg)

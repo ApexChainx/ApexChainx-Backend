@@ -12,6 +12,9 @@ from app.main import app
 from app.models.auth import RegisterRequest
 from app.services.auth_store import AuthStore
 
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 
 @pytest.fixture
 def client():
@@ -51,15 +54,13 @@ class TestGDPRExport:
     def test_export_returns_200_and_tarball(self, client, auth_headers):
         response = client.post("/api/v1/auth/me/export", headers={"Authorization": auth_headers["Authorization"]})
         assert response.status_code == 200
-        data = response.json()
-        assert "job_id" in data
-        assert "tarball_base64" in data
-        assert data["entry_count"] >= 0
+        assert response.headers["content-type"] == "application/gzip"
+        assert "gdpr_export.tar.gz" in response.headers.get("content-disposition", "")
+        assert len(response.content) > 0
 
     def test_export_tarball_contains_valid_user_data(self, client, auth_headers):
         response = client.post("/api/v1/auth/me/export", headers={"Authorization": auth_headers["Authorization"]})
-        data = response.json()
-        tarball_bytes = data["tarball_base64"]
+        tarball_bytes = response.content
 
         # Verify tarball is valid
         tar_buffer = io.BytesIO(tarball_bytes)
@@ -69,6 +70,11 @@ class TestGDPRExport:
             export = json.loads(content)
             assert "user" in export
             assert export["user"]["email"] == auth_headers["email"]
+
+            meta_member = tar.getmember("_metadata.json")
+            meta = json.loads(tar.extractfile(meta_member).read())
+            assert "total_audit_log_entries" in meta
+            assert meta["truncated"] is False
 
     def test_export_without_auth_returns_401(self, client):
         response = client.post("/api/v1/auth/me/export")

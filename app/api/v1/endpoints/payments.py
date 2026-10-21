@@ -1,41 +1,39 @@
+import csv
 import hashlib
 import hmac
-import time
+import io
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTransitionError
 from app.repositories.payment_repository import PaymentRepository
 from app.services.audit_log import audit_log
+from app.services.single_use_token_store import SingleUseTokenStore
+from app.utils.cursor import CursorPage, encode_cursor, decode_cursor
 
 router = APIRouter()
 
-_SEEN_NONCES: dict[str, float] = {}
 CALLBACK_NONCE_TTL_SECONDS = 300
 
-
-def _evict_stale_nonces() -> None:
-    """Remove nonces older than the replay window (called on each callback)."""
-    cutoff = time.monotonic() - CALLBACK_NONCE_TTL_SECONDS
-    stale = [k for k, ts in _SEEN_NONCES.items() if ts < cutoff]
-    for k in stale:
-        del _SEEN_NONCES[k]
+# Replay protection is backed by a shared Redis store (#267) so a nonce
+# rejected on one worker is rejected on every worker, and the replay window
+# survives restarts. When Redis is unavailable the store fails open to a
+# bounded in-process map (documented policy in single_use_token_store.py).
+single_use_token_store = SingleUseTokenStore(ttl_seconds=CALLBACK_NONCE_TTL_SECONDS)
 
 
 def _is_replay(nonce: str) -> bool:
-    """Return True if *nonce* has been seen within the replay window."""
-    _evict_stale_nonces()
-    if nonce in _SEEN_NONCES:
-        return True
-    _SEEN_NONCES[nonce] = time.monotonic()
-    return False
+    """Return True if *nonce* was already consumed within the replay window."""
+    return single_use_token_store.consume(nonce)
 
 
 # BE-027: Schemas for reconciliation history
@@ -58,6 +56,19 @@ class ReconciliationHistoryResponse(BaseModel):
     history: list[ReconciliationHistoryEntry]
 
 
+# BE-286: whitelisted sort fields/directions, mirroring OutageSortField/
+# OutageSortDirection so unknown values 422 instead of being silently ignored.
+class PaymentSortField(str, Enum):
+    created_at = "created_at"
+    amount = "amount"
+    status = "status"
+
+
+class PaymentSortDirection(str, Enum):
+    asc = "asc"
+    desc = "desc"
+
+
 @router.get("/")
 def list_payments(
     page: int = Query(
@@ -73,6 +84,8 @@ def list_payments(
     outage_id: str | None = None,
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
+    sort_by: PaymentSortField = Query(default=PaymentSortField.created_at),
+    sort_dir: PaymentSortDirection = Query(default=PaymentSortDirection.desc),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
@@ -82,7 +95,7 @@ def list_payments(
     When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
     """
     if date_from and date_to and date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from cannot be after date_to")
+        raise CodedHTTPException(status_code=400, detail="date_from cannot be after date_to")
     repo = PaymentRepository(db)
 
     if cursor is not None:
@@ -104,8 +117,50 @@ def list_payments(
         type=type,
         date_from=date_from,
         date_to=date_to,
+        sort_by=sort_by.value,
+        sort_dir=sort_dir.value,
     )
     return PaginatedPayments(items=items, total=total, page=page, page_size=page_size)
+
+
+# BE-287: mirrors GET /outages/export (app/utils/exporter.py conventions) —
+# same filters as list_payments, csv/json output, same Content-Disposition
+# and 400-on-bad-format behavior. Defined before "/{transaction_id}" so it
+# isn't shadowed by that path.
+@router.get("/export")
+def export_payments(
+    format: str = "json",
+    status: str | None = None,
+    type: str | None = None,
+    outage_id: str | None = None,
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
+    fmt = format.lower()
+    if fmt not in ("json", "csv"):
+        raise CodedHTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
+
+    repo = PaymentRepository(db)
+    items, _ = repo.list(
+        page=1, page_size=10_000, status=status, outage_id=outage_id, type=type, date_from=date_from, date_to=date_to
+    )
+    rows = [item.model_dump(mode="json") for item in items]
+
+    if fmt == "json":
+        return rows
+
+    buffer = io.StringIO()
+    fieldnames = list(rows[0].keys()) if rows else ["id", "transaction_hash", "type", "amount", "status"]
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=payments.csv"},
+    )
 
 
 @router.get("/ping")
@@ -117,7 +172,7 @@ def payments_ping():
 def get_payment_history(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     repo = PaymentRepository(db)
     if not repo.get(transaction_id):
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     return repo.get_payment_history(transaction_id)
 
 
@@ -132,7 +187,7 @@ def get_payment_reconciliation_history(
     repo = PaymentRepository(db)
     payment = repo.get(transaction_id)
     if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     history = repo.get_reconciliation_history(transaction_id)
 
@@ -148,7 +203,7 @@ def get_payment(transaction_id: str, current_user=Depends(require_engineer), db:
     repo = PaymentRepository(db)
     payment = repo.get(transaction_id)
     if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     return payment
 
 
@@ -163,12 +218,12 @@ def reconcile_payment(
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     try:
         payment = repo.reconcile(transaction_id, payload.status)
     except PaymentTransitionError as exc:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=422,
             detail={
                 "message": str(exc),
@@ -178,7 +233,7 @@ def reconcile_payment(
             },
         )
     if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     # BE-027: Include previous status in audit log for reconciliation history
     audit_log.log(
@@ -197,11 +252,11 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     try:
         payment = repo.retry(transaction_id)
     except PaymentTransitionError as exc:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=422,
             detail={
                 "message": str(exc),
@@ -211,8 +266,11 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
             },
         )
     if not payment:
-        raise HTTPException(status_code=409, detail="Max retries reached")
-    audit_log.log("payment_retried", {"id": transaction_id, "retry_count": payment.retry_count})
+        raise CodedHTTPException(status_code=409, detail="Max retries reached")
+    audit_log.log(
+        "payment_retried",
+        {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
+    )
     return payment
 
 
@@ -229,7 +287,7 @@ def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -
     """Return the datetime when the next retry should occur, or None if at max."""
     if retry_count >= PaymentRepository.MAX_RETRIES:
         return None
-    delay = min(_RETRY_BASE_SECONDS * (2 ** retry_count), _RETRY_MAX_SECONDS)
+    delay = min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
     anchor = last_retried_at or datetime.now(UTC)
     return anchor + timedelta(seconds=delay)
 
@@ -250,18 +308,33 @@ class PaymentRetryQueueItem(BaseModel):
     last_retried_at: datetime | None
 
 
-@router.get("/retry-queue", response_model=list[PaymentRetryQueueItem])
+@router.get("/retry-queue", response_model=CursorPage)
 def list_retry_queue(
+    cursor: str | None = Query(default=None, description="Cursor for pagination."),
+    limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """Return all payments eligible for retry with computed backoff metadata."""
+    """Return payments eligible for retry with computed backoff metadata.
+
+    Supports cursor-based pagination. The cursor encodes
+    ``(created_at, id)`` of the last item on the previous page.
+    """
     repo = PaymentRepository(db)
     items, _ = repo.list(status="failed")
+
+    decoded = decode_cursor(cursor)
+    if decoded is not None:
+        cursor_id, cursor_created_at_str = decoded
+        items = [p for p in items if (p.created_at.isoformat(), p.id) < (cursor_created_at_str, cursor_id)]
+
+    page_items = items[:limit]
+    has_more = len(items) > limit
+
     result: list[PaymentRetryQueueItem] = []
-    for p in items:
+    for p in page_items:
         next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
-        backoff = min(_RETRY_BASE_SECONDS * (2 ** p.retry_count), _RETRY_MAX_SECONDS)
+        backoff = min(_RETRY_BASE_SECONDS * (2**p.retry_count), _RETRY_MAX_SECONDS)
         result.append(
             PaymentRetryQueueItem(
                 id=p.id,
@@ -277,7 +350,13 @@ def list_retry_queue(
                 last_retried_at=p.last_retried_at,
             )
         )
-    return result
+
+    next_cursor = None
+    if has_more and result:
+        last = result[-1]
+        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+    return CursorPage(items=result, next_cursor=next_cursor, has_more=has_more)
 
 
 @router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
@@ -290,11 +369,11 @@ def retry_now(
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     try:
         payment = repo.retry(transaction_id)
     except PaymentTransitionError as exc:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=422,
             detail={
                 "message": str(exc),
@@ -304,10 +383,15 @@ def retry_now(
             },
         )
     if not payment:
-        raise HTTPException(status_code=409, detail="Max retries reached")
+        raise CodedHTTPException(status_code=409, detail="Max retries reached")
     audit_log.log(
-        "payment_retry_now",
-        {"id": transaction_id, "retry_count": payment.retry_count, "actor": getattr(current_user, "username", None)},
+        "payment_retried",
+        {
+            "id": transaction_id,
+            "retry_count": payment.retry_count,
+            "actor": current_user.email,
+            "override": True,
+        },
     )
     return payment
 
@@ -316,8 +400,10 @@ class ProviderCallbackRequest(BaseModel):
     transaction_id: str
     status: str
     provider_ref: str | None = None
-    # BE-028: callers must supply a per-request nonce for replay protection.
-    # The nonce must be unique within the CALLBACK_NONCE_TTL_SECONDS window.
+    # BE-028 / #264: callers MUST supply a per-request nonce for replay
+    # protection. The nonce must be unique within the
+    # CALLBACK_NONCE_TTL_SECONDS window; nonce-less callbacks are rejected
+    # with a dedicated 400 error.
     nonce: str | None = None
 
 
@@ -351,12 +437,16 @@ def provider_callback(
     Inbound callback from a payment provider to update payment status (BE-028).
 
     Security model:
-    - HMAC-SHA256 signature (X-Webhook-Signature) verified when
-      PAYMENT_WEBHOOK_SECRET is configured.  The signed message includes the
-      nonce so replaying a captured request fails if the nonce changes.
+    - HMAC-SHA256 signature (X-Webhook-Signature) is verified whenever
+      PAYMENT_WEBHOOK_SECRET is configured. PAYMENT_WEBHOOK_SECRET is required
+      in non-local environments (validate_critical_settings), so signature
+      verification is effectively mandatory in deployments.  The signed
+      message includes the nonce so replaying a captured request fails if the
+      nonce changes.
     - Replay protection: the nonce (from X-Callback-Nonce header or the
-      ``nonce`` body field) must be unique within a 5-minute window.
-      Duplicate nonces are rejected with 409 Conflict.
+      ``nonce`` body field) is MANDATORY. Nonce-less callbacks are rejected
+      with 400, and duplicate nonces within the 5-minute window are rejected
+      with 409 Conflict.
     - Idempotency: a callback that moves a payment into its current status
       is silently accepted (returns 200 with the unchanged record).
     - Failures and suspicious events are written to the audit log so they
@@ -364,6 +454,19 @@ def provider_callback(
     """
     # --- 1. Resolve nonce (header takes precedence over body field) ----------
     effective_nonce = x_callback_nonce or payload.nonce
+
+    # --- 1b. Reject nonce-less callbacks (#264) -------------------------------
+    # Replay protection is mandatory, not opt-in: a callback without a nonce
+    # is rejected with a dedicated error code before any state change.
+    if not effective_nonce:
+        audit_log.log(
+            "callback_rejected_missing_nonce",
+            {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
+        )
+        raise CodedHTTPException(
+            status_code=400,
+            detail="Callback nonce is required (X-Callback-Nonce header or 'nonce' body field)",
+        )
 
     # --- 2. Authenticate signature -------------------------------------------
     secret = settings.PAYMENT_WEBHOOK_SECRET
@@ -373,7 +476,7 @@ def provider_callback(
                 "callback_rejected_missing_signature",
                 {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
             )
-            raise HTTPException(status_code=401, detail="Missing webhook signature")
+            raise CodedHTTPException(status_code=401, detail="Missing webhook signature")
 
         if not _verify_callback_signature(
             payload.transaction_id,
@@ -386,7 +489,7 @@ def provider_callback(
                 "callback_rejected_bad_signature",
                 {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
             )
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+            raise CodedHTTPException(status_code=401, detail="Invalid webhook signature")
 
     if effective_nonce:
         if _is_replay(effective_nonce):
@@ -398,7 +501,7 @@ def provider_callback(
                     "provider_ref": payload.provider_ref,
                 },
             )
-            raise HTTPException(
+            raise CodedHTTPException(
                 status_code=409,
                 detail="Duplicate callback nonce – possible replay attack",
             )
@@ -410,14 +513,23 @@ def provider_callback(
             "callback_rejected_unknown_payment",
             {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
         )
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     if existing.status == payload.status:
+        audit_log.log(
+            "payment_provider_callback_duplicate",
+            {
+                "transaction_id": payload.transaction_id,
+                "provider_ref": payload.provider_ref,
+                "nonce": effective_nonce,
+                "status": payload.status,
+            },
+        )
         return existing
 
     try:
         updated = repo.reconcile(payload.transaction_id, payload.status)
-    except ValueError as exc:
+    except (ValueError, PaymentTransitionError) as exc:
         audit_log.log(
             "callback_rejected_invalid_transition",
             {
@@ -428,7 +540,31 @@ def provider_callback(
                 "error": str(exc),
             },
         )
-        raise HTTPException(status_code=422, detail=str(exc))
+        audit_log.log(
+            "payment_dead_letter",
+            {
+                "transaction_id": payload.transaction_id,
+                "from_status": existing.status,
+                "to_status": payload.status,
+                "provider_ref": payload.provider_ref,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise CodedHTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        audit_log.log(
+            "payment_dead_letter",
+            {
+                "transaction_id": payload.transaction_id,
+                "from_status": existing.status,
+                "to_status": payload.status,
+                "provider_ref": payload.provider_ref,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise CodedHTTPException(status_code=500, detail="Internal error processing callback")
 
     audit_log.log(
         "payment_provider_callback",
@@ -439,4 +575,20 @@ def provider_callback(
             "nonce": effective_nonce,
         },
     )
+
+    # Auto-retry on failure: if the provider marked the payment as failed
+    # and we have retries remaining, schedule a retry with exponential backoff.
+    if payload.status == "failed" and updated.retry_count < PaymentRepository.MAX_RETRIES:
+        payment = repo.retry(payload.transaction_id)
+        if payment:
+            next_retry_at = _compute_next_retry_at(payment.retry_count, payment.last_retried_at)
+            audit_log.log(
+                "payment_auto_retry_scheduled",
+                {
+                    "id": payload.transaction_id,
+                    "retry_count": payment.retry_count,
+                    "next_retry_at": next_retry_at.isoformat() if next_retry_at else None,
+                },
+            )
+
     return updated

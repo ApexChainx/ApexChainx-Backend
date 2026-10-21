@@ -153,8 +153,26 @@ def _clear_existing(db) -> dict[str, int]:
     from sqlalchemy import func
 
     from app.models.orm.outage import OutageORM
+    from app.models.orm.payment import PaymentTransactionORM
+    from app.models.orm.sla import SLAResultORM
 
     counts: dict[str, int] = {}
+    try:
+        result = db.query(func.count()).select_from(PaymentTransactionORM).scalar()
+        counts["payments"] = result or 0
+        db.query(PaymentTransactionORM).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    try:
+        result = db.query(func.count()).select_from(SLAResultORM).scalar()
+        counts["sla_results"] = result or 0
+        db.query(SLAResultORM).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+
     try:
         result = db.query(func.count()).select_from(OutageORM).scalar()
         counts["outages"] = result or 0

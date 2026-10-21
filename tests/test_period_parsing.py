@@ -4,7 +4,7 @@ Validates that the strict regex supports any year for monthly and quarterly
 formats, and raises typed validation errors on bad input.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -22,41 +22,41 @@ class TestParsePeriodMonthly:
         """Issue #95: 2025-03 must resolve without error."""
         orch = _make_orchestrator()
         start, end = orch.parse_period("2025-03")
-        assert start == datetime(2025, 3, 1)
-        assert end == datetime(2025, 4, 1)
+        assert start == datetime(2025, 3, 1, tzinfo=UTC)
+        assert end == datetime(2025, 4, 1, tzinfo=UTC)
 
     def test_2024_01_resolves(self):
         """Previously hardcoded year still works."""
         orch = _make_orchestrator()
         start, end = orch.parse_period("2024-01")
-        assert start == datetime(2024, 1, 1)
-        assert end == datetime(2024, 2, 1)
+        assert start == datetime(2024, 1, 1, tzinfo=UTC)
+        assert end == datetime(2024, 2, 1, tzinfo=UTC)
 
     def test_december_wraps_to_next_year(self):
         orch = _make_orchestrator()
         start, end = orch.parse_period("2025-12")
-        assert start == datetime(2025, 12, 1)
-        assert end == datetime(2026, 1, 1)
+        assert start == datetime(2025, 12, 1, tzinfo=UTC)
+        assert end == datetime(2026, 1, 1, tzinfo=UTC)
 
     def test_far_future_year(self):
         orch = _make_orchestrator()
         start, end = orch.parse_period("2099-06")
-        assert start == datetime(2099, 6, 1)
-        assert end == datetime(2099, 7, 1)
+        assert start == datetime(2099, 6, 1, tzinfo=UTC)
+        assert end == datetime(2099, 7, 1, tzinfo=UTC)
 
 
 class TestParsePeriodQuarterly:
     def test_2025_Q1_resolves(self):
         orch = _make_orchestrator()
         start, end = orch.parse_period("2025-Q1")
-        assert start == datetime(2025, 1, 1)
-        assert end == datetime(2025, 4, 1)
+        assert start == datetime(2025, 1, 1, tzinfo=UTC)
+        assert end == datetime(2025, 4, 1, tzinfo=UTC)
 
     def test_2025_Q4_resolves(self):
         orch = _make_orchestrator()
         start, end = orch.parse_period("2025-Q4")
-        assert start == datetime(2025, 10, 1)
-        assert end == datetime(2026, 1, 1)
+        assert start == datetime(2025, 10, 1, tzinfo=UTC)
+        assert end == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class TestParsePeriodBadInput:

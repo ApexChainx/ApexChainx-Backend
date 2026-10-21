@@ -80,17 +80,24 @@ def configure_logging() -> None:
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         import json as _json
+        import traceback
 
         # ``correlation_id`` is stamped by CorrelationIdFilter before format()
         # is called.  Fall back to the empty string when the filter is absent.
         correlation_id = getattr(record, "correlation_id", "") or ""
 
-        return _json.dumps(
-            {
-                "timestamp": self.formatTime(record),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "correlation_id": correlation_id,
-            }
-        )
+        data = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "correlation_id": correlation_id,
+        }
+        # Render the traceback for logger.exception()/exc_info records so
+        # structured ingestion never loses stack context. exc_text is used only
+        # if it was already rendered upstream, to avoid double formatting.
+        if record.exc_info:
+            data["exception"] = "".join(traceback.format_exception(*record.exc_info))
+        elif record.exc_text:
+            data["exception"] = record.exc_text
+        return _json.dumps(data)

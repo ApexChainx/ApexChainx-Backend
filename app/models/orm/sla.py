@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import BIGINT
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -10,11 +11,11 @@ class SLAResultORM(Base):
     __tablename__ = "sla_results"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    outage_id = Column(String, ForeignKey("outages.id", ondelete="CASCADE"), nullable=False, index=True)
+    outage_id = Column(String, ForeignKey("outages.id", ondelete="RESTRICT"), nullable=False, index=True)
     status = Column(String(20), nullable=False)  # "met" | "violated"
     mttr_minutes = Column(Integer, nullable=False)
     threshold_minutes = Column(Integer, nullable=False)
-    amount = Column(Float, nullable=False)
+    amount = Column(BIGINT, nullable=False)  # exact on-chain i128 amount
     payment_type = Column(String(20), nullable=False)  # "reward" | "penalty"
     rating = Column(String(20), nullable=False)  # "exceptional" | "excellent" | "good" | "poor"
     policy_version = Column(String(50), nullable=False, default="1.0")

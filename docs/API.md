@@ -15,9 +15,53 @@ Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (
 - [Smart Contracts](#smart-contracts)
 - [Analytics](#analytics)
 - [Reports](#reports)
+- [Transaction Indexer](#transaction-indexer)
 - [Error Handling](#error-handling)
 
 - [CORS](#cors)
+- [API Versioning](#api-versioning)
+
+---
+
+## API Versioning
+
+Every response carries `X-API-Version` (the version this deployment serves) and
+`X-Supported-API-Versions` (the range this deployment can serve, oldest first).
+
+Clients may pin a version by sending the `X-API-Version` request header:
+
+| Request header          | Result                                                          |
+|-------------------------|-----------------------------------------------------------------|
+| absent / empty          | Served as "latest" — no negotiation, fully backwards compatible |
+| `1.0.0` (in range)      | Served normally, version echoed back                             |
+| `2.0.0` (future)        | `426 Upgrade Required`, `error_code: api_version_unsupported`    |
+| `0.9.0` (retired)       | `426 Upgrade Required`, `error_code: api_version_unsupported`    |
+| `banana` (unparseable)  | `400 Bad Request`, `error_code: api_version_unsupported`         |
+
+The supported range is configurable through `API_VERSION_MIN_SUPPORTED` and
+`API_VERSION_MAX_SUPPORTED`. The deployment refuses to start if `VERSION` falls
+outside the advertised range, so a mis-pinned range cannot silently reject every
+client.
+
+Rejection responses are RFC 7807 problem documents and repeat the negotiation
+metadata so a client can self-correct without a second request:
+
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/426",
+  "title": "Unsupported API Version",
+  "status": 426,
+  "detail": "API version 2.0.0 is not available on this deployment; ...",
+  "error_code": "api_version_unsupported",
+  "requested_version": "2.0.0",
+  "supported_versions": ["1.0.0", "1.0.0"],
+  "current_version": "1.0.0"
+}
+```
+
+Version negotiation covers routing. For *payload* compatibility, enum query
+parameters (`status`, `state`) are documented as forward-compatible: new values
+are added only in a new major API version.
 
 ---
 
@@ -152,8 +196,8 @@ Register new user account.
 The API uses a conservative CORS configuration. By default the server allows the following methods and headers from configured origins:
 
 - Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With
-- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining
+- Allowed request headers: Authorization, X-Correlation-ID, Idempotency-Key, Content-Type, X-Requested-With, X-API-Version
+- Exposed response headers: X-Correlation-ID, X-RateLimit-Remaining, X-API-Version, X-Supported-API-Versions
 
 Origins are configured via environment variables and wildcard origins ("*") are rejected on startup for security reasons.
 
@@ -592,6 +636,26 @@ Create a new Stellar wallet for a user.
 
 **⚠️ Security Note:** Private keys are NEVER returned via API. Users must manage their own keys via wallet apps (Freighter, Albedo).
 
+**Response (409 Conflict):** a user has exactly one wallet. If one is already
+registered — including when a concurrent request wins the race for the unique
+constraint — the create answers 409 and echoes the wallet that already exists, so
+a client retry proceeds with that address instead of creating a second row:
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/409",
+  "title": "wallet_already_exists",
+  "status": 409,
+  "detail": "Wallet 7 already registered for user 'user123' at address 'GXXX...'.",
+  "error_code": "wallet_already_exists",
+  "correlation_id": "…",
+  "fields": {
+    "wallet_id": "7",
+    "user_id": "user123",
+    "public_key": "GXXX..."
+  }
+}
+```
+
 ### GET `/api/v1/wallets/{user_id}`
 
 Get wallet details for a user.
@@ -735,6 +799,108 @@ Get payment analytics.
 
 ---
 
+## Transaction Indexer
+
+### GET `/api/v1/indexer/transactions`
+
+Search the transactions the indexer has stored. Requires an engineer role.
+
+| Parameter | Type | Rules |
+| --- | --- | --- |
+| `transaction_hash` | string | 64 hex characters |
+| `account` | string | valid Stellar public key; matches sender or recipient |
+| `asset_code` | string | 1-12 alphanumerics, case-insensitive |
+| `status` | string | `pending`, `confirmed` or `failed` |
+| `type` | string | lowercase label, e.g. `payment` |
+| `outage_id` | string | `^[A-Za-z0-9_-]{1,64}$` |
+| `min_amount` / `max_amount` | integer | stroops, `min <= max` |
+| `created_after` / `created_before` | ISO-8601 | `after <= before` |
+| `sort_by` | string | `created_at` (default), `confirmed_at`, `amount`, `status` |
+| `sort_dir` | string | `asc` or `desc` (default) |
+| `limit` | integer | 1-200, default 50 |
+
+```http
+GET /api/v1/indexer/transactions?account=GABC...&status=confirmed&sort_by=amount&sort_dir=desc&limit=20
+```
+
+```json
+[
+  {
+    "id": "txidx_3b550f2cac6f4a778d7cf",
+    "transaction_hash": "3b550f2cac6f...",
+    "type": "payment",
+    "amount": 3000,
+    "asset_code": "USDC",
+    "from_address": "GABC...",
+    "to_address": "GDEF...",
+    "status": "confirmed",
+    "outage_id": null,
+    "created_at": "2026-10-20T11:50:00+00:00",
+    "confirmed_at": "2026-10-20T11:50:02+00:00"
+  }
+]
+```
+
+Invalid filters return `422` with the reason and never reach the database, e.g.
+sort keys outside the whitelist, non-hex hashes, malformed Stellar accounts or
+an inverted amount/time window. See
+[TX_INDEXER.md](TX_INDEXER.md#query-path-hardening-716).
+
+### GET `/api/v1/indexer/health`
+
+Probe for the TxIndexer ingest loop. Reads the worker's Redis heartbeat and
+pings the ledger database. See [TX_INDEXER.md](TX_INDEXER.md#health-probe-714)
+for the full status contract.
+
+**Response 200 — healthy**
+
+```json
+{
+  "status": "ok",
+  "reason": null,
+  "observed_at": "2026-10-20T12:00:00+00:00",
+  "last_attempt_at": "2026-10-20T11:59:50+00:00",
+  "last_success_at": "2026-10-20T11:59:50+00:00",
+  "lag_seconds": 10.0,
+  "max_lag_seconds": 120,
+  "consecutive_failures": 0,
+  "last_error": null,
+  "last_inserted": 42,
+  "components": {
+    "database": {"status": "ok", "details": {}},
+    "state_store": {"status": "ok", "details": {}}
+  }
+}
+```
+
+**Response 200 — degraded** (`status` is `degraded`, `reason` is one of
+`no_successful_run`, `last_run_failed`, `stale`)
+
+```json
+{
+  "status": "degraded",
+  "reason": "last_run_failed",
+  "consecutive_failures": 3,
+  "last_error": "horizon payments fetch (cursor=start) failed after 4 attempt(s): 503",
+  "lag_seconds": 900.0
+}
+```
+
+**Response 503 — down** (ledger database unreachable)
+
+```json
+{
+  "status": "down",
+  "reason": "database_unreachable",
+  "components": {
+    "database": {"status": "down", "details": {"error": "OperationalError: down"}},
+    "state_store": {"status": "empty", "details": {}}
+  }
+}
+```
+
+---
+
 ## Error Handling
 
 ### Error Response Format
@@ -797,6 +963,21 @@ X-RateLimit-Remaining: 95
 X-RateLimit-Reset: 1705405200
 ```
 
+### Limiter failure behaviour
+
+The limiter (`app/core/rate_limiter.py`) degrades instead of failing closed:
+
+- Transient Redis errors are retried up to 3 times with exponential backoff
+  (50 ms, then 100 ms) before the fallback path takes over.
+- Once Redis is deemed unavailable the circuit stays open for 30 seconds, so a
+  failing Redis is not hammered on every request.
+- With a database session the persistent attempt ledger remains authoritative;
+  without one the in-memory limiter enforces the same limits.
+- Every retry and fallback logs the structured fields `rate_limiter_key`,
+  `backend`, `error_type` and `attempt`.
+- `check_or_raise(key)` raises `RateLimitError` (carrying the offending `key`)
+  when a caller is over its limit, so endpoints can answer HTTP `429`.
+
 ---
 
 ## Pagination
@@ -828,6 +1009,15 @@ GET /api/v1/outages?limit=20&offset=40
 
 APEXCHAINX can send webhooks for important events:
 
+### Deleting a Webhook
+
+`DELETE /api/v1/webhooks/{webhook_id}` is a **soft delete**: the registration is
+retained as a tombstone so its delivery history stays auditable, `deleted_at` is
+reported in the response, and the row disappears from `GET /api/v1/webhooks`
+unless `include_deleted=true` is passed. `GET /api/v1/webhooks/{id}` and its
+`/deliveries` history remain reachable. See
+[WEBHOOK_INTEGRATION.md](WEBHOOK_INTEGRATION.md#deleting-a-webhook).
+
 ### Webhook Events
 
 - `outage.created`
@@ -853,6 +1043,24 @@ APEXCHAINX can send webhooks for important events:
 ```
 
 Configure webhooks in the admin panel or via API.
+
+### Webhook Registration Limits
+
+Registration is capped so that one admin session cannot multiply every emitted
+event by an unbounded number of outbound HTTPS requests:
+
+| Setting | Default | Behaviour |
+|---------|---------|-----------|
+| `MAX_WEBHOOKS_PER_ACCOUNT` | `50` | `POST /api/v1/webhooks` returns `409 Conflict` with the cap in the message once this many webhooks are registered. `0` disables the cap. |
+| `WEBHOOK_FANOUT_WARN_THRESHOLD` | `200` | When the total number of event subscriptions across all webhooks exceeds this, creation and event-subscription updates log a warning and increment `webhook.fanout.threshold_exceeded`. Not enforced — per-dispatch concurrency stays bounded by `WEBHOOK_MAX_CONCURRENT_DISPATCHES`. |
+
+`409` response body:
+
+```json
+{
+  "detail": "Webhook limit reached: 50 webhooks are already registered and MAX_WEBHOOKS_PER_ACCOUNT is 50. Delete an unused webhook before creating another."
+}
+```
 
 ---
 
@@ -956,6 +1164,23 @@ Return the immutable audit event log. All state-changing operations across outag
 ---
 
 ## Jobs Endpoints
+
+### Job state model
+
+Job records carry one closed set of statuses; the API never reports a value
+outside it. Celery task states are mapped at the API boundary as follows:
+
+| Celery state | Job status reported | Notes |
+|--------------|---------------------|-------|
+| `PENDING`    | `pending`           | Waiting for a worker (unknown task IDs also surface as PENDING). |
+| `STARTED`    | `started`           | Task is executing on a worker. |
+| `RETRY`      | `started`           | A retried task is awaiting/running its next attempt; `retry_count` and `last_retried_at` carry the retry distinction. |
+| `SUCCESS`    | `success`           | Terminal. |
+| `FAILURE`    | `failure`           | Terminal. `error` holds the failure message. |
+| `REVOKED`    | `revoked`           | Terminal — cancelled via `DELETE /api/v1/jobs/{id}`. |
+
+Any Celery state outside this table is not passed through: the job keeps its
+last stored status and the deviation is logged.
 
 ### GET `/api/v1/jobs`
 
@@ -1568,6 +1793,33 @@ Response:
   "network": "testnet"
 }
 ```
+
+---
+
+## Webhook List Endpoint
+
+### GET `/api/v1/webhooks`
+
+Paginated list of registered webhooks. Query parameters: `is_active`, `name`
+(case-insensitive substring), `page` (1-indexed, default 1), `page_size`
+(default 20, max 100).
+
+```json
+{
+  "items": [{"id": "3f1b...-...", "name": "outage-webhook", "schema_version": "1"}],
+  "total": 45,
+  "page": 1,
+  "page_size": 20,
+  "returned": 1,
+  "has_more": true
+}
+```
+
+`total` is the count of rows matching the filters; `has_more` is `false` on the
+last page, so no extra request is needed to detect the end. Ordering is
+`created_at` descending with the id as tie-breaker. Secrets are never included.
+The body was a bare array before #554 — read `items` instead of iterating the
+response directly.
 
 ---
 

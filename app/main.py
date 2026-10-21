@@ -1,11 +1,10 @@
+import asyncio
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
-from redis import ConnectionError, Redis, TimeoutError
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import ALL_METHODS, SAFELISTED_HEADERS, CORSMiddleware
@@ -28,12 +27,14 @@ from app.core.exceptions import (
 from app.core.lifecycle import install_signal_handlers
 from app.core.logging_config import configure_logging
 from app.core.tracing import init_tracing, instrument_app
-from app.db.session import engine
+from app.db.session import audit_engine, engine
 from app.middleware.api_version import ApiVersionMiddleware
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
+from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.payload_size import PayloadSizeMiddleware
 from app.services.health_report import build_readiness_report
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 
@@ -43,30 +44,10 @@ install_signal_handlers()
 init_tracing()
 
 
-async def check_database() -> bool:
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-            conn.commit()
-        return True
-    except ConnectionError:
-        return False
-
-
-async def check_celery() -> bool:
-    try:
-        r = Redis.from_url(settings.CELERY_BROKER_URL)
-        r.ping()
-        return True
-    except (ConnectionError, TimeoutError):
-        return False
-
-
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
-app.add_exception_handler(RequestValidationError, pydantic_validation_handler)
 # Content-type negotiation middleware (before correlation to catch early)
 app.add_middleware(ContentTypeMiddleware)
 
@@ -80,9 +61,14 @@ app.add_middleware(IdempotencyMiddleware)
 class _DynamicCORSMiddleware(CORSMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
+        self._origins_cache = list(settings.ALLOWED_ORIGINS)
+
+    def refresh_origins(self) -> None:
+        """Re-read allowed origins from settings."""
+        self._origins_cache = list(settings.ALLOWED_ORIGINS)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        allow_origins = settings.ALLOWED_ORIGINS
+        allow_origins = self._origins_cache
         allow_methods = settings.CORS_ALLOWED_METHODS
         allow_headers = settings.CORS_ALLOWED_HEADERS
         expose_headers = settings.CORS_EXPOSE_HEADERS
@@ -143,10 +129,16 @@ app.add_middleware(SecurityHeadersMiddleware)
 # API version and commit headers on every response
 app.add_middleware(ApiVersionMiddleware)
 
+# ETag middleware: computes ETag for GET/HEAD responses and honours If-None-Match
+app.add_middleware(ETagMiddleware, exclude_path_prefixes=settings.ETAG_EXCLUDE_PATH_PREFIXES)
+
 
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
     correlation_id = get_or_generate_correlation_id()
+    # Conflict subclasses carry the fields that collide; surfacing them is what
+    # lets a client act on the 409 instead of just logging it.
+    fields = getattr(exc, "fields", None)
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -157,6 +149,7 @@ async def apex_exception_handler(request: Request, exc: ApexException) -> JSONRe
             "correlation_id": correlation_id,
             "error_code": getattr(exc, "error_code", "domain_error"),
             **(getattr(exc, "extra", None) or {}),
+            **({"fields": fields} if fields else {}),
         },
         media_type="application/problem+json",
         headers={"X-Correlation-ID": correlation_id},
@@ -205,11 +198,23 @@ async def apex_transient_error_handler(request: Request, exc: ApexTransientError
 def liveness():
     return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
+
 @app.get("/health/readiness")
 async def readiness():
-    report = build_readiness_report(engine, settings.CELERY_BROKER_URL)
+    # Run the (blocking) probe work on a worker thread so a slow DB/Redis never
+    # stalls the event loop.
+    report = await asyncio.to_thread(build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL)
     report["timestamp"] = datetime.now(UTC).isoformat()
-    return report
+
+    # Map report status to HTTP status code
+    if report["status"] == "down":
+        return JSONResponse(status_code=503, content=report)
+    elif report["status"] == "warn":
+        # For warn status, return 200 to keep instance in load balancer rotation
+        # but indicate degraded performance in the response body
+        return JSONResponse(status_code=200, content=report)
+    else:  # status == "ok"
+        return JSONResponse(status_code=200, content=report)
 
 
 # Legacy health check – deprecated, redirects to /health/liveness
@@ -233,3 +238,7 @@ app.include_router(api_router, prefix="/api/v1")
 
 # Apply OpenTelemetry auto-instrumentation (after all routes registered)
 instrument_app(app)
+
+# Wrap the FastAPI ASGI app with the payload size guard so it runs outside
+# the BaseHTTPMiddleware stack and can short-circuit large request bodies.
+app = PayloadSizeMiddleware(app)

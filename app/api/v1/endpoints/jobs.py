@@ -3,10 +3,13 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from sqlalchemy import and_, or_
+
+from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.job import Job, JobStatus, JobType
@@ -14,11 +17,16 @@ from app.services.audit_log import audit_log
 from app.services.job_cleanup import JobCleanupService
 from app.services.metrics import increment_counter, timer
 from app.tasks.celery_app import celery_app
-from app.tasks.sla_tasks import enqueue_bulk_sla_computation, enqueue_sla_computation
+from app.tasks.sla_tasks import compute_sla_for_device, enqueue_bulk_sla_computation, enqueue_sla_computation
+from app.utils.cache import TTLCache
 from app.utils.correlation_ctx import get_correlation_id
+from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
+from app.utils.job_states import celery_state_to_job_status
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
+
+_job_status_cache = TTLCache(ttl_seconds=5)
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
@@ -95,15 +103,24 @@ class JobCleanupResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-def _serialize_job(job: Job) -> JobResponse:
-    def _parse(val):
-        if val is None:
-            return None
+def _parse_job_json(val):
+    """Parse a job payload/result value into a dict.
+
+    Corrupt data is never returned as a raw string: it is logged and
+    surfaced as None so consumers always see dict | None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, str):
         try:
             return json.loads(val)
         except (json.JSONDecodeError, TypeError):
-            return val
+            logger.warning("Job payload/result is not valid JSON; returning null", value=val[:200])
+            return None
+    return val
 
+
+def _serialize_job(job: Job) -> JobResponse:
     return JobResponse(
         id=job.id,
         celery_task_id=job.celery_task_id,
@@ -113,8 +130,8 @@ def _serialize_job(job: Job) -> JobResponse:
         progress_details=job.progress_details,
         partial_results=job.partial_results,
         per_item_errors=job.per_item_errors,
-        payload=_parse(job.payload),
-        result=_parse(job.result),
+        payload=_parse_job_json(job.payload),
+        result=_parse_job_json(job.result),
         error=job.error,
         # BE-041: Include retry metadata
         retry_count=job.retry_count,
@@ -129,7 +146,7 @@ def _serialize_job(job: Job) -> JobResponse:
 def _get_job_or_404(db: Session, job_id: UUID) -> Job:
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+        raise CodedHTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     return job
 
 
@@ -141,18 +158,20 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
     if job.status in (JobStatus.SUCCESS, JobStatus.FAILURE, JobStatus.REVOKED):
         return job
 
+    cache_key = str(job.id)
+    cached = _job_status_cache.get(cache_key)
+    if cached is not None:
+        if cached != job.status:
+            job.status = cached
+            db.commit()
+            db.refresh(job)
+        return job
+
     task_result: AsyncResult = AsyncResult(job.celery_task_id, app=celery_app)
-    celery_state = task_result.state  # PENDING, STARTED, SUCCESS, FAILURE, REVOKED
-
-    state_map = {
-        "PENDING": JobStatus.PENDING,
-        "STARTED": JobStatus.STARTED,
-        "SUCCESS": JobStatus.SUCCESS,
-        "FAILURE": JobStatus.FAILURE,
-        "REVOKED": JobStatus.REVOKED,
-    }
-
-    new_status = state_map.get(celery_state, job.status)
+    # #571: one closed, unit-tested mapping for every Celery state; unmapped
+    # states keep the stored status instead of passing unknown strings through.
+    new_status = celery_state_to_job_status(task_result.state, fallback=job.status)
+    _job_status_cache.set(cache_key, new_status)
     if new_status != job.status:
         job.status = new_status
         db.commit()
@@ -218,7 +237,7 @@ def submit_bulk_sla_computation(
     correlation_id = get_correlation_id()
 
     if not payload.device_ids:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="device_ids must not be empty.",
         )
@@ -248,21 +267,46 @@ def submit_bulk_sla_computation(
         return _serialize_job(job)
 
 
-@router.get("", response_model=list[JobResponse])
+@router.get("", response_model=CursorPage)
 def list_jobs(
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=100),
+    cursor: str | None = Query(None),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    """List all jobs with optional filters."""
-    query = db.query(Job).order_by(Job.created_at.desc())
+    """List jobs with cursor-based pagination."""
+    query = db.query(Job).order_by(Job.created_at.desc(), Job.id.desc())
     if job_type is not None:
         query = query.filter(Job.job_type == job_type)
     if status_filter is not None:
         query = query.filter(Job.status == status_filter)
-    return [_serialize_job(j) for j in query.limit(limit).all()]
+
+    decoded = decode_cursor(cursor)
+    if decoded:
+        cursor_id, cursor_created_at = decoded
+        query = query.filter(
+            or_(
+                Job.created_at < cursor_created_at,
+                and_(Job.created_at == cursor_created_at, Job.id < cursor_id),
+            )
+        )
+
+    items = query.limit(limit + 1).all()
+    has_more = len(items) > limit
+    items = items[:limit]
+
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
+
+    return CursorPage(
+        items=[_serialize_job(j) for j in items],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
 
 
 @router.get("/{job_id}", response_model=JobResponse)
@@ -313,7 +357,7 @@ def cancel_job(job_id: UUID, current_user=Depends(require_admin), db: Session = 
     """
     job = _get_job_or_404(db, job_id)
     if job.status in (JobStatus.SUCCESS, JobStatus.FAILURE, JobStatus.REVOKED):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot cancel a job with status '{job.status}'.",
         )
@@ -387,14 +431,14 @@ def retry_job(
 
     # Validate job is eligible for retry
     if job.status not in (JobStatus.FAILURE, JobStatus.REVOKED):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot retry job with status '{job.status.value}'. Only FAILED or REVOKED jobs can be retried.",
         )
 
     # Check retry limit
     if job.retry_count >= job.max_retries:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Job has exceeded maximum retry limit ({job.max_retries}). Current retry count: {job.retry_count}",
         )
@@ -437,15 +481,18 @@ def retry_job(
 
     # Re-enqueue the job based on its type
     try:
-        payload = json.loads(job.payload) if job.payload else {}
+        payload = _parse_job_json(job.payload) or {}
 
         if job.job_type == JobType.SLA_COMPUTATION:
-            new_task = enqueue_sla_computation(
-                db,
+            task_result = compute_sla_for_device.delay(
                 device_id=payload.get("device_id", ""),
                 period=payload.get("period", ""),
                 correlation_id=correlation_id,
             )
+            job.celery_task_id = task_result.id
+            job.payload = payload
+            db.commit()
+            db.refresh(job)
         elif job.job_type == JobType.BULK_SLA_COMPUTATION:
             new_task = enqueue_bulk_sla_computation(
                 db,
@@ -453,6 +500,9 @@ def retry_job(
                 period=payload.get("period", ""),
                 correlation_id=correlation_id,
             )
+            job.celery_task_id = new_task.celery_task_id
+            db.commit()
+            db.refresh(job)
         elif job.job_type == JobType.WEBHOOK_DISPATCH:
             # For webhook jobs, re-dispatch with the original payload
             from app.tasks.webhook_tasks import dispatch_webhook_delivery
@@ -472,15 +522,10 @@ def retry_job(
                 message=f"Job retry #{job.retry_count} initiated successfully",
             )
         else:
-            raise HTTPException(
+            raise CodedHTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported job type for retry: {job.job_type.value}",
             )
-
-        # Update job with new Celery task ID
-        job.celery_task_id = new_task.celery_task_id
-        db.commit()
-        db.refresh(job)
 
         logger.info(
             "Job retry enqueued successfully",
@@ -505,14 +550,14 @@ def retry_job(
         logger.error(
             "Failed to retry job due to data issue", job_id=str(job.id), error=str(e), correlation_id=correlation_id
         )
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to retry job due to invalid payload: {e!s}",
         )
     except Exception as e:
         db.rollback()
         logger.exception("Unexpected error retrying job", job_id=str(job.id), correlation_id=correlation_id)
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry job: {e!s}",
         )

@@ -1,19 +1,23 @@
 import json
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.security import require_admin, require_engineer
+from app.api.coded_errors import CodedHTTPException
+from app.core.security import require_admin, require_engineer, require_engineer_or_admin
 from app.db.session import get_db
 from app.models.orm.sla import SLAResultORM
 from app.models.sla_dispute import DisputeAuditLog, DisputeStatus, SLADispute
+from app.schemas.audit_list_params import MAX_PAGE_SIZE
 from app.schemas.sla_dispute import (
     CreateProposedSLARequest,
     DisputeAuditLogResponse,
     DisputeFlagRequest,
     DisputeResolveRequest,
     DisputeResponse,
+    PaginatedDisputeList,
 )
 from app.services.metrics import (
     SLADISPUTE_NOTIFICATION_ATTEMPT_TOTAL,
@@ -26,18 +30,57 @@ router = APIRouter()
 
 @router.get(
     "/disputes",
-    response_model=list[DisputeResponse],
+    response_model=PaginatedDisputeList,
     summary="List SLA disputes",
 )
 def list_disputes(
     status_filter: DisputeStatus | None = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(
+        default=20,
+        ge=1,
+        le=MAX_PAGE_SIZE,
+        description=f"Items per page (shared list cap: {MAX_PAGE_SIZE}). Values above it are rejected with 422.",
+    ),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
 ):
-    query = db.query(SLADispute).order_by(SLADispute.flagged_at.desc())
+    """List SLA disputes, paginated (#580).
+
+    The endpoint used to return ``query.all()`` — every dispute serialized into
+    one unbounded response, so a large disputes table turned the list call into
+    a full-table dump. Pages are now capped by the shared MAX_PAGE_SIZE (200,
+    same constant the audit list enforces) and answer with the standard
+    envelope (items/total/page/page_size/returned/has_more).
+    """
+    query = db.query(SLADispute)
     if status_filter is not None:
         query = query.filter(SLADispute.status == status_filter)
-    return query.all()
+
+    offset = (page - 1) * page_size
+
+    # Single statement for total + page (the #296 pattern used by the webhook
+    # list) with an explicit, deterministic ORDER BY: `flagged_at` was already
+    # the sort key, but without a tiebreaker rows sharing a timestamp could
+    # repeat or vanish between pages, which would make has_more lie.
+    paged = (
+        query.add_columns(func.count().over().label("total_count"))
+        .order_by(SLADispute.flagged_at.desc(), SLADispute.id)
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+    total = paged[0].total_count if paged else query.order_by(None).count()
+    items = [row[0] for row in paged]
+
+    return PaginatedDisputeList(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        returned=len(items),
+        has_more=offset + len(items) < total,
+    )
 
 
 @router.post(
@@ -55,7 +98,7 @@ def flag_dispute(
     # Check if SLA result exists
     sla_result = db.query(SLAResultORM).filter(SLAResultORM.id == sla_result_id).first()
     if not sla_result:
-        raise HTTPException(status_code=404, detail="SLA result not found")
+        raise CodedHTTPException(status_code=404, detail="SLA result not found")
 
     existing = (
         db.query(SLADispute)
@@ -66,7 +109,7 @@ def flag_dispute(
         .first()
     )
     if existing:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An active dispute already exists for this SLA result.",
         )
@@ -74,7 +117,7 @@ def flag_dispute(
     dispute = SLADispute(
         sla_result_id=sla_result_id,
         baseline_sla_result_id=sla_result_id,
-        flagged_by=payload.flagged_by,
+        flagged_by=current_user.email,
         dispute_reason=payload.dispute_reason,
     )
     db.add(dispute)
@@ -84,7 +127,7 @@ def flag_dispute(
         DisputeAuditLog(
             dispute_id=dispute.id,
             action="flagged",
-            actor=payload.flagged_by,
+            actor=current_user.email,
             notes=payload.dispute_reason,
         )
     )
@@ -113,7 +156,7 @@ def create_proposed_sla(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No pending dispute found for this SLA result.",
         )
@@ -121,7 +164,7 @@ def create_proposed_sla(
     # Get baseline SLA to get outage_id
     baseline_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.baseline_sla_result_id).first()
     if not baseline_sla:
-        raise HTTPException(status_code=404, detail="Baseline SLA not found")
+        raise CodedHTTPException(status_code=404, detail="Baseline SLA not found")
 
     # Calculate new proposed SLA
     new_sla = SLACalculator.calculate(
@@ -161,7 +204,7 @@ def create_proposed_sla(
         DisputeAuditLog(
             dispute_id=dispute.id,
             action="proposed_sla_created",
-            actor=payload.created_by,
+            actor=current_user.email,
             notes=audit_notes,
         )
     )
@@ -182,7 +225,7 @@ def resolve_dispute(
     db: Session = Depends(get_db),
 ):
     if payload.status not in (DisputeStatus.RESOLVED, DisputeStatus.REJECTED):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Resolution status must be 'resolved' or 'rejected'.",
         )
@@ -196,26 +239,26 @@ def resolve_dispute(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No pending dispute found for this SLA result.",
         )
 
     dispute.status = payload.status
-    dispute.resolved_by = payload.resolved_by
+    dispute.resolved_by = current_user.email
     dispute.resolution_notes = payload.resolution_notes
     dispute.resolved_at = datetime.now(UTC)
 
     # If resolving and apply_proposed is true, mark the proposed SLA as latest
     if payload.status == DisputeStatus.RESOLVED and payload.apply_proposed:
         if not dispute.proposed_sla_result_id:
-            raise HTTPException(
+            raise CodedHTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No proposed SLA result to apply.",
             )
         proposed_sla = db.query(SLAResultORM).filter(SLAResultORM.id == dispute.proposed_sla_result_id).first()
         if not proposed_sla:
-            raise HTTPException(status_code=404, detail="Proposed SLA not found")
+            raise CodedHTTPException(status_code=404, detail="Proposed SLA not found")
 
         # Demote existing latest
         existing_latest = (
@@ -235,7 +278,7 @@ def resolve_dispute(
         DisputeAuditLog(
             dispute_id=dispute.id,
             action=payload.status.value,
-            actor=payload.resolved_by,
+            actor=current_user.email,
             notes=payload.resolution_notes,
         )
     )
@@ -253,6 +296,7 @@ def resolve_dispute(
 )
 def get_dispute(
     sla_result_id: int,
+    current_user=Depends(require_engineer_or_admin),
     db: Session = Depends(get_db),
 ):
     dispute = (
@@ -262,7 +306,7 @@ def get_dispute(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No dispute found for this SLA result.",
         )
@@ -276,6 +320,7 @@ def get_dispute(
 )
 def get_dispute_history(
     sla_result_id: int,
+    current_user=Depends(require_engineer_or_admin),
     db: Session = Depends(get_db),
 ):
     dispute = (
@@ -285,7 +330,7 @@ def get_dispute_history(
         .first()
     )
     if not dispute:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No dispute found for this SLA result.",
         )
