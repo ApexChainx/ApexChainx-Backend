@@ -567,45 +567,138 @@ Process SLA-based payment for a resolved outage.
 }
 ```
 
-### GET `/api/v1/payments/history`
+### GET `/api/v1/payments`
 
-Get payment transaction history.
+The payment ledger. This is the settlement view of a transaction: it carries the
+``outage_id``/``sla_result_id`` that triggered the payment, the retry counter,
+and the status the settlement state machine is in.
 
 **Query Parameters:**
-- `start_date` (optional): From date
-- `end_date` (optional): To date
-- `type` (optional): Filter by type (`penalty`, `reward`, `manual`)
-- `status` (optional): Filter by status (`pending`, `confirmed`, `failed`)
-- `limit` (optional, default=50)
-- `offset` (optional, default=0)
+- `page` (optional, default=1), `page_size` (optional, default=20, max=100) — offset pagination
+- `cursor`, `limit` (optional) — cursor pagination; `cursor` overrides `page`/`page_size`
+- `status`, `type`, `outage_id` (optional) — exact-match filters
+- `date_from`, `date_to` (optional) — inclusive range; a `date_from` after `date_to` returns 400
+- `sort_by` (`created_at` | `amount` | `status`), `sort_dir` (`asc` | `desc`)
 
 **Response (200 OK):**
 ```json
 {
-  "total": 120,
-  "limit": 50,
-  "offset": 0,
-  "transactions": [
+  "items": [
     {
-      "id": "pay001",
-      "transaction_hash": "abc123...",
+      "id": "pay_8f14e45fceea",
+      "transaction_hash": "simulated-4b2f...",
       "type": "reward",
-      "amount": 1500.00,
+      "amount": 1500,
       "asset_code": "USDC",
-      "from_address": "GPOOL...",
-      "to_address": "GOPS...",
+      "from_address": "SYSTEM_POOL",
+      "to_address": "OUTAGE_SETTLEMENT",
       "status": "confirmed",
       "outage_id": "OUT001",
+      "sla_result_id": 12,
       "created_at": "2026-01-16T09:46:00Z",
       "confirmed_at": "2026-01-16T09:46:05Z",
-      "explorer_url": "https://stellar.expert/explorer/testnet/tx/abc123..."
+      "retry_count": 0
     }
   ],
-  "summary": {
-    "total_penalties": 5000.00,
-    "total_rewards": 12000.00,
-    "net_amount": 7000.00
-  }
+  "total": 120,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+### GET `/api/v1/payments/{transaction_id}`
+
+One payment by id. `GET /api/v1/payments/{transaction_id}/history` returns the
+reconcile/retry audit trail, and `/reconciliation-history` returns it with the
+actor and previous/new status fields resolved.
+
+> On-chain transactions that were not triggered by an SLA settlement are not in
+> this view. They are in the transaction index — see
+> [Transaction Indexer](#transaction-indexer-txindexer) below.
+
+---
+
+## Transaction Indexer (TxIndexer)
+
+TxIndexer walks the Stellar Horizon payment stream and stores what it sees in
+the ledger of record (`payment_transactions`, unique on `transaction_hash`).
+The routes below are the read side of that ingest; the write side is described in
+[docs/TX_INDEXER.md](TX_INDEXER.md).
+
+Both routes require an engineer or admin bearer token and are documented in the
+generated OpenAPI document (`/openapi.json`, Swagger UI at `/docs`).
+
+### GET `/api/v1/indexer/transactions`
+
+List indexed transactions, newest first. All filters combine with AND.
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Notes |
+|-----------|------|---------|-------|
+| `transaction_hash` | 64 hex chars | — | Exact hash lookup (normalized to lower case) |
+| `account` | string (max 69) | — | Matches `from_address` **or** `to_address` |
+| `asset_code` | string (max 12) | — | `USDC`, `XLM`, ... (normalized to upper case) |
+| `status` | string (max 32) | — | Indexed rows are always `confirmed` |
+| `type` | string (max 32) | — | Horizon operation type, e.g. `payment` |
+| `created_after` | ISO-8601 timestamp | — | Inclusive lower bound on ledger close time |
+| `created_before` | ISO-8601 timestamp | — | Inclusive upper bound; `created_after` after it returns 422 |
+| `limit` | integer 1-200 | 50 | Rows per page |
+| `cursor` | opaque string | — | `next_cursor` from the previous page; overrides `offset` |
+| `offset` | integer ≥ 0 | 0 | Rows to skip (ignored when `cursor` is sent) |
+
+**Response (200 OK):**
+```json
+{
+  "items": [
+    {
+      "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+      "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
+      "type": "payment",
+      "amount": 150000000,
+      "asset_code": "USDC",
+      "from_address": "GAAAA...",
+      "to_address": "GBBBB...",
+      "status": "confirmed",
+      "created_at": "2026-10-20T12:00:00Z",
+      "confirmed_at": "2026-10-20T12:00:05Z"
+    }
+  ],
+  "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9",
+  "has_more": true
+}
+```
+
+Pagination is cursor based: pass `next_cursor` back as `cursor` until
+`has_more` is `false`. The cursor is a keyset over `(created_at, id)`, so rows
+written while a client pages cannot shift or duplicate results. An unreadable
+cursor returns `422 Invalid cursor`.
+
+`amount` is an integer in **stroops** (1 unit = 10⁷ stroops), matching the
+ledger column and the payments API.
+
+Filters are validated against an allow-list before any query runs: a hash must
+be 64 hexadecimal characters (any case, normalized to lower case), an asset
+code 1-12 alphanumerics (normalized to upper case), status/type lower snake_case
+tokens, and an account at most 69 characters drawn from letters, digits, `_`,
+`*` and `:`. Anything else — including quotes, semicolons, comment markers or
+control characters — returns `422` with a message naming the offending field
+rather than an empty result set.
+
+### GET `/api/v1/indexer/transactions/{transaction_hash}`
+
+One indexed transaction by hash. Returns `404` when the indexer has not stored
+that hash — either the transaction is not a payment, or the ingest cursor has
+not reached it yet.
+
+**Response (404):**
+```json
+{
+  "type": "https://developer.apexchainx.io/errors/404",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Indexed transaction not found",
+  "error_code": "not_found"
 }
 ```
 
