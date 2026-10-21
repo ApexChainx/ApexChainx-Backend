@@ -142,41 +142,28 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-def _validate_wallet_or_422(value: str) -> None:
-    """Validate a Stellar wallet address, raising a coded 422 on failure (#680)."""
-    try:
-        normalize_wallet(value)
-    except WalletAddressError as exc:
-        # invalid_stellar_public_key (#569): registered code for wallet
-        # address validation failures (docs/ERROR_CODES.md).
-        raise CodedHTTPException(status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key") from exc
-
-
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
 def _validate_email_param(email: str) -> str:
-    """Validate an email path parameter before it reaches the data layer (#668).
-
-    The repositories already use parameterised SQLAlchemy queries, so this is
-    defence-in-depth: it rejects syntactically invalid values (including strings
-    carrying SQL metacharacters) with a 422 rather than passing them through.
-    """
+    """Validate an email path parameter before it reaches the data layer (#668)."""
     cleaned = email.strip().lower()
     if not _EMAIL_PATTERN.match(cleaned):
         raise CodedHTTPException(status_code=422, detail="Invalid email address")
     return cleaned
 
 
-_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
+def _validate_wallet_or_422(value: str) -> None:
+    """Validate a Stellar wallet address, raising a coded 422 on failure (#680)."""
+    try:
+        normalize_wallet(value)
+    except WalletAddressError as exc:
+        raise CodedHTTPException(status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key") from exc
 
 
 def _validate_user_id(user_id: str) -> str:
-    """Reject user-id values carrying characters outside a safe allowlist (#684).
-
-    Lookups are already parameterised by SQLAlchemy, so this is defence-in-depth
-    against malformed/injected identifiers reaching the data layer.
-    """
+    """Reject user-id values carrying characters outside a safe allowlist (#684)."""
     if not _USER_ID_PATTERN.match(user_id):
         raise CodedHTTPException(status_code=422, detail="Invalid user id")
     return user_id
@@ -267,6 +254,8 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
+    return user
+
     return user
 
 
