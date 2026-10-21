@@ -4,8 +4,9 @@ import hashlib
 import logging
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 from time import time
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import redis
 import redis.asyncio as redis_async
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.services.auth_attempt_ledger import record_rate_limit_attempt
+from app.services.metrics import increment_counter, set_gauge
 
 logger = logging.getLogger(__name__)
 
@@ -46,32 +48,85 @@ return 1
 SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD = 1024
 
 
+@dataclass(frozen=True)
+class RateLimitPolicy:
+    """How many requests a key may make within a sliding window."""
+
+    limit: int
+    window_seconds: int
+
+
+# Scopes are the stable prefixes callers put in front of the client identifier
+# (``login_ip_1.2.3.4`` -> ``login_ip``). They select a per-scope policy and are
+# the only part of a key that reaches metrics, so client IPs and user ids never
+# become label values.
+KNOWN_SCOPES: tuple[str, ...] = (
+    "register_ip",
+    "login_ip",
+    "refresh_ip",
+    "profile_update",
+    "impersonate",
+)
+UNKNOWN_SCOPE = "other"
+
+# Per-scope overrides. A scope missing here uses the global
+# AUTH_RATE_LIMIT_REQUESTS / AUTH_RATE_LIMIT_WINDOW_SECONDS settings.
+RATE_LIMIT_POLICIES: dict[str, RateLimitPolicy] = {}
+
+
+def rate_limit_scope(key: str) -> str:
+    for scope in KNOWN_SCOPES:
+        if key.startswith(f"{scope}_"):
+            return scope
+    return UNKNOWN_SCOPE
+
+
+def default_policy() -> RateLimitPolicy:
+    return RateLimitPolicy(settings.AUTH_RATE_LIMIT_REQUESTS, settings.AUTH_RATE_LIMIT_WINDOW_SECONDS)
+
+
+def resolve_policy(key: str, policy: RateLimitPolicy | None = None) -> RateLimitPolicy:
+    """Pick the policy for ``key``: an explicit one, then its scope's, then the default."""
+    if policy is not None:
+        return policy
+    return RATE_LIMIT_POLICIES.get(rate_limit_scope(key)) or default_policy()
+
+
+def _record_decision(backend: str, key: str, allowed: bool) -> bool:
+    increment_counter(
+        "rate_limiter_requests_total",
+        tags={"backend": backend, "scope": rate_limit_scope(key), "outcome": "allowed" if allowed else "rejected"},
+    )
+    return allowed
+
+
+def _record_ledger_attempt(db: Session, key: str, policy: RateLimitPolicy) -> bool:
+    allowed = record_rate_limit_attempt(db, key, policy.limit, policy.window_seconds)
+    return _record_decision("ledger", key, allowed)
+
+
 class SimpleRateLimiter:
     _shared: ClassVar[dict[str, list[float]]] = defaultdict(list)
 
     def __init__(self) -> None:
         self.requests = SimpleRateLimiter._shared
 
-    def is_allowed(self, key: str, db: Session | None = None) -> bool:
+    def is_allowed(self, key: str, db: Session | None = None, policy: RateLimitPolicy | None = None) -> bool:
         """Check the persistent ledger when an authentication session is available."""
+        policy = resolve_policy(key, policy)
         if db is not None:
-            return record_rate_limit_attempt(
-                db,
-                key,
-                settings.AUTH_RATE_LIMIT_REQUESTS,
-                settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
-            )
+            return _record_ledger_attempt(db, key, policy)
 
         now = time()
-        window_start = now - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
+        window_start = now - policy.window_seconds
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
         if len(self.requests) > SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD:
             self.cull_expired(now=now)
-        if len(self.requests[key]) >= settings.AUTH_RATE_LIMIT_REQUESTS:
-            return False
+        if len(self.requests[key]) >= policy.limit:
+            return _record_decision("memory", key, False)
 
         self.requests[key].append(now)
-        return True
+        return _record_decision("memory", key, True)
 
     def cull_expired(self, now: float | None = None) -> int:
         """Drop keys whose every recorded hit is older than the window.
@@ -86,10 +141,16 @@ class SimpleRateLimiter:
             Number of keys removed.
         """
         current = now if now is not None else time()
-        window_start = current - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
-        expired = [key for key, hits in self.requests.items() if not hits or hits[-1] <= window_start]
+        expired = [
+            key
+            for key, hits in self.requests.items()
+            if not hits or hits[-1] <= current - resolve_policy(key).window_seconds
+        ]
         for key in expired:
             del self.requests[key]
+        if expired:
+            increment_counter("rate_limiter_keys_culled_total", value=len(expired))
+        set_gauge("rate_limiter_memory_keys", len(self.requests))
         return len(expired)
 
 
@@ -109,109 +170,112 @@ class RedisRateLimiter:
     def _is_circuit_open(self) -> bool:
         return self.disabled_until is not None and time() < self.disabled_until
 
-    def _trip_circuit(self) -> None:
+    def _trip_circuit(self, exc: Exception) -> None:
+        reason = "redis_error" if isinstance(exc, (RedisError, OSError, RuntimeError)) else "unexpected_error"
+        increment_counter("rate_limiter_fallback_total", tags={"reason": reason})
+        set_gauge("rate_limiter_circuit_open", 1)
         self.disabled_until = time() + 30
 
-    def _lua_args(self, key: str) -> tuple[str, int, int, int, str]:
+    def _lua_args(self, key: str, policy: RateLimitPolicy) -> tuple[Any, ...]:
         if not settings.CELERY_BROKER_URL.strip():
             raise RedisError("CELERY_BROKER_URL is empty")
         encoded_key = self._key_namespace(key)
         now_ts = int(time())
         member = f"{now_ts}-{random.random()}"  # nosec B311 - unique sorted-set member, not security
-        return (
-            encoded_key,
-            now_ts,
-            settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
-            settings.AUTH_RATE_LIMIT_REQUESTS,
-            member,
-        )
+        return (encoded_key, now_ts, policy.window_seconds, policy.limit, member)
 
-    def _eval(self, key: str) -> bool:
-        encoded_key, now_ts, window, limit, member = self._lua_args(key)
-        result = self.client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
-        return bool(result)
+    def _eval(self, key: str, policy: RateLimitPolicy) -> bool:
+        result = self.client.eval(RATE_LIMITER_LUA, 1, *self._lua_args(key, policy))
+        return _record_decision("redis", key, bool(result))
 
-    async def _eval_async(self, key: str) -> bool:
-        encoded_key, now_ts, window, limit, member = self._lua_args(key)
-        result = await self.async_client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
-        return bool(result)
+    async def _eval_async(self, key: str, policy: RateLimitPolicy) -> bool:
+        result = await self.async_client.eval(RATE_LIMITER_LUA, 1, *self._lua_args(key, policy))
+        return _record_decision("redis", key, bool(result))
 
-    def is_allowed(self, key: str, db: Session | None = None) -> bool:
+    def _redis_usable(self) -> bool:
+        if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
+            return False
+        if self._is_circuit_open():
+            return False
+        set_gauge("rate_limiter_circuit_open", 0)
+        return True
+
+    def is_allowed(self, key: str, db: Session | None = None, policy: RateLimitPolicy | None = None) -> bool:
+        policy = resolve_policy(key, policy)
         if db is not None:
-            if not record_rate_limit_attempt(
-                db,
-                key,
-                settings.AUTH_RATE_LIMIT_REQUESTS,
-                settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
-            ):
+            if not _record_ledger_attempt(db, key, policy):
                 return False
-            if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
-                return True
-            if self._is_circuit_open():
+            if not self._redis_usable():
                 return True
 
             try:
-                return self._run_coroutine(self._is_allowed_async(key))
-            except (RedisError, OSError, RuntimeError) as exc:
-                logger.warning(
-                    "Redis rate limiter unavailable; using persistent attempt ledger: %s",
-                    exc,
-                )
-                self._trip_circuit()
-                return True
+                return self._eval(key, policy)
             except Exception as exc:
-                logger.warning(
-                    "Unexpected rate limiter error; using persistent attempt ledger: %s",
-                    exc,
-                )
-                self._trip_circuit()
+                logger.warning("Redis rate limiter unavailable; using persistent attempt ledger: %s", exc)
+                self._trip_circuit(exc)
                 return True
 
-        if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
-            return self.fallback.is_allowed(key)
-        if self._is_circuit_open():
-            return self.fallback.is_allowed(key)
+        if not self._redis_usable():
+            return self.fallback.is_allowed(key, policy=policy)
 
         try:
-            return self._eval(key)
-        except (RedisError, OSError) as exc:
-            logger.warning(
-                "Redis rate limiter unavailable, falling back to in-memory limiter: %s",
-                exc,
-            )
-            self._trip_circuit()
-            return self.fallback.is_allowed(key)
+            return self._eval(key, policy)
         except Exception as exc:
-            logger.warning(
-                "Unexpected rate limiter error, falling back to in-memory limiter: %s",
-                exc,
-            )
-            self._trip_circuit()
-            return self.fallback.is_allowed(key)
+            logger.warning("Redis rate limiter unavailable, falling back to in-memory limiter: %s", exc)
+            self._trip_circuit(exc)
+            return self.fallback.is_allowed(key, policy=policy)
 
-    async def is_allowed_async(self, key: str) -> bool:
-        if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
-            return self.fallback.is_allowed(key)
-
-        if self._is_circuit_open():
-            return self.fallback.is_allowed(key)
+    async def is_allowed_async(self, key: str, policy: RateLimitPolicy | None = None) -> bool:
+        policy = resolve_policy(key, policy)
+        if not self._redis_usable():
+            return self.fallback.is_allowed(key, policy=policy)
 
         try:
-            return await self._eval_async(key)
-        except (RedisError, OSError) as exc:
-            logger.warning(
-                "Redis rate limiter unavailable, falling back to in-memory limiter: %s",
-                exc,
-            )
-            self._trip_circuit()
-            return self.fallback.is_allowed(key)
+            return await self._eval_async(key, policy)
         except Exception as exc:
-            logger.warning(
-                "Unexpected rate limiter error, falling back to in-memory limiter: %s",
-                exc,
-            )
-            self._trip_circuit()
-            return self.fallback.is_allowed(key)
+            logger.warning("Redis rate limiter unavailable, falling back to in-memory limiter: %s", exc)
+            self._trip_circuit(exc)
+            return self.fallback.is_allowed(key, policy=policy)
+
+
+# OpenAPI description of the 429 every rate-limited endpoint can return. The
+# body is the RFC 7807 problem document produced by app.api.exception_handlers.
+RATE_LIMITED_RESPONSE: dict[int | str, dict[str, Any]] = {
+    429: {
+        "description": (
+            "Rate limit exceeded. The caller made more requests than its scope allows "
+            "within the sliding window; retry after the window has passed."
+        ),
+        "content": {
+            "application/problem+json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "title": {"type": "string"},
+                        "status": {"type": "integer", "example": 429},
+                        "detail": {"type": "string"},
+                        "error_code": {"type": "string", "example": "rate_limited"},
+                    },
+                },
+                "example": {
+                    "type": "about:blank",
+                    "title": "Too Many Requests",
+                    "status": 429,
+                    "detail": "Too many login attempts from this IP. Please try again later.",
+                    "error_code": "rate_limited",
+                },
+            }
+        },
+    }
+}
+
+
+def with_rate_limit_responses(responses: dict[int | str, dict[str, Any]] | None = None) -> dict[int | str, dict[str, Any]]:
+    """Merge the documented 429 into an endpoint's ``responses``, keeping its own description."""
+    merged: dict[int | str, dict[str, Any]] = {code: dict(spec) for code, spec in (responses or {}).items()}
+    merged[429] = {**RATE_LIMITED_RESPONSE[429], **merged.get(429, {})}
+    return merged
 
 
 # Shared fallback for RedisRateLimiter instances so that in-memory rate-limiting
