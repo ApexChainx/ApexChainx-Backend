@@ -101,6 +101,7 @@ Current active routes:
 - `/api/v1/payments`
 - `/api/v1/webhooks`
 - `/api/v1/wallets`
+- `/api/v1/indexer` — TxIndexer ingest health probe (`GET /api/v1/indexer/health`)
 
 Module maturity:
 
@@ -335,6 +336,7 @@ All contributions must target a feature branch. Direct pushes to  are not accept
 - [docs/API.md](docs/API.md) — full API reference with request/response examples
 - [docs/STELLAR_INTEGRATION.md](docs/STELLAR_INTEGRATION.md) — Soroban contract integration and payment flow
 - [docs/WEBHOOK_INTEGRATION.md](docs/WEBHOOK_INTEGRATION.md) — webhook signing, delivery, and retry
+- [docs/BLOCK_POLLER.md](docs/BLOCK_POLLER.md) — block polling, sanitization, rate limits, and backoff
 - [docs/CODEX_CONTEXT.md](docs/CODEX_CONTEXT.md) — contributor context and session inventory
 - [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md) — high-level project positioning and goals
 
@@ -349,6 +351,7 @@ The test suite lives in `tests/`. Key test files:
 | `tests/test_contract_parity.py` | Local vs contract adapter parity |
 | `tests/test_webhook_signature_versioning.py` | Webhook signing and versioning |
 | `tests/test_config_validation.py` | Startup configuration validation |
+| `tests/test_block_poller.py` | Block poller sanitization, rate limits, retries, and cursor flow |
 | `tests/test_verify_migrations.py` | Alembic migration chain integrity |
 | `tests/test_analytics_export.py` | CSV and JSON export correctness |
 | `tests/test_payload_guardrails.py` | Payload size middleware enforcement |
