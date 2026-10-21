@@ -18,6 +18,7 @@ from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
 from app.services.event_listener import EventListener
 from app.services.event_listener_cache import EventListenerCache
+from app.services.event_listener_metrics import EventListenerMetrics
 from app.services.event_listener_rate_limit import EventRateLimiter
 from app.services.formatters import canonical_json
 from app.services.webhook_breaker import breaker
@@ -30,9 +31,11 @@ from app.utils.network_validation import NetworkValidationError, validate_webhoo
 
 logger = logging.getLogger(__name__)
 
-# The subscriber cache and the fan-out budget are process-wide: both describe
-# "who is subscribed and how often may they hear about an event", which is the
-# same question no matter which code path emitted the event.
+# The listener is shared by every path that emits a domain event: which
+# subscribers hear about an event is the same question no matter who asked.
+# The subscriber cache and the fan-out budget are process-wide for the same
+# reason.
+_event_listener_metrics = EventListenerMetrics()
 _event_listener_cache: EventListenerCache | None = None
 _event_rate_limiter: EventRateLimiter | None = None
 
@@ -84,6 +87,7 @@ def build_event_listener(db: Session) -> EventListener:
     """Build the listener used by every path that emits a domain event."""
     return EventListener(
         db,
+        metrics=_event_listener_metrics,
         cache=_get_event_listener_cache(),
         rate_limiter=_get_event_rate_limiter(),
     )
@@ -235,9 +239,11 @@ def _build_headers(
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
     """Return the active webhooks that are subscribed to ``event``.
 
-    The resolution itself lives in :class:`app.services.event_listener.EventListener`
-    so that every path which emits an event shares the same subscriber cache
-    and the same fan-out budget instead of each one re-deriving the answer.
+    The resolution lives in :class:`app.services.event_listener.EventListener`
+    so that every path which emits an event resolves the subscribers the same
+    way -- with one statement, with the subscription filter pushed into SQL
+    instead of a per-row JSON parse in Python (issue #739), and sharing the
+    same subscriber cache and fan-out budget.
     """
     return build_event_listener(db).subscribers(event)
 
@@ -464,7 +470,7 @@ def trigger_sla_violation_webhooks(
 
     for decision in decisions:
         if not decision.allowed:
-            # The subscriber is over its event budget. The listener already
+            # The fan-out policy or the event budget refused this subscriber. The listener already
             # logged and counted it; skipping keeps the rest of the fan-out
             # going instead of failing the whole event.
             continue
