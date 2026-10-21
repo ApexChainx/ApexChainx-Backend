@@ -63,11 +63,7 @@ class SessionRepository:
         session. A bulk ``DELETE`` collapses that into one round-trip and never
         materialises the ORM objects.
         """
-        deleted = (
-            self.db.query(SessionORM)
-            .filter(SessionORM.email == email)
-            .delete(synchronize_session=False)
-        )
+        deleted = self.db.query(SessionORM).filter(SessionORM.email == email).delete(synchronize_session=False)
         self.db.commit()
         return deleted
 
