@@ -102,6 +102,7 @@ Current active routes:
 - `/api/v1/payments`
 - `/api/v1/webhooks`
 - `/api/v1/wallets`
+- `/api/v1/indexer` — TxIndexer ingest health probe (`GET /api/v1/indexer/health`)
 
 Module maturity:
 
