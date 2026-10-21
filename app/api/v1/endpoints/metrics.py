@@ -46,6 +46,7 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
             "sla_violation_total": "Total SLA violations detected",
             "webhook_delivery_total": "Total webhook deliveries dispatched",
             "sladispute_notification_attempt_total": "Total SLA dispute notification attempts",
+            "event_listener": "Event listener fan-out series (resolution, dispatch and skips)",
         }
         for prefix, help_text in help_texts.items():
             if prefix in metric_name.lower():
