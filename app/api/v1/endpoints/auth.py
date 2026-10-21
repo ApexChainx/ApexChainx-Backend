@@ -1,12 +1,12 @@
 import logging
+import re
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
-from app.core.db_retry import run_with_db_retry
 from app.core.rate_limiter import rate_limiter
 from app.core.security import get_current_user, hash_token, require_admin
 from app.core.tracing import traced
@@ -73,6 +73,39 @@ Configuration (in app.core.config):
 
 
 logger = logging.getLogger(__name__)
+
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_USER_ID_MAX_LENGTH = 64
+
+
+def _validate_email_param(email: str) -> str:
+    """Normalize a path/query email argument, rejecting malformed input with 422.
+
+    Admin session routes took ``{email}`` straight from the path into a session
+    lookup. Normalizing here keeps the lookup key canonical (Stellar-side
+    accounts are case-insensitive on the local part of our stored emails) and
+    stops junk values from reaching the repository.
+    """
+    normalized = (email or "").strip().lower()
+    if not _EMAIL_PATTERN.match(normalized):
+        raise CodedHTTPException(status_code=422, detail="Invalid email address")
+    return normalized
+
+
+def _validate_user_id(user_id: str) -> str:
+    """Normalize a user id argument, rejecting empty or over-long ids with 422."""
+    normalized = str(user_id or "").strip()
+    if not normalized or len(normalized) > _USER_ID_MAX_LENGTH:
+        raise CodedHTTPException(status_code=422, detail="Invalid user id")
+    return normalized
+
+
+def _validate_wallet_or_422(raw: str) -> None:
+    """Validate a Stellar wallet address, surfacing the reason as 422."""
+    try:
+        normalize_wallet(raw)
+    except WalletAddressError as exc:
+        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _get_client_ip(request: Request) -> str:
@@ -188,7 +221,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
     try:
         with timer("auth_register_duration", {"endpoint": "register"}):
-            user = AuthStore.register(payload, db=db)
+            AuthStore.register(payload, db=db)
     except ValueError as exc:
         increment_counter("auth_register_total", tags={"status": "error"})
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
@@ -277,7 +310,9 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         logger.info("auth_login_success", extra={"event": "auth_login", "ip": client_ip, "email": payload.email})
         return result
     except ValueError as exc:
-        logger.warning("auth_login_failed", extra={"event": "auth_login_failed", "ip": client_ip, "email": payload.email})
+        logger.warning(
+            "auth_login_failed", extra={"event": "auth_login_failed", "ip": client_ip, "email": payload.email}
+        )
         raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
 
 
@@ -572,9 +607,7 @@ def impersonate_user(
 
     # Rate-limit impersonation attempts per admin (#661).
     if not rate_limiter.is_allowed(f"impersonate_{admin_user.id}", db=db):
-        raise CodedHTTPException(
-            status_code=429, detail="Too many impersonation attempts. Please try again later."
-        )
+        raise CodedHTTPException(status_code=429, detail="Too many impersonation attempts. Please try again later.")
 
     repo = UserRepository(db)
     target = repo.get_by_id(_validate_user_id(payload.user_id))
