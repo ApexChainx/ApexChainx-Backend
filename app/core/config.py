@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     TX_INDEXER_BACKOFF_MAX_SECONDS: float = 8.0  # ceiling for any single backoff
     TX_INDEXER_BACKOFF_JITTER_RATIO: float = 0.5  # +/- fraction applied to each delay
     TX_INDEXER_TIMEOUT_SECONDS: float = 10.0  # Horizon HTTP timeout
+    # #714: the ingest worker publishes a heartbeat to Redis; the health probe
+    # (served by the API process) reads it back. Above this lag the probe
+    # reports "degraded" because the stream is no longer keeping up.
+    TX_INDEXER_HEALTH_MAX_LAG_SECONDS: int = 120
+    TX_INDEXER_STATE_TTL_SECONDS: int = 7 * 24 * 3600  # heartbeat key expiry
     # Trusted-proxy settings (#205)
     # Number of trusted reverse-proxy hops in front of this app.
     # Set to 0 when running without a proxy (uses direct connection IP).
@@ -358,6 +363,10 @@ def validate_critical_settings(config: Settings) -> None:
         errors.append("TX_INDEXER_BACKOFF_JITTER_RATIO must be between 0 and 1.")
     if config.TX_INDEXER_TIMEOUT_SECONDS <= 0:
         errors.append("TX_INDEXER_TIMEOUT_SECONDS must be > 0.")
+    if config.TX_INDEXER_HEALTH_MAX_LAG_SECONDS <= 0:
+        errors.append("TX_INDEXER_HEALTH_MAX_LAG_SECONDS must be > 0.")
+    if config.TX_INDEXER_STATE_TTL_SECONDS <= 0:
+        errors.append("TX_INDEXER_STATE_TTL_SECONDS must be > 0.")
 
     if config.ENVIRONMENT not in {"local", "test"}:
         if (

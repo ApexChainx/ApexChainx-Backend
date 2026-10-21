@@ -15,6 +15,7 @@ Base URL: `http://localhost:8000` (development) | `https://api.apexchainx.com` (
 - [Smart Contracts](#smart-contracts)
 - [Analytics](#analytics)
 - [Reports](#reports)
+- [Transaction Indexer](#transaction-indexer)
 - [Error Handling](#error-handling)
 
 - [CORS](#cors)
@@ -793,6 +794,63 @@ Get payment analytics.
       "count": 10
     }
   ]
+}
+```
+
+---
+
+## Transaction Indexer
+
+### GET `/api/v1/indexer/health`
+
+Probe for the TxIndexer ingest loop. Reads the worker's Redis heartbeat and
+pings the ledger database. See [TX_INDEXER.md](TX_INDEXER.md#health-probe-714)
+for the full status contract.
+
+**Response 200 — healthy**
+
+```json
+{
+  "status": "ok",
+  "reason": null,
+  "observed_at": "2026-10-20T12:00:00+00:00",
+  "last_attempt_at": "2026-10-20T11:59:50+00:00",
+  "last_success_at": "2026-10-20T11:59:50+00:00",
+  "lag_seconds": 10.0,
+  "max_lag_seconds": 120,
+  "consecutive_failures": 0,
+  "last_error": null,
+  "last_inserted": 42,
+  "components": {
+    "database": {"status": "ok", "details": {}},
+    "state_store": {"status": "ok", "details": {}}
+  }
+}
+```
+
+**Response 200 — degraded** (`status` is `degraded`, `reason` is one of
+`no_successful_run`, `last_run_failed`, `stale`)
+
+```json
+{
+  "status": "degraded",
+  "reason": "last_run_failed",
+  "consecutive_failures": 3,
+  "last_error": "horizon payments fetch (cursor=start) failed after 4 attempt(s): 503",
+  "lag_seconds": 900.0
+}
+```
+
+**Response 503 — down** (ledger database unreachable)
+
+```json
+{
+  "status": "down",
+  "reason": "database_unreachable",
+  "components": {
+    "database": {"status": "down", "details": {"error": "OperationalError: down"}},
+    "state_store": {"status": "empty", "details": {}}
+  }
 }
 ```
 
