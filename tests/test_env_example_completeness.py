@@ -25,11 +25,10 @@ from app.core.config import Settings, validate_critical_settings
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_PATH = REPO_ROOT / ".env.example"
 
-# Documented in the template but deliberately not settings: the Stellar network
-# endpoints/keys (documented in docs/STELLAR_INTEGRATION.md, injected at
-# runtime) and the placeholder used for third-party provider keys.
+# Documented in the template but deliberately not settings: the Soroban RPC
+# endpoint and Stellar account keys (documented in docs/STELLAR_INTEGRATION.md,
+# injected at runtime) and the placeholder used for third-party provider keys.
 DOCUMENTED_ONLY = {
-    "STELLAR_HORIZON_URL",
     "STELLAR_SOROBAN_RPC_URL",
     "STELLAR_POOL_PUBLIC_KEY",
     "STELLAR_POOL_SECRET_KEY",

@@ -46,7 +46,14 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
             "sla_violation_total": "Total SLA violations detected",
             "webhook_delivery_total": "Total webhook deliveries dispatched",
             "sladispute_notification_attempt_total": "Total SLA dispute notification attempts",
-            "event_listener": "Event listener fan-out series (resolution, dispatch and skips)",
+            "block_poller_poll_total": "Total BlockPoller poll cycles started",
+            "block_poller_initialized_total": "Total BlockPoller cold-start cursor initializations",
+            "block_poller_ledgers_processed_total": "Total Stellar ledgers processed by BlockPoller",
+            "block_poller_transactions_scanned_total": "Total Horizon transactions scanned by BlockPoller",
+            "block_poller_payments_confirmed_total": "Total pending payments confirmed by BlockPoller",
+            "block_poller_errors_total": "Total BlockPoller poll errors",
+            "block_poller_cache_hits_total": "Total BlockPoller ledger cache hits",
+            "block_poller_cache_misses_total": "Total BlockPoller ledger cache misses",
         }
         for prefix, help_text in help_texts.items():
             if prefix in metric_name.lower():
@@ -66,6 +73,7 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
         help_texts = {
             "active_connections": "Current active connection count",
             "db_pool_size": "Current database connection pool size",
+            "block_poller_last_ledger_sequence": "Last Stellar ledger sequence processed by BlockPoller",
         }
         for prefix, help_text in help_texts.items():
             if prefix in metric_name.lower():
