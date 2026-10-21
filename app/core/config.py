@@ -271,6 +271,27 @@ class Settings(BaseSettings):
     API_VERSION_MIN_SUPPORTED: str = "1.0.0"
     API_VERSION_MAX_SUPPORTED: str = "1.0.0"
 
+    # Block poller settings (#725, #727, #728, #729)
+    # Poll interval between successful block fetches.
+    BLOCK_POLLER_POLL_INTERVAL_SECONDS: float = 5.0
+    # Number of retries after the initial fetch attempt.
+    BLOCK_POLLER_MAX_RETRIES: int = 3
+    # Exponential backoff base delay and hard cap, in seconds.
+    BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS: float = 30.0
+    # Fraction of the computed delay that may be randomised (0.0 - 1.0).
+    BLOCK_POLLER_RETRY_JITTER_RATIO: float = 0.25
+    # Sliding-window rate limit applied to upstream block fetches.
+    BLOCK_POLLER_RATE_LIMIT_REQUESTS: int = 10
+    BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS: float = 1.0
+    # Input sanitization bounds for untrusted block payloads.
+    BLOCK_POLLER_MAX_PAYLOAD_BYTES: int = 5 * 1024 * 1024
+    BLOCK_POLLER_MAX_TRANSACTIONS: int = 1000
+    BLOCK_POLLER_MAX_IDENTIFIER_LENGTH: int = 256
+    BLOCK_POLLER_MAX_STRING_LENGTH: int = 4096
+    BLOCK_POLLER_MAX_COLLECTION_ITEMS: int = 10000
+    BLOCK_POLLER_MAX_DEPTH: int = 8
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
 
@@ -463,6 +484,45 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.BLOCK_POLLER_POLL_INTERVAL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_POLL_INTERVAL_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_RETRIES < 0:
+        errors.append("BLOCK_POLLER_MAX_RETRIES must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS < 0:
+        errors.append("BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if not 0 <= config.BLOCK_POLLER_RETRY_JITTER_RATIO <= 1:
+        errors.append("BLOCK_POLLER_RETRY_JITTER_RATIO must be between 0 and 1.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_REQUESTS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_REQUESTS must be > 0.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_PAYLOAD_BYTES <= 0:
+        errors.append("BLOCK_POLLER_MAX_PAYLOAD_BYTES must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_TRANSACTIONS <= 0:
+        errors.append("BLOCK_POLLER_MAX_TRANSACTIONS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_IDENTIFIER_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_IDENTIFIER_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_STRING_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_STRING_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_COLLECTION_ITEMS <= 0:
+        errors.append("BLOCK_POLLER_MAX_COLLECTION_ITEMS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_DEPTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_DEPTH must be > 0.")
 
     if config.EVENT_LISTENER_CACHE_TTL_SECONDS <= 0:
         errors.append("EVENT_LISTENER_CACHE_TTL_SECONDS must be > 0.")

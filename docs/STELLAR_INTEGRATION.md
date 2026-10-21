@@ -449,9 +449,30 @@ network about them.
 from app.services.block_poller import BlockPoller
 
 poller = BlockPoller(db, horizon_client=horizon)
-report = poller.poll_once(limit=50)
+report = poller.poll_once(limit=20)
 # report.checked / report.confirmed / report.failed / report.skipped
 ```
+
+### Cursor pagination
+
+The poller walks the payments that are still waiting for their confirmation.
+Walking that backlog with `OFFSET`/`LIMIT` is wrong here: a payment that is
+confirmed while the poller is walking shifts every later row by one, so the
+poller either looks at a payment twice or skips one entirely — and the rows
+that change under it are exactly the rows it is walking.
+
+The poller therefore pages with a cursor built from `(created_at, id)`, the
+same key the payment list endpoint uses:
+
+```python
+page = poller.pending_page(cursor=None, limit=20)
+while page.has_more:
+    page = poller.pending_page(cursor=page.next_cursor, limit=20)
+```
+
+`poll_all()` walks the backlog for you and stops after `max_pages`, so a
+backlog that never shrinks — because the network keeps answering "pending" —
+cannot keep the worker busy forever.
 
 ### Identifier hardening
 
