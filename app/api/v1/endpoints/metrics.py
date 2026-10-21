@@ -3,13 +3,13 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, Response
 
 from app.core.security import require_engineer
-from app.services.metrics import _DEFAULT_LATENCY_BUCKETS, metrics
+from app.services.metrics import metrics
 
 router = APIRouter(prefix="/metrics", tags=["Metrics"])
 
 
 @router.get("")
-def get_metrics():
+def get_metrics(current_user=Depends(require_engineer)):
     """Get application metrics in JSON format."""
     metrics_data = metrics.get_metrics_summary()
     return metrics_data
@@ -44,9 +44,9 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
             "requests_total": "Total number of requests",
             "sla_recomputation_total": "Total SLA recomputations triggered",
             "sla_violation_total": "Total SLA violations detected",
-            "sla_computation_latency_seconds": "SLA computation latency in seconds",
             "webhook_delivery_total": "Total webhook deliveries dispatched",
             "sladispute_notification_attempt_total": "Total SLA dispute notification attempts",
+            "event_listener": "Event listener fan-out series (resolution, dispatch and skips)",
         }
         for prefix, help_text in help_texts.items():
             if prefix in metric_name.lower():
@@ -106,29 +106,14 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
         prometheus_lines.append(f"# HELP {metric_name}_seconds Duration of {metric_name} in seconds")
         prometheus_lines.append(f"# TYPE {metric_name}_seconds histogram")
         prometheus_lines.append(f"{metric_name}_seconds_count{{{base_labels}}} {stats['count']}")
-        prometheus_lines.append(
-            f"{metric_name}_seconds_sum{{{base_labels}}} {(stats['avg_ms'] / 1000) * stats['count']}"
-        )
+        prometheus_lines.append(f"{metric_name}_seconds_sum{{{base_labels}}} {stats['sum_ms'] / 1000}")
 
-        # Estimate bucket counts for timers using default Prometheus buckets
-        avg_seconds = stats["avg_ms"] / 1000
-        for bucket in _DEFAULT_LATENCY_BUCKETS:
-            # Estimate count using normal distribution assumption around avg
-            if bucket < avg_seconds * 0.1:
-                count = 0
-            elif bucket < avg_seconds * 0.5:
-                count = int(stats["count"] * 0.1)
-            elif bucket < avg_seconds:
-                count = int(stats["count"] * 0.3)
-            elif bucket < avg_seconds * 2:
-                count = int(stats["count"] * 0.7)
-            elif bucket < avg_seconds * 5:
-                count = int(stats["count"] * 0.95)
-            else:
-                count = stats["count"]
-
-            prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="{bucket}"}} {count}')
-
+        # Emit real bucket counts accumulated from the stored timer samples.
+        buckets = metrics_data.get("timer_buckets", {}).get(key, {})
+        cumulative = 0
+        for bucket_bound in sorted(buckets.keys()):
+            cumulative += buckets[bucket_bound]
+            prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="{bucket_bound}"}} {cumulative}')
         prometheus_lines.append(f'{metric_name}_seconds_bucket{{{base_labels}le="+Inf"}} {stats["count"]}')
 
     # ── Process metadata ──────────────────────────────────────────────────

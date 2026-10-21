@@ -120,13 +120,13 @@ class SLAOrchestrator:
         )
 
     def calculate_mttr(self, outages: list[OutageORM]) -> float:
-        """Calculate Mean Time To Resolution for outages."""
+        """Calculate MTTR from ``detected_at`` (platform detection) to resolution."""
         if not outages:
             return 0.0
 
         mttr_values = []
         for outage in outages:
-            started = _ensure_aware(outage.started_at)
+            started = _ensure_aware(outage.detected_at)
             resolved = _ensure_aware(outage.resolved_at)
             if started and resolved:
                 duration = resolved - started
@@ -141,7 +141,7 @@ class SLAOrchestrator:
         return round(sum(mttr_values) / len(mttr_values), 2) if mttr_values else 0.0
 
     def calculate_availability(self, outages: list[OutageORM], period_days: int) -> float:
-        """Calculate availability percentage for the period."""
+        """Calculate availability using ``detected_at`` as outage start time."""
         if not outages:
             return 100.0
 
@@ -149,7 +149,7 @@ class SLAOrchestrator:
         downtime_minutes = 0
 
         for outage in outages:
-            started = _ensure_aware(outage.started_at)
+            started = _ensure_aware(outage.detected_at)
             resolved = _ensure_aware(outage.resolved_at)
             if started and resolved:
                 downtime = resolved - started
@@ -228,7 +228,12 @@ def compute_device_sla(
                 violation_reasons=[],
             )
             latency = time.monotonic() - start_time
-            record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "no_outages"}, buckets=_SLA_LATENCY_BUCKETS)
+            record_histogram(
+                "sla_computation_latency_seconds",
+                latency,
+                tags={"period": period, "status": "no_outages"},
+                buckets=_SLA_LATENCY_BUCKETS,
+            )
             record_sla_settlement_audit_events(device_id, period, result, status="initiated")
             record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             if cache is not None:
@@ -281,7 +286,7 @@ def compute_device_sla(
                     "id": outage.id,
                     "site_id": outage.site_id,
                     "site_name": outage.site_name,
-                    "started_at": outage.started_at.isoformat() if outage.started_at else None,
+                    "started_at": outage.detected_at.isoformat() if outage.detected_at else None,
                     "resolved_at": outage.resolved_at.isoformat() if outage.resolved_at else None,
                     "severity": getattr(outage, "severity", "unknown"),
                 }
@@ -289,7 +294,12 @@ def compute_device_sla(
             ],
         )
         latency = time.monotonic() - start_time
-        record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "violated" if is_violated else "ok"}, buckets=_SLA_LATENCY_BUCKETS)
+        record_histogram(
+            "sla_computation_latency_seconds",
+            latency,
+            tags={"period": period, "status": "violated" if is_violated else "ok"},
+            buckets=_SLA_LATENCY_BUCKETS,
+        )
         record_sla_settlement_audit_events(device_id, period, result, status="initiated")
         record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         if cache is not None:

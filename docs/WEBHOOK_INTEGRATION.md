@@ -12,37 +12,60 @@ Each webhook delivery includes explicit signature versioning metadata:
 
 ```
 X-Webhook-Signature: sha256={hex_digest}
-X-Webhook-Signature-Version: 1
+X-Webhook-Signature-Version: 2
 X-Webhook-Timestamp: 2026-04-29T14:30:45.123456
+X-Webhook-Delivery-ID: 6cb39f3c-bf7b-4e02-a313-a5ecaf8df5f4
 ```
 
-### Current Signature Version (v1): HMAC-SHA256
+Always read the version header and branch on it. An unknown version must be
+rejected, not assumed to behave like the version you know.
+
+### Current Signature Version (v2): timestamped HMAC-SHA256
 
 **Algorithm:**
-- Compute: `HMAC-SHA256(secret_key, payload_json)`
+- Compute: `HMAC-SHA256(secret_key, "{X-Webhook-Timestamp}." + payload_json)`
 - Output: Hex-encoded digest string
 - Envelope: `sha256={hex_digest_value}`
+
+The timestamp is inside the signed input (#538). A captured delivery re-sent later
+carries the original timestamp, so it either fails verification outright or falls
+outside your skew window — a replay is no longer indistinguishable from a fresh
+event.
 
 **Verification Example (Python):**
 
 ```python
 import hmac
 import hashlib
-import json
+from datetime import datetime, timezone
 
-def verify_webhook(request_body: str, signature_header: str, secret: str) -> bool:
-    """Verify webhook signature using HMAC-SHA256."""
-    # Extract hex digest (remove 'sha256=' prefix)
-    provided_signature = signature_header.replace('sha256=', '')
-    
-    # Compute expected signature
+MAX_SKEW_SECONDS = 300  # 5 minutes
+
+
+def verify_webhook(
+    request_body: str,
+    signature_header: str,
+    secret: str,
+    timestamp_header: str,
+    max_skew_seconds: int = MAX_SKEW_SECONDS,
+) -> bool:
+    """Verify a v2 (timestamped) webhook signature and its freshness."""
+    provided_signature = signature_header.removeprefix('sha256=')
+
+    # 1. Freshness: a stale or unparseable timestamp is rejected outright.
+    sent_at = datetime.fromisoformat(timestamp_header)
+    if sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    if abs((datetime.now(timezone.utc) - sent_at).total_seconds()) > max_skew_seconds:
+        return False
+
+    # 2. Signature over "{timestamp}.{payload}".
     expected_signature = hmac.new(
         secret.encode(),
-        request_body.encode(),
+        f"{timestamp_header}.{request_body}".encode(),
         hashlib.sha256
     ).hexdigest()
-    
-    # Compare using constant-time comparison
+
     return hmac.compare_digest(expected_signature, provided_signature)
 ```
 
@@ -51,23 +74,54 @@ def verify_webhook(request_body: str, signature_header: str, secret: str) -> boo
 ```javascript
 const crypto = require('crypto');
 
-function verifyWebhook(requestBody, signatureHeader, secret) {
+const MAX_SKEW_SECONDS = 300;
+
+function verifyWebhook(requestBody, signatureHeader, secret, timestampHeader) {
   // Extract hex digest
   const providedSignature = signatureHeader.replace('sha256=', '');
-  
-  // Compute expected signature
+
+  // Freshness first.
+  const sentAt = Date.parse(timestampHeader);
+  if (Number.isNaN(sentAt)) return false;
+  if (Math.abs(Date.now() - sentAt) / 1000 > MAX_SKEW_SECONDS) return false;
+
+  // Signature over "{timestamp}.{payload}".
   const expectedSignature = crypto
     .createHmac('sha256', secret)
-    .update(requestBody)
+    .update(`${timestampHeader}.${requestBody}`)
     .digest('hex');
-  
-  // Compare using constant-time comparison
+
   return crypto.timingSafeEqual(
     Buffer.from(expectedSignature),
     Buffer.from(providedSignature)
   );
 }
 ```
+
+The backend ships the same helpers in `app/services/webhook_signing.py`:
+`verify_signature(secret, payload, signature, version, timestamp)` checks the
+digest, `is_timestamp_fresh(timestamp, max_skew_seconds)` checks the window, and
+`verify_delivery_signature(...)` does both.
+
+### Legacy Signature Version (v1): payload-only HMAC-SHA256
+
+Still emitted when a delivery is pinned to version 1 — a stored delivery keeps its
+original `signature_version` across retries, so deliveries created before this
+change continue to verify as v1.
+
+- Compute: `HMAC-SHA256(secret_key, payload_json)`
+
+v1 remains verifiable so no consumer breaks during rollout, but **it offers no
+replay protection**: the same signed bytes replay indistinguishably. If you receive
+v1, deduplicate on the payload timestamp or delivery id, and move to v2.
+
+### Choosing a skew window
+
+Freshness bounds the replay window; it cannot close it. Pick a window larger than
+your clock skew plus processing lag, and deduplicate on the payload timestamp
+regardless. The backend's own helpers default to 5 minutes; the window is yours to
+choose as the receiver. Retries are re-stamped with a fresh
+`X-Webhook-Timestamp`, so a legitimate retry is never rejected as stale.
 
 ## Timestamp Validation Semantics
 
@@ -78,6 +132,11 @@ function verifyWebhook(requestBody, signatureHeader, secret) {
 - **Timezone**: UTC (Zulu time implied)
 - **Immutability**: Identical across all retry attempts and signature versions
 - **Duration**: Captured when event is triggered, not when delivery is attempted
+
+This is the *event* clock. The separate `X-Webhook-Timestamp` header is the
+*attempt* clock: it is re-stamped on every retry, and under v2 it is the value
+covered by the signature. Deduplicate on the payload timestamp (or a delivery id),
+never on the header.
 
 ### Timestamp Usage Patterns
 
@@ -97,9 +156,11 @@ class DeliveredWebhookRecord:
 
 **Benefit**: If a webhook is retried due to network failure or crash recovery, receivers can identify and skip duplicates using timestamp + webhook_id.
 
-#### 2. Freshness Validation (Optional)
+#### 2. Freshness Validation (required for v2)
 
-Reject webhooks outside a configurable time window:
+Reject deliveries whose `X-Webhook-Timestamp` is outside a time window. Under v2
+this is not optional hardening: it is half of what makes a replay detectable, and
+it is checked before the signature is trusted.
 
 ```python
 from datetime import datetime, timedelta
@@ -170,17 +231,23 @@ The explicit `X-Webhook-Signature-Version` header enables safe algorithm evoluti
    Phase 4: Remove v1 code after consumers migrate
    ```
 
-3. **Algorithm Migration Example**:
+3. **Version Migration Example** (the v1 → v2 change actually shipped in #538):
    ```python
-   # Future opportunity: add v2 when needed
-   def sign_payload(secret: str, payload: str, version: int = 1) -> Tuple[str, int]:
+   def sign_payload(
+       secret: str, payload: str, version: int = 2, timestamp: str | None = None
+   ) -> tuple[str, int, str]:
        if version == 1:
-           return sign_payload_v1(secret, payload), 1
-       elif version == 2:  # Future EdDSA implementation
-           return sign_payload_v2(secret, payload), 2
-       else:
-           raise ValueError(f"Unsupported signature version: {version}")
+           return sign_payload_v1(secret, payload), version, timestamp or ""
+       if version == 2:
+           ts = timestamp or datetime.now(UTC).isoformat()
+           return sign_payload_v2(secret, payload, ts), version, ts
+       raise ValueError(f"Unsupported signature version: {version}")
    ```
+   Each delivery stores the version it was signed with (`signature_version` on the
+   delivery row), so a retry of an old delivery keeps verifying as v1 while new
+   deliveries are v2. Retiring v1 is a follow-up: drop
+   `sign_payload_v1`/`verify_signature_v1` and the `version == 1` branches once no
+   stored delivery predates the cut-over.
 
 ## Trace Context Propagation
 
@@ -198,6 +265,15 @@ traceparent: 00-{trace_id}-{span_id}-01
 This enables end-to-end request tracing across systems. Receivers can propagate the `traceparent` header to downstream services for full distributed trace visibility.
 
 ## Webhook Delivery Contract
+
+### Delivery identity and retries
+
+`X-Webhook-Delivery-ID` is a stable UUID for one stored delivery and is reused
+for every retry. Delivery is at least once: a receiver may see the same ID more
+than once if a request reached it but the sender did not receive or persist the
+response. Consumers should deduplicate processing by this ID. A delivery is
+claimed in the database before sending; a process crash after the claim leaves
+it in `sending` rather than automatically replaying an ambiguous request.
 
 ### Request Format
 
@@ -275,12 +351,81 @@ Track these metrics:
 - Average delivery latency
 - Dead-letter rate (indicator of persistent problems)
 
+### Event Listener Observability
+
+Every domain event is fanned out by the **event listener**
+(`app/services/event_listener.py`). It resolves the subscribers of the event
+and reports what it did, so the fan-out can be watched without reading logs.
+
+**Prometheus series** (exposed by `GET /api/v1/metrics/prometheus`, tagged with
+the domain event):
+
+| Series | Meaning |
+| --- | --- |
+| `event_listener_resolution_total` | Subscriptions that were resolved |
+| `event_listener_resolution_duration_seconds` | How long a resolution took (histogram) |
+| `event_listener_subscribers` | Subscribers a resolution returned (gauge) |
+| `event_listener_dispatch_total` | Deliveries the listener handed to the delivery pipeline |
+| `event_listener_subscriber_skipped_total` | Subscribers that did not receive the event, tagged with the reason |
+| `event_listener_error_total` | Failures, tagged with the stage they happened in |
+
+**Structured log lines.** The listener logs through
+`app/services/event_listener_logging.py`, so every line carries a stable
+`event_name` next to the domain event it is about:
+
+| `event_name` | Emitted when |
+| --- | --- |
+| `event_listener.resolve_started` | The listener started resolving the subscribers |
+| `event_listener.resolve_completed` | The subscribers were resolved (with the count and the duration) |
+| `event_listener.resolve_failed` | The subscribers could not be resolved |
+| `event_listener.dispatch_completed` | The deliveries were handed over |
+| `event_listener.subscriber_skipped` | A subscriber did not receive the event |
+
+The correlation id is attached by the shared structured logger, so a line can
+always be tied back to the request or task that caused it.
+
 ### Timestamp Handling in Receivers
 
 - Parse using ISO 8601 library (don't regex parse)
 - Handle microseconds/fractional seconds correctly
 - Consider receiver timezone (should normalize to UTC internally)
 - Store as UTC datetime (not string) for comparison
+
+### Fan-Out Budget and Subscriber Cache
+
+Every domain event is fanned out by the **event listener**
+(`app/services/event_listener.py`), which is the single place that decides
+*who* hears about an event and *how often* a subscriber may hear about it.
+
+**Subscriber cache.** The set of subscribers for an event is resolved once and
+cached in Redis for `EVENT_LISTENER_CACHE_TTL_SECONDS` (default 15 s). Only the
+subscriber *ids* are cached; the rows themselves are re-read from the database
+on every hit, so a webhook that was deactivated or deleted stops being
+delivered to as soon as the entry expires. Registering, updating or deleting a
+webhook drops the cached subscriber lists immediately, so a new registration
+receives the very next event.
+
+If Redis is unreachable the cache degrades to "no cache" -- it never fails an
+event. After a few consecutive failures it stops talking to Redis for a
+cooldown, so an outage does not add a connection timeout to every event.
+
+**Fan-out budget.** The number of events a subscriber receives is not under the
+subscriber's control: an outage affecting a hundred devices emits a hundred
+`sla.violation` events to the same subscriber. Each subscriber therefore has a
+budget of `EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER` events per
+`EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS` (default 600 per 60 s). The budget
+is kept in Redis so every worker enforces the same limit; without Redis it
+falls back to an in-process counter.
+
+When a subscriber is over its budget the event is **not** delivered to it, and
+the drop is reported:
+
+- the counter `event_listener.rate_limited` is incremented (tagged with the
+  event), and
+- a warning is logged with `event_name=event_listener_rate_limited`.
+
+The rest of the fan-out continues -- one noisy subscriber never stops the
+other subscribers from being told.
 
 ## References
 
@@ -327,13 +472,59 @@ GET /api/v1/webhooks
 
 Returns all registered endpoints with their event subscriptions and current status. Secrets are never returned in listing responses.
 
+Query parameters: `is_active`, `name` (case-insensitive substring), `page` (1-indexed), `page_size` (1-100, default 20).
+
+The response is a paginated envelope, so a client can tell the last page from a short one without requesting an extra page (#554):
+
+```json
+{
+  "items": [
+    {
+      "id": "3f1b...-...",
+      "name": "outage-webhook",
+      "url": "https://example.com/webhook",
+      "is_active": true,
+      "events": ["sla.violation"],
+      "max_retries": 3,
+      "schema_version": "1",
+      "secret_version": 2,
+      "last_secret_rotation_at": "2026-01-01T00:00:00+00:00"
+    }
+  ],
+  "total": 45,
+  "page": 1,
+  "page_size": 20,
+  "returned": 20,
+  "has_more": true
+}
+```
+
+Stop paging when `has_more` is `false`. `total` counts the rows matching the active filters. Items are ordered by `created_at` descending, with the webhook id as a tie-breaker, so paging is stable.
+
 ## Deleting a Webhook
 
 ```http
 DELETE /api/v1/webhooks/{webhook_id}
 ```
 
-Deletes the endpoint and stops all future deliveries. In-flight deliveries already queued may still complete. Returns `204 No Content` on success.
+Stops all future deliveries and returns `204 No Content`. In-flight deliveries already queued may still complete.
+
+Delete is a **soft delete** (#518). The registration is retained as a tombstone
+rather than removed, because deleting the row also cascaded to its deliveries and
+destroyed the record of what was sent and what the consumer answered. The
+response now carries `deleted_at`, and:
+
+- `GET /api/v1/webhooks` hides soft-deleted webhooks; pass `include_deleted=true`
+  to list them.
+- `GET /api/v1/webhooks/{id}` still resolves a deleted webhook, and so does
+  `GET /api/v1/webhooks/{id}/deliveries`, so history stays auditable.
+- `PATCH`, secret rotation, retry and replay against a deleted webhook are
+  refused (`409 Conflict` on the mutation endpoints; retry and replay log and
+  no-op rather than sending).
+- Delete is idempotent — deleting an already-deleted webhook is still `204`.
+
+Tombstones accumulate by design; purge them on whatever schedule your retention
+policy calls for.
 
 ## Querying Delivery History
 
@@ -369,6 +560,24 @@ Rotate a webhook secret without downtime using the `secret_version` field:
 4. After all in-flight deliveries using the old secret complete, remove the old secret from your receiver
 
 The `X-Webhook-Signature-Version` header tells receivers which version was used to sign each delivery.
+
+### Grace window retention
+
+`POST /api/v1/webhooks/{webhook_id}/rotate-secret` keeps the outgoing secret
+valid for a grace window (`WEBHOOK_SECRET_GRACE_HOURS`, 24h by default) so a
+receiver can be updated with zero downtime. The previous secret is retained
+**only as a SHA-256 hash** in the webhook's `previous_secrets` history, and only
+for that window:
+
+- every rotation first drops history entries whose grace window has already
+  closed, then appends the outgoing secret;
+- a daily Celery sweep (`app.tasks.webhook_secret_housekeeping.expire_old_secrets`)
+  applies the same rule to webhooks that are not being rotated, so a webhook's
+  history never outlives its grace windows.
+
+Receivers must be able to accept the old secret for the full grace window after
+a rotation; after it closes the old secret is dropped and deliveries signed
+with it will be rejected.
 
 ---
 

@@ -1,6 +1,6 @@
 import unittest
 
-from app.core.config import Settings, validate_critical_settings, MIN_SECRET_KEY_LENGTH
+from app.core.config import Settings, validate_critical_settings
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -21,6 +21,7 @@ class ConfigValidationTests(unittest.TestCase):
             "ENVIRONMENT": "local",
             "SECRET_KEY": "apexchainx-dev-secret",
             "PAYMENT_WEBHOOK_SECRET": "test-webhook-secret-1234",
+            "WEBHOOK_SECRET_ENCRYPTION_KEY": "V5OOA_Ao70n9OxGEbj1WmRsZX6vI4IdtuJ_jYcIhNDg=",
         }
         defaults.update(overrides)
         return Settings.model_construct(**defaults)
@@ -75,21 +76,15 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_default_secret_key_rejected_in_production(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="production", SECRET_KEY="apexchainx-dev-secret")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="production", SECRET_KEY="apexchainx-dev-secret"))
 
         self.assertIn("SECRET_KEY must be set to a secure", str(ctx.exception))
 
     def test_default_secret_key_accepted_in_local(self):
-        validate_critical_settings(
-            self.make_settings(ENVIRONMENT="local", SECRET_KEY="apexchainx-dev-secret")
-        )
+        validate_critical_settings(self.make_settings(ENVIRONMENT="local", SECRET_KEY="apexchainx-dev-secret"))
 
     def test_default_secret_key_accepted_in_test(self):
-        validate_critical_settings(
-            self.make_settings(ENVIRONMENT="test", SECRET_KEY="apexchainx-dev-secret")
-        )
+        validate_critical_settings(self.make_settings(ENVIRONMENT="test", SECRET_KEY="apexchainx-dev-secret"))
 
     def test_custom_secret_key_accepted_in_production(self):
         validate_critical_settings(
@@ -117,9 +112,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_whitespace_only_secret_key_rejected_in_production(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="production", SECRET_KEY="   ")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="production", SECRET_KEY="   "))
 
         self.assertIn("SECRET_KEY must be set to a secure", str(ctx.exception))
 
@@ -129,9 +122,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_default_secret_key_rejected_in_staging(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="staging", SECRET_KEY="apexchainx-dev-secret")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="staging", SECRET_KEY="apexchainx-dev-secret"))
 
         self.assertIn("SECRET_KEY must be set to a secure", str(ctx.exception))
 
@@ -149,9 +140,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_secret_key_error_includes_environment_name(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="production", SECRET_KEY="short")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="production", SECRET_KEY="short"))
 
         self.assertIn("ENVIRONMENT='production'", str(ctx.exception))
 
@@ -216,9 +205,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("PAYMENT_WEBHOOK_SECRET", str(ctx.exception))
 
     def test_webhook_secret_not_checked_in_local(self):
-        validate_critical_settings(
-            self.make_settings(ENVIRONMENT="local", PAYMENT_WEBHOOK_SECRET="")
-        )
+        validate_critical_settings(self.make_settings(ENVIRONMENT="local", PAYMENT_WEBHOOK_SECRET=""))
 
     # ------------------------------------------------------------------ #
     # Minimum length constant                                             #

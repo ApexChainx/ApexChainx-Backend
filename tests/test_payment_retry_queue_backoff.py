@@ -7,7 +7,6 @@ and that the admin retry-now endpoint bypasses backoff.
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1.endpoints.payments import _compute_next_retry_at

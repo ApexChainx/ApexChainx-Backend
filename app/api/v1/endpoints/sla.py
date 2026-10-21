@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models import SLAResult
@@ -66,7 +67,7 @@ def calculate_sla(
             threshold_source=threshold_source,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise CodedHTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/preview")
@@ -112,7 +113,7 @@ def get_sla_config_by_severity(
             return get_config_with_hash(severity)
         return get_config_for_severity(severity)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/config/{severity}")
@@ -121,15 +122,17 @@ def update_sla_config(
     payload: SLAConfigUpdateRequest,
     expected_token: str | None = Query(default=None, description="Optimistic concurrency token (#37). Mismatch → 409."),
     current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """Update SLA config for a severity with optional optimistic concurrency (#37).
 
     When `expected_token` is provided:
     - The update is atomic: policy_version is bumped, content_hash is computed,
-      history is recorded.
+      history is recorded in sla_config_history.
     - If another concurrent update has already occurred, returns 409 Conflict.
 
-    Without `expected_token`, the update is backward-compatible (no version bump).
+    Without `expected_token`, the update still records a version bump and a
+    history entry (see #272).
     """
     try:
         if expected_token is not None:
@@ -137,23 +140,34 @@ def update_sla_config(
                 severity,
                 payload,
                 expected_token=expected_token,
-                published_by=getattr(current_user, "username", None),
+                published_by=current_user.email,
+                db=db,
             )
             return policy
-        return update_config_for_severity(severity, payload)
+        return update_config_for_severity(severity, payload, db=db)
     except ConcurrencyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # sla_config_concurrency (#569): optimistic concurrency failure on a
+        # config publish — the client re-fetches and retries (docs/ERROR_CODES.md).
+        raise CodedHTTPException(status_code=409, detail=str(exc), error_code="sla_config_concurrency") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/config/{severity}/token")
-def get_config_publish_token(severity: str, current_user=Depends(require_admin)):
-    """Get the current publish token for optimistic concurrency control (#37)."""
+def get_config_publish_token(
+    severity: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get the current publish token for optimistic concurrency control (#37).
+
+    Reads the latest persisted history row so a token fetched after a
+    restart matches the token the publish path compares against (#272).
+    """
     try:
-        return {"severity": severity, "token": get_current_token(severity)}
+        return {"severity": severity, "token": get_current_token(severity, db=db)}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/analytics/dashboard", response_model=SLADashboardKPI)
@@ -187,7 +201,7 @@ def get_sla_trends(
     db: Session = Depends(get_db),
 ):
     if bucket not in VALID_BUCKETS:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}"
         )
 
@@ -201,7 +215,7 @@ def get_sla_trends(
     try:
         result = repo.aggregate_trends(limit_days=days, bucket=bucket, tz=tz, severity=severity, site_id=resolved_site)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     _dashboard_cache.set(cache_key, result)
     return result
@@ -225,7 +239,7 @@ def aggregate_sla_performance(
         end_date = end_date.astimezone(UTC).replace(tzinfo=None)
 
     if start_date and end_date and start_date > end_date:
-        raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+        raise CodedHTTPException(status_code=400, detail="start_date cannot be after end_date")
 
     repo = SLARepository(db)
     return repo.aggregate_performance(
@@ -256,7 +270,7 @@ def get_latest_analytics_snapshot(
     repo = SLARepository(db)
     snapshot = repo.get_latest_snapshot(snapshot_key=snapshot_key)
     if not snapshot:
-        raise HTTPException(status_code=404, detail="No snapshot found for the given key")
+        raise CodedHTTPException(status_code=404, detail="No snapshot found for the given key")
     return snapshot
 
 
@@ -320,7 +334,7 @@ def export_dashboard_kpis(
     try:
         exported = export_dashboard_kpi(kpi, format)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     if format.lower() == "csv":
         return Response(
@@ -345,7 +359,7 @@ def export_sla_trends(
 ):
     """Export SLA trends data in JSON or CSV format."""
     if bucket not in VALID_BUCKETS:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}"
         )
 
@@ -354,12 +368,12 @@ def export_sla_trends(
     try:
         trends = repo.aggregate_trends(limit_days=days, bucket=bucket, tz=tz, severity=severity, site_id=resolved_site)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         exported = export_trends(trends, format)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     if format.lower() == "csv":
         return Response(
@@ -389,7 +403,7 @@ def export_performance_aggregation_endpoint(
         end_date = end_date.astimezone(UTC).replace(tzinfo=None)
 
     if start_date and end_date and start_date > end_date:
-        raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+        raise CodedHTTPException(status_code=400, detail="start_date cannot be after end_date")
 
     repo = SLARepository(db)
     aggregation = repo.aggregate_performance(
@@ -399,7 +413,7 @@ def export_performance_aggregation_endpoint(
     try:
         exported = export_performance_aggregation(aggregation, format)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     if format.lower() == "csv":
         return Response(
@@ -420,7 +434,7 @@ def verify_snapshot_integrity(
     repo = SLARepository(db)
     result = repo.verify_snapshot_integrity(snapshot_key=snapshot_key)
     if not result["valid"]:
-        raise HTTPException(status_code=409, detail=result.get("error", "Invalid snapshot"))
+        raise CodedHTTPException(status_code=409, detail=result.get("error", "Invalid snapshot"))
     return result
 
 
@@ -439,7 +453,7 @@ def export_analytics_summary_endpoint(
 ):
     """Export comprehensive analytics summary (KPI + trends + optional aggregation)."""
     if bucket not in VALID_BUCKETS:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400, detail=f"Invalid bucket '{bucket}'. Must be one of: {', '.join(VALID_BUCKETS)}"
         )
 
@@ -451,7 +465,7 @@ def export_analytics_summary_endpoint(
     try:
         trends = repo.aggregate_trends(limit_days=days, bucket=bucket, tz=tz, severity=severity, site_id=resolved_site)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     aggregation = None
     if include_aggregation:
@@ -460,7 +474,7 @@ def export_analytics_summary_endpoint(
     try:
         exported = export_analytics_summary(kpi, trends, aggregation, format)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     if format.lower() == "csv":
         return Response(

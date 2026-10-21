@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
+import socket
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+# Identifies the process/worker exporting a metric series so scrapes from
+# multiple gunicorn workers are attributable instead of silently under-reporting.
+INSTANCE_ID = f"{socket.gethostname()}-{os.getpid()}"
 
 
 @dataclass
@@ -31,7 +37,12 @@ class MetricsRegistry:
         self._gauges: dict[str, float] = {}
         self._histograms: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self._histogram_buckets: dict[str, dict[float, int]] = defaultdict(lambda: defaultdict(int))
+        self._histogram_counts: dict[str, int] = defaultdict(int)
+        self._histogram_sums: dict[str, float] = defaultdict(float)
         self._timers: dict[str, list[float]] = defaultdict(list)
+        self._timer_counts: dict[str, int] = defaultdict(int)
+        self._timer_sums: dict[str, float] = defaultdict(float)
+        self._timer_buckets: dict[str, dict[float, int]] = defaultdict(lambda: defaultdict(int))
 
     def increment_counter(self, name: str, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
         """Increment a counter metric."""
@@ -45,31 +56,52 @@ class MetricsRegistry:
             key = self._make_key(name, tags)
             self._gauges[key] = value
 
-    def record_histogram(self, name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None) -> None:
+    def record_histogram(
+        self, name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None
+    ) -> None:
         """Record a histogram value with automatic bucket tracking."""
         with self._lock:
             key = self._make_key(name, tags)
+            # Exact lifetime count/sum (never truncated); the sample window is
+            # only used for percentile computation.
+            self._histogram_counts[key] += 1
+            self._histogram_sums[key] += value
             self._histograms[key].append(MetricPoint(datetime.now(UTC), value, tags or {}))
-            # Increment histogram buckets for Prometheus-compatible export
+            # Prometheus semantics: each observation increments exactly one bucket
+            # (the first bound >= value). The exporter derives the cumulative
+            # curve from these per-bucket counts, so +Inf equals the sample count.
             bucket_list = buckets or _DEFAULT_LATENCY_BUCKETS
             for bucket_bound in bucket_list:
                 if value <= bucket_bound:
                     self._histogram_buckets[key][bucket_bound] += 1
+                    break
 
     def record_timer(self, name: str, duration_ms: float, tags: dict[str, str] | None = None) -> None:
         """Record a timing measurement."""
         with self._lock:
             key = self._make_key(name, tags)
+            # Exact lifetime count/sum (never truncated); the sample window is
+            # only used for percentile computation.
+            self._timer_counts[key] += 1
+            self._timer_sums[key] += duration_ms
             self._timers[key].append(duration_ms)
             # Keep only last 1000 measurements per timer
             if len(self._timers[key]) > 1000:
                 self._timers[key] = self._timers[key][-1000:]
+            # Track real bucket counts from the observation (seconds), using the
+            # same single-bucket invariant as histograms.
+            for bucket_bound in _DEFAULT_LATENCY_BUCKETS:
+                if duration_ms / 1000 <= bucket_bound:
+                    self._timer_buckets[key][bucket_bound] += 1
+                    break
 
     def _make_key(self, name: str, tags: dict[str, str] | None = None) -> str:
         """Create a unique key for a metric with optional tags."""
-        if not tags:
-            return name
-        tag_str = ",".join(f"{k}={v}" for k, v in sorted(tags.items()))
+        merged = dict(tags or {})
+        # Attribute every series to the exporting worker so multi-worker
+        # deployments are distinguishable and never silently under-report.
+        merged["instance"] = INSTANCE_ID
+        tag_str = ",".join(f"{k}={v}" for k, v in sorted(merged.items()))
         return f"{name}{{{tag_str}}}"
 
     def get_metrics_summary(self) -> dict[str, Any]:
@@ -88,13 +120,16 @@ class MetricsRegistry:
             for key, points in self._histograms.items():
                 if points:
                     values = [p.value for p in points]
+                    count = self._histogram_counts[key]
+                    total = self._histogram_sums[key]
                     summary["histograms"][key] = {
-                        "count": len(values),
-                        "sum": sum(values),
+                        "count": count,
+                        "sum": total,
                         "min": min(values),
                         "max": max(values),
-                        "avg": sum(values) / len(values),
+                        "avg": total / count if count else 0.0,
                         "latest": points[-1].timestamp.isoformat(),
+                        "window_samples": len(values),
                     }
                     # Include actual bucket counts for Prometheus exporter
                     if key in self._histogram_buckets:
@@ -103,14 +138,21 @@ class MetricsRegistry:
             # Summarize timers
             for key, timings in self._timers.items():
                 if timings:
+                    count = self._timer_counts[key]
+                    total_ms = self._timer_sums[key]
                     summary["timers"][key] = {
-                        "count": len(timings),
+                        "count": count,
+                        "sum_ms": total_ms,
                         "min_ms": min(timings),
                         "max_ms": max(timings),
-                        "avg_ms": sum(timings) / len(timings),
+                        "avg_ms": total_ms / count if count else 0.0,
                         "p95_ms": self._percentile(timings, 95),
                         "p99_ms": self._percentile(timings, 99),
+                        "window_samples": len(timings),
                     }
+
+            # Real per-bucket counts for timers (Prometheus exporter)
+            summary["timer_buckets"] = {key: dict(buckets) for key, buckets in self._timer_buckets.items()}
 
             return summary
 
@@ -160,7 +202,9 @@ def set_gauge(name: str, value: float, tags: dict[str, str] | None = None) -> No
     metrics.set_gauge(name, value, tags)
 
 
-def record_histogram(name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None) -> None:
+def record_histogram(
+    name: str, value: float, tags: dict[str, str] | None = None, buckets: list[float] | None = None
+) -> None:
     """Record a histogram value."""
     metrics.record_histogram(name, value, tags, buckets)
 

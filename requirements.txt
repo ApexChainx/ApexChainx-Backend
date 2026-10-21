@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 redis
 fakeredis
+cryptography>=42.0.0
 
 sqlalchemy>=2.0
 psycopg2-binary
@@ -10,6 +11,7 @@ pydantic-settings
 celery
 httpx
 python-multipart
+email-validator>=2.0
 passlib[bcrypt]
 PyJWT==2.8.0
 hypothesis

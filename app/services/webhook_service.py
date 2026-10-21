@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -9,11 +10,16 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from redis import Redis
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+from app.services.event_listener import EventListener
+from app.services.event_listener_cache import EventListenerCache
+from app.services.event_listener_metrics import EventListenerMetrics
+from app.services.event_listener_rate_limit import EventRateLimiter
 from app.services.formatters import canonical_json
 from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
@@ -21,9 +27,87 @@ from app.services.webhook_signing import (
     sign_payload,
 )
 from app.utils.correlation_ctx import get_or_generate_correlation_id
-from app.utils.network_validation import validate_webhook_url
+from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
+
+# The listener is shared by every path that emits a domain event: which
+# subscribers hear about an event is the same question no matter who asked.
+# The subscriber cache and the fan-out budget are process-wide for the same
+# reason.
+_event_listener_metrics = EventListenerMetrics()
+_event_listener_cache: EventListenerCache | None = None
+_event_rate_limiter: EventRateLimiter | None = None
+
+
+def _get_event_listener_cache() -> EventListenerCache | None:
+    """Return the shared subscriber cache.
+
+    Returns:
+        The cache, or ``None`` when the Redis-backed cache is switched off
+        (``USE_REDIS_RATE_LIMITER`` is the switch for every Redis-backed
+        helper in the fan-out path) or no broker URL is configured.
+    """
+    global _event_listener_cache
+    if _event_listener_cache is None:
+        broker_url = settings.CELERY_BROKER_URL.strip()
+        if not broker_url or not settings.USE_REDIS_RATE_LIMITER:
+            return None
+        try:
+            _event_listener_cache = EventListenerCache(
+                Redis.from_url(broker_url),
+                ttl=settings.EVENT_LISTENER_CACHE_TTL_SECONDS,
+            )
+        except Exception as exc:  # pragma: no cover - a bad broker URL must not break fan-out
+            logger.warning(
+                "event_listener_cache_unavailable",
+                extra={"event": "event_listener_cache_unavailable", "error": str(exc)},
+            )
+            return None
+    return _event_listener_cache
+
+
+def _get_event_rate_limiter() -> EventRateLimiter | None:
+    """Return the shared fan-out budget.
+
+    The budget is kept in Redis so every worker enforces the same limit; when
+    Redis is not available the limiter falls back to an in-process counter.
+    """
+    global _event_rate_limiter
+    if _event_rate_limiter is None:
+        redis_client = None
+        broker_url = settings.CELERY_BROKER_URL.strip()
+        if broker_url and settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER:
+            redis_client = Redis.from_url(broker_url)
+        _event_rate_limiter = EventRateLimiter(redis_client)
+    return _event_rate_limiter
+
+
+def build_event_listener(db: Session) -> EventListener:
+    """Build the listener used by every path that emits a domain event."""
+    return EventListener(
+        db,
+        metrics=_event_listener_metrics,
+        cache=_get_event_listener_cache(),
+        rate_limiter=_get_event_rate_limiter(),
+    )
+
+
+def invalidate_event_listener_cache(event: WebhookEvent | None = None) -> None:
+    """Drop the cached subscriber list after a registration changed.
+
+    A registration that was just created (or deleted, or re-subscribed to
+    another event) must take effect immediately: a newly registered webhook
+    that misses the next event because of a cached subscriber list would look
+    exactly like a silently broken webhook.
+    """
+    cache = _get_event_listener_cache()
+    if cache is None:
+        return
+    if event is None:
+        cache.invalidate_all()
+    else:
+        cache.invalidate(event.value)
 
 
 class WebhookDispatchLimiter:
@@ -82,6 +166,21 @@ WEBHOOK_SCHEMA_VERSION = "1"
 # (e.g. after an outage burst) can't block the worker for an unbounded run.
 WEBHOOK_RETRY_BATCH_SIZE = 100
 
+# Response bodies are receiver-controlled; cap and scrub before persisting (#301).
+RESPONSE_BODY_STORAGE_LIMIT = 500
+_SCRUB_PATTERNS = [
+    re.compile(r"S[A-Za-z0-9]{55}"),  # Stellar secret key
+    re.compile(r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+"),
+]
+
+
+def _scrub_response_body(body: str) -> str:
+    """Redact likely-sensitive patterns and bound the stored size (#301)."""
+    scrubbed = body
+    for pattern in _SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed[:RESPONSE_BODY_STORAGE_LIMIT]
+
 
 def _build_headers(
     webhook: Webhook,
@@ -108,10 +207,16 @@ def _build_headers(
     """
     corr_id = get_or_generate_correlation_id()
 
+    # The timestamp is part of the version 2 signed input, so the value signed and
+    # the value sent in the header must be the same string (#538). Each attempt
+    # re-stamps it: a retry is a fresh delivery of the same event, and re-using the
+    # original stamp would push it outside a receiver's skew window.
+    timestamp = datetime.now(UTC).isoformat()
+
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.now(UTC).isoformat(),
+        "X-Webhook-Timestamp": timestamp,
         "X-Correlation-ID": corr_id,
     }
 
@@ -123,23 +228,24 @@ def _build_headers(
         headers["traceparent"] = traceparent
 
     if webhook.secret:
-        sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
+        sig_hex, _version, signed_timestamp = sign_payload(webhook.secret, payload, signature_version, timestamp)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
         headers["X-Webhook-Signature-Version"] = str(signature_version)
+        # Version 1 ignores the timestamp; make the mismatch impossible to miss.
+        headers["X-Webhook-Timestamp"] = signed_timestamp or timestamp
     return headers
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
-    webhooks = db.query(Webhook).filter(Webhook.is_active).all()
-    result = []
-    for webhook in webhooks:
-        try:
-            events = json.loads(webhook.events)
-            if event.value in events:
-                result.append(webhook)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Webhook %s has invalid events JSON, skipping.", webhook.id)
-    return result
+    """Return the active webhooks that are subscribed to ``event``.
+
+    The resolution lives in :class:`app.services.event_listener.EventListener`
+    so that every path which emits an event resolves the subscribers the same
+    way -- with one statement, with the subscription filter pushed into SQL
+    instead of a per-row JSON parse in Python (issue #739), and sharing the
+    same subscriber cache and fan-out budget.
+    """
+    return build_event_listener(db).subscribers(event)
 
 
 def create_delivery(
@@ -182,9 +288,29 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         delivery.event,
         delivery.signature_version,
     )
+    headers["X-Webhook-Delivery-ID"] = str(delivery.id)
 
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
-    validate_webhook_url(webhook.url)
+    current_ips = validate_webhook_url(webhook.url)
+
+    # Pin delivery to the addresses approved at registration (issue #295): if the
+    # webhook was registered with a resolved_ips snapshot and delivery-time
+    # resolution no longer overlaps it at all, fail closed rather than silently
+    # following the new (possibly rebound) address. Redirect-target validation
+    # and a configurable warn/allow policy are follow-ups, tracked in #295.
+    if webhook.resolved_ips:
+        try:
+            approved_ips = set(json.loads(webhook.resolved_ips))
+        except (json.JSONDecodeError, TypeError):
+            approved_ips = set()
+        if approved_ips and not (approved_ips & set(current_ips)):
+            logger.error(
+                "Webhook %s delivery blocked: resolved IPs %s do not match approved %s (possible DNS rebinding).",
+                webhook.id,
+                current_ips,
+                approved_ips,
+            )
+            raise NetworkValidationError("Webhook host resolution no longer matches the approved address.")
 
     # Check circuit breaker before attempting
     if not breaker.allow_request(webhook.url):
@@ -197,7 +323,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook.url, content=payload_str, headers=headers)
         delivery.response_status_code = response.status_code
-        delivery.response_body = response.text[:4000]
+        delivery.response_body = _scrub_response_body(response.text)
 
         if response.is_success:
             breaker.on_success(webhook.url)
@@ -221,6 +347,25 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
 
 @traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
+    claimed = (
+        db.query(WebhookDelivery)
+        .filter(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]),
+        )
+        .update(
+            {
+                WebhookDelivery.status: WebhookDeliveryStatus.SENDING,
+                WebhookDelivery.attempt_count: WebhookDelivery.attempt_count + 1,
+                WebhookDelivery.updated_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        return
+
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
         logger.error("WebhookDelivery %s not found.", delivery_id)
@@ -231,28 +376,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         return
 
     webhook = delivery.webhook
-
-    # If breaker is open, mark as breaker_open without consuming retry budget
-    if not breaker.allow_request(webhook.url):
-        delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
-        delivery.error_message = "Circuit breaker open, delivery deferred"
-        delivery.next_retry_at = None
-        delivery.updated_at = datetime.now(UTC)
-        db.commit()
-        logger.warning(
-            "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
-            delivery.id,
-            webhook.id,
-        )
-        return
-
-    delivery.attempt_count += 1
-    delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.now(UTC)
-    db.commit()
-
-    with dispatch_limiter.acquire(str(webhook.id)):
-        success = _attempt_delivery(delivery, webhook)
+    success = _attempt_delivery(delivery, webhook)
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS
@@ -322,7 +446,8 @@ def trigger_sla_violation_webhooks(
         - Timestamp is immutable across retries (idempotency support)
         - Future signing changes can use new version without breaking existing consumers
     """
-    webhooks = get_active_webhooks_for_event(db, event)
+    listener = build_event_listener(db)
+    decisions = listener.dispatch_plan(event)
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
@@ -343,7 +468,13 @@ def trigger_sla_violation_webhooks(
     except (ImportError, AttributeError):
         pass
 
-    for webhook in webhooks:
+    for decision in decisions:
+        if not decision.allowed:
+            # The fan-out policy or the event budget refused this subscriber. The listener already
+            # logged and counted it; skipping keeps the rest of the fan-out
+            # going instead of failing the whole event.
+            continue
+        webhook = decision.webhook
         delivery = create_delivery(
             db,
             webhook,
@@ -381,7 +512,7 @@ def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
-            WebhookDelivery.status == WebhookDeliveryStatus.RETRYING,
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]),
             WebhookDelivery.next_retry_at <= now,
         )
         .order_by(WebhookDelivery.next_retry_at)

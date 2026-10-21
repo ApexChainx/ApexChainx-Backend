@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.db.base_class import Base
 
@@ -30,8 +30,8 @@ class Job(Base):
     celery_task_id = Column(String(255), unique=True, nullable=False, index=True)
     job_type = Column(SAEnum(JobType), nullable=False)
     status = Column(SAEnum(JobStatus), default=JobStatus.PENDING, nullable=False)
-    payload = Column(Text, nullable=True)  # JSON-encoded input params
-    result = Column(Text, nullable=True)  # JSON-encoded result
+    payload = Column(JSONB, nullable=True)  # JSON input params
+    result = Column(JSONB, nullable=True)  # JSON result
     error = Column(Text, nullable=True)
     progress = Column(Float, default=0.0)  # 0.0 – 100.0
     progress_details = Column(JSON, nullable=True)  # Structured progress information

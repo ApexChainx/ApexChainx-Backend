@@ -2,7 +2,7 @@
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from redis import Redis
 
@@ -52,3 +52,16 @@ class SLACache:
 
     def invalidate(self, device_id: str, period: str) -> None:
         self._redis.delete(self._key(device_id, period))
+
+    def warm_up(self, entries: Iterable[tuple[str, str, dict]]) -> int:
+        """Pre-populate the cache with precomputed results (#566).
+
+        Uses the exact same keys and TTL as the read path, so a value written
+        here is indistinguishable from one written by ``set``/``get_or_compute``
+        during a request. Returns the number of entries written.
+        """
+        warmed = 0
+        for device_id, period, result in entries:
+            self.set(device_id, period, result)
+            warmed += 1
+        return warmed

@@ -1,12 +1,12 @@
 import hashlib
-import hashlib
 import logging
 import re
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import jwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from jwt import InvalidTokenError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -15,8 +15,11 @@ from app.core.config import settings as app_settings
 from app.db.session import get_db
 from app.models.auth import AuthUser
 from app.models.enums import Role
+from app.services.metrics import increment_counter
+from app.utils.correlation_ctx import get_correlation_id
 
 logger = logging.getLogger(__name__)
+IMPERSONATION_VERIFICATION_FAILURES = "impersonation_verification_failures"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -68,10 +71,15 @@ def _extract_bearer_token(authorization: str | None) -> str:
 
 def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
     """Verify a short-lived impersonation JWT using PyJWT.
+
     Returns the decoded payload if valid, or None if invalid/expired.
+    Every failure mode emits a structured log line with a machine-readable
+    reason and the request correlation ID, and increments the
+    ``impersonation_verification_failures`` counter tagged by reason, so
+    scanning of this privileged surface is observable (#271).
     """
     try:
-        secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret")
+        secret = app_settings.SECRET_KEY or "apexchainx-dev-secret"
         payload = jwt.decode(
             token,
             secret,
@@ -79,24 +87,39 @@ def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
             options={"require": ["exp", "sub", "scope"]},
         )
         if payload.get("scope") != "impersonate":
-            logger.warning("impersonation_verification_failed", extra={"reason": "wrong_scope"})
+            _record_impersonation_failure("wrong_scope")
             return None
         return payload
     except jwt.ExpiredSignatureError:
-        logger.warning("impersonation_verification_failed", extra={"reason": "expired"})
-        return None
+        _record_impersonation_failure("expired")
     except jwt.InvalidAlgorithmError:
-        logger.warning("impersonation_verification_failed", extra={"reason": "invalid_algorithm"})
-        return None
-    except InvalidTokenError as exc:
-        logger.warning("impersonation_verification_failed", extra={"reason": str(exc)})
-        return None
-    except Exception as exc:
-        logger.warning("impersonation_verification_failed", extra={"reason": f"unexpected: {exc}"})
-        return None
+        _record_impersonation_failure("invalid_algorithm")
+    except jwt.InvalidSignatureError:
+        _record_impersonation_failure("bad_signature")
+    except jwt.DecodeError:
+        _record_impersonation_failure("malformed")
+    except InvalidTokenError:
+        _record_impersonation_failure("invalid_token")
+    except Exception:
+        _record_impersonation_failure("unexpected")
+    return None
 
 
-def get_current_user(authorization: str | None = Header(default=None), db: Session = Depends(get_db)) -> AuthUser:
+def _record_impersonation_failure(reason: str) -> None:
+    """Record a failed impersonation verification without exposing token data."""
+    correlation_id = get_correlation_id()
+    logger.warning(
+        "impersonation_verification_failed",
+        extra={"reason": reason, "correlation_id": correlation_id},
+    )
+    increment_counter(IMPERSONATION_VERIFICATION_FAILURES, tags={"reason": reason})
+
+
+def get_current_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> AuthUser:
     from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
     from app.services.auth_store import AuthStore
     from app.services.token_revocation import is_revoked
@@ -111,13 +134,18 @@ def get_current_user(authorization: str | None = Header(default=None), db: Sessi
             repo = UserRepository(db)
             user_orm = repo.get_by_id(user_id)
             if user_orm:
-                return user_orm_to_pydantic(user_orm)
+                user = user_orm_to_pydantic(user_orm)
+                request.state.user = user
+                return user
 
     if is_revoked(hash_token(token)):
         raise HTTPException(status_code=401, detail="Token revoked")
     user = AuthStore.get_user_for_token(token, db=db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    # Stamp the authenticated actor so CorrelationMiddleware can attribute
+    # access logs with a user_id_hash.
+    request.state.user = user
     return user
 
 
@@ -137,7 +165,22 @@ require_admin = require_role(Role.admin)
 require_engineer = require_role(Role.engineer)
 
 
+def require_engineer_or_admin(current_user: AuthUser = Depends(get_current_user)) -> AuthUser:
+    """Allow either an engineer or an admin to access an endpoint.
+
+    Used by read-only dispute endpoints: engineers flag and admins resolve
+    disputes, so both roles need read access to the dispute record.
+    """
+    if current_user.role not in (Role.engineer, Role.admin):
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions. Required role: engineer or admin",
+        )
+    return current_user
+
+
 def get_current_user_or_service(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
     db: Session = Depends(get_db),
@@ -159,6 +202,8 @@ def get_current_user_or_service(
             raise HTTPException(status_code=401, detail="API key has been revoked")
         if key.expires_at is not None and key.expires_at.replace(tzinfo=None) < datetime.now(UTC).replace(tzinfo=None):
             raise HTTPException(status_code=401, detail="API key has expired")
+        # Stamp the service actor (by key id) for access-log attribution.
+        request.state.user = SimpleNamespace(id=key.id)
         return {
             "actor_type": "service",
             "actor_id": f"service:{key.id}",
@@ -166,7 +211,7 @@ def get_current_user_or_service(
             "scopes": key.scopes or [],
         }
     if authorization:
-        user = get_current_user(authorization=authorization, db=db)
+        user = get_current_user(request=request, authorization=authorization, db=db)
         return {
             "actor_type": "user",
             "actor_id": user.id,

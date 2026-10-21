@@ -301,6 +301,20 @@ class OutageRepository:
 
         duplicate = self._find_duplicate_orm(payload)
         if duplicate:
+            # #303: a matching site/time/description tuple with different
+            # severity/status/affected_services/assigned_to is a conflicting
+            # correction, not a no-op (id is intentionally excluded here,
+            # since this path is only reached when ids differ or are unset).
+            if (
+                duplicate.severity != payload.severity.value
+                or duplicate.status != payload.status.value
+                or (duplicate.affected_services or []) != payload.affected_services
+                or duplicate.assigned_to != payload.assigned_to
+            ):
+                raise ValueError(
+                    f"Outage matching site '{payload.site_name}' at '{payload.detected_at}' "
+                    "already exists with different content"
+                )
             return _orm_to_pydantic(duplicate)
         return None
 
@@ -374,7 +388,9 @@ class OutageRepository:
         if sla_count > 0:
             return True
         try:
-            payment_count = self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).count()
+            payment_count = (
+                self.db.query(PaymentTransactionORM).filter(PaymentTransactionORM.outage_id == outage_id).count()
+            )
             return payment_count > 0
         except Exception:
             # PaymentTransactionORM may not have outage_id in all schema versions

@@ -1,14 +1,17 @@
 """Distributed locking utilities for concurrency protection.
 
-Provides advisory lock mechanisms using PostgreSQL's pg_advisory_xact_lock
-to prevent concurrent execution of critical operations like SLA resolution
-and recomputation.
+Provides transaction-scoped advisory lock mechanisms using PostgreSQL's
+pg_advisory_xact_lock and pg_try_advisory_xact_lock. The bounded-wait helper
+prevents concurrent execution while nowait remains available for retryable
+request paths.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import math
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -30,10 +33,12 @@ class ConcurrencyLockError(ApexTransientError):
 def _lock_id_from_key(key: str) -> int:
     """Convert a string key to a 64-bit integer for PostgreSQL advisory locks.
 
-    Uses SHA-256 to generate a deterministic hash, then takes the first 8 bytes.
+    Uses SHA-256 to generate a deterministic hash, then takes the first 8 bytes
+    as a *signed* bigint so the value always fits in PostgreSQL's int8 range
+    (advisory locks take bigint; values above 2**63 - 1 overflow the cast).
     """
     hash_bytes = hashlib.sha256(key.encode("utf-8")).digest()
-    return int.from_bytes(hash_bytes[:8], byteorder="big", signed=False)
+    return int.from_bytes(hash_bytes[:8], byteorder="big", signed=True)
 
 
 @contextmanager
@@ -46,8 +51,7 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
     Args:
         db: SQLAlchemy session
         lock_key: Unique string identifier for the lock (e.g., "resolve:outage_123")
-        timeout_seconds: Maximum time to wait for the lock (not directly enforced by PG,
-                        but we can check before acquiring)
+        timeout_seconds: Maximum time to wait for the lock
 
     Yields:
         None
@@ -61,14 +65,21 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
             outage = repo.resolve(outage_id, mttr_minutes)
             db.commit()
     """
+    if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+        raise ValueError("timeout_seconds must be a finite, non-negative number")
+
     lock_id = _lock_id_from_key(lock_key)
+    deadline = time.monotonic() + timeout_seconds
 
-    # Try to acquire the lock (non-blocking first check)
-    result = db.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
-    acquired = result.scalar()
+    while True:
+        result = db.execute(text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
+        if result.scalar():
+            break
 
-    if not acquired:
-        raise ConcurrencyLockError(f"Could not acquire lock for '{lock_key}'. Another operation is in progress.")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ConcurrencyLockError(f"Could not acquire lock for '{lock_key}'. Another operation is in progress.")
+        time.sleep(min(0.05, remaining))
 
     try:
         yield
@@ -77,6 +88,30 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
     except Exception as exc:
         logger.exception("Error inside advisory lock for '%s'", lock_key)
         raise ApexTransientError(detail=f"Unexpected error in locked section: {exc}") from exc
+
+
+@contextmanager
+def blocking_advisory_lock(db: Session, lock_key: str) -> Generator[None, None, None]:
+    """Acquire a PostgreSQL advisory lock, blocking until it is available.
+
+    Transaction-scoped: the lock is automatically released when the
+    transaction commits or rolls back. Use for read-modify-write sequences
+    that must be serialized (e.g. appending to the audit hash chain).
+
+    Args:
+        db: SQLAlchemy session
+        lock_key: Unique string identifier for the lock
+
+    Yields:
+        None
+    """
+    lock_id = _lock_id_from_key(lock_key)
+    db.execute(text("SELECT pg_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
+    try:
+        yield
+    finally:
+        # The lock is released automatically when the transaction ends.
+        pass
 
 
 @contextmanager
@@ -103,7 +138,7 @@ def advisory_lock_nowait(db: Session, lock_key: str) -> Generator[None, None, No
     """
     lock_id = _lock_id_from_key(lock_key)
 
-    result = db.execute(text("SELECT pg_try_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+    result = db.execute(text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
     acquired = result.scalar()
 
     if not acquired:

@@ -7,6 +7,39 @@ VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
 DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
 MIN_SECRET_KEY_LENGTH = 32
 
+# #510: environments in which Celery eager mode is allowed. Everywhere else a
+# CELERY_TASK_ALWAYS_EAGER=true default silently runs every task in-process
+# while presenting a queue topology that does nothing.
+DEV_ENVIRONMENTS = {"local", "test"}
+
+# Header clients use to pin an API version (#499)
+API_VERSION_HEADER = "X-API-Version"
+
+
+def parse_api_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a dotted API version into a 3-part comparable tuple.
+
+    Accepts ``1``, ``1.0``, ``1.0.0`` and an optional ``v`` prefix.  Missing
+    components are zero-padded so ``1`` and ``1.0.0`` compare equal.  Returns
+    ``None`` when the value is not a dotted numeric version.
+    """
+    raw = value.strip().removeprefix("v").strip()
+    if not raw:
+        return None
+    parts = raw.split(".")
+    if len(parts) > 3:
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        # isdecimal (not isdigit) so superscripts such as "²" are rejected
+        # instead of blowing up int() on an attacker-controlled header.
+        if not part.isdecimal():
+            return None
+        numbers.append(int(part))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
@@ -30,11 +63,21 @@ class Settings(BaseSettings):
         "Idempotency-Key",
         "Content-Type",
         "X-Requested-With",
+        API_VERSION_HEADER,
     ]
-    CORS_EXPOSE_HEADERS: list[str] = ["X-Correlation-ID", "X-RateLimit-Remaining"]
+    CORS_EXPOSE_HEADERS: list[str] = [
+        "X-Correlation-ID",
+        "X-RateLimit-Remaining",
+        API_VERSION_HEADER,
+        "X-Supported-API-Versions",
+    ]
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
-    CELERY_TASK_ALWAYS_EAGER: bool = True
+    # #510: defaults to False. Eager mode runs tasks inline in the request
+    # worker, which removes retry/backoff semantics and makes the breaker and
+    # dead-letter machinery inert. It is a local/test convenience, so it must be
+    # opted into explicitly and is rejected outside development.
+    CELERY_TASK_ALWAYS_EAGER: bool = False
     SLA_CONTRACT_ADDRESS: str = "local-sla-calculator"
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
@@ -50,6 +93,21 @@ class Settings(BaseSettings):
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
+    # TxIndexer (#713): the chain-ingest loop fetches one page of payments per
+    # pass and retries transient Horizon failures with exponential backoff.
+    # The delay before retry N is BATCH-independent: min(base * 2**(N-1), max)
+    # with +/- TX_INDEXER_BACKOFF_JITTER_RATIO jitter on top.
+    TX_INDEXER_BATCH_SIZE: int = 50  # payments fetched per Horizon page
+    TX_INDEXER_MAX_ATTEMPTS: int = 4  # total attempts per page fetch (first try included)
+    TX_INDEXER_BACKOFF_BASE_SECONDS: float = 0.5  # delay before the first retry
+    TX_INDEXER_BACKOFF_MAX_SECONDS: float = 8.0  # ceiling for any single backoff
+    TX_INDEXER_BACKOFF_JITTER_RATIO: float = 0.5  # +/- fraction applied to each delay
+    TX_INDEXER_TIMEOUT_SECONDS: float = 10.0  # Horizon HTTP timeout
+    # #714: the ingest worker publishes a heartbeat to Redis; the health probe
+    # (served by the API process) reads it back. Above this lag the probe
+    # reports "degraded" because the stream is no longer keeping up.
+    TX_INDEXER_HEALTH_MAX_LAG_SECONDS: int = 120
+    TX_INDEXER_STATE_TTL_SECONDS: int = 7 * 24 * 3600  # heartbeat key expiry
     # Trusted-proxy settings (#205)
     # Number of trusted reverse-proxy hops in front of this app.
     # Set to 0 when running without a proxy (uses direct connection IP).
@@ -65,8 +123,31 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300  # Rate limit window in seconds
     AUTH_LOCKOUT_ENTROPY_THRESHOLD: int = 20  # Unique password prefixes before credential-stuffing alert
     AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES: int = 5  # Rolling window for stuffing detection
+    # #507: credential-stuffing lockouts are scoped to (IP, account) pairs, and
+    # the account-wide scope catches a distributed spray on one account.
+    # The lockout length is a multiplier of the account lockout, capped so a
+    # longer AUTH_LOCKOUT_DURATION_MINUTES cannot silently lock out a whole
+    # shared-NAT address for hours.
+    AUTH_STUFFING_LOCKOUT_MULTIPLIER: int = 4
+    AUTH_STUFFING_LOCKOUT_MAX_MINUTES: int = 60
+    AUTH_ACCOUNT_STUFFING_ENTROPY_THRESHOLD: int = 20
     AUTH_REVOCATION_KEY_PREFIX: str = "revoked_token"  # Redis key prefix for token revocation
     USE_REDIS_RATE_LIMITER: bool = True
+
+    # Detail keys that must always be redacted when writing audit-log entries
+    # (app/services/scrubber.py). Values under these keys are replaced with
+    # "[REDACTED]" before persistence.
+    AUDIT_SENSITIVE_FIELDS: list[str] = [
+        "password",
+        "hashed_password",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "api_key",
+        "x_api_key",
+    ]
 
     # Input size and payload guardrails
     MAX_REQUEST_BODY_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB max request body size
@@ -79,6 +160,12 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_EVENTS_COUNT: int = 50  # Max webhook events per webhook
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
+    MAX_WEBHOOK_MAX_RETRIES: int = 10  # Max delivery retry attempts a webhook may be configured for (#552)
+    # #517: cap on webhooks a single admin account may register (0 disables).
+    MAX_WEBHOOKS_PER_ACCOUNT: int = 50
+    # #517: warn (don't reject) when total event subscriptions exceed this.
+    WEBHOOK_FANOUT_WARN_THRESHOLD: int = 200
+
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
     WEBHOOK_URL_ALLOWLIST: list[str] = []
@@ -90,6 +177,8 @@ class Settings(BaseSettings):
     SECURITY_HEADERS_ENABLED: bool = True
     # When true, serve a more permissive CSP for built-in Swagger/OpenAPI docs only
     SECURITY_CSP_SWAGGER_PERMISSIVE: bool = False
+    # ETag middleware: list of path prefixes to exclude from ETag buffering
+    ETAG_EXCLUDE_PATH_PREFIXES: list[str] = []
 
     # Circuit breaker settings for webhook delivery (#33)
     WEBHOOK_BREAKER_FAIL_THRESHOLD: int = 10
@@ -108,15 +197,86 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
     WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
+    # Event listener fan-out policy (#740, #741).
+    # How long a resolved subscriber list is considered fresh. The webhook rows
+    # themselves are always re-read from the database, so this only bounds how
+    # long a registration change takes to be noticed.
+    EVENT_LISTENER_CACHE_TTL_SECONDS: int = 15
+    # How many events a single subscriber may receive per window. The number
+    # of emissions is not under the subscriber's control (one event per
+    # affected device), so without a budget one subscriber can amplify the
+    # whole fan-out. The default is deliberately generous -- an incident that
+    # affects a hundred devices emits a hundred events to the same subscriber
+    # -- and only exists to stop a runaway fan-out.
+    EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER: int = 600
+    # Length of the subscriber event budget window, in seconds.
+    EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
+    # Fix #576: hard cap on how many completed Idempotency-Key records are
+    # tracked at once. The TTL above already bounds growth over time, but a
+    # burst of unique keys inside a single TTL window could still grow the
+    # keystore without bound before anything expires. Once this many
+    # completed keys exist, the oldest ones are evicted immediately.
+    IDEMPOTENCY_MAX_COMPLETED_KEYS: int = 50_000
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
+    # Upper bound for a webhook's per-row secret_grace_hours (#582): the column
+    # is admin-settable, so it needs a ceiling or an operator typo (or an
+    # admin session gone rogue) could pin an outgoing secret forever.
+    MAX_WEBHOOK_SECRET_GRACE_HOURS: int = 24 * 7
+    # Fernet key (32 url-safe base64-encoded bytes) used to encrypt webhook
+    # signing secrets at rest (#266). Required in non-local environments; when
+    # unset (local/test) a key is derived from SECRET_KEY so secrets are still
+    # never stored as plaintext.
+    WEBHOOK_SECRET_ENCRYPTION_KEY: str = ""
 
     # OAuth configuration (#10)
     OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
     OAUTH_STATE_TTL_SECONDS: int = 600
+    # #568: batch size for the periodic sweep of expired OAuth connect-state
+    # rows (Redis SCAN COUNT hint per iteration of the pruning task).
+    OAUTH_STATE_PRUNE_BATCH_SIZE: int = 100
+
+    # Outage event timeline retention (#329)
+    # Days to keep outage timeline events before the scheduled cleanup removes them.
+    OUTAGE_EVENT_RETENTION_DAYS: int = 90
+
+    # Audit log retention (#324)
+    # Days to keep audit entries before the scheduled task archives and removes them.
+    AUDIT_RETENTION_DAYS: int = 90
+    # Directory where archived audit entries (JSONL, hashes preserved) are written.
+    AUDIT_ARCHIVE_DIR: str = "audit_archives"
+
+    # API version negotiation (#499)
+    # Clients may pin a version with the X-API-Version request header. Requests
+    # outside the supported range are rejected instead of silently receiving the
+    # current behaviour; requests without the header are served as "latest".
+    API_VERSION_MIN_SUPPORTED: str = "1.0.0"
+    API_VERSION_MAX_SUPPORTED: str = "1.0.0"
+
+    # Block poller settings (#725, #727, #728, #729)
+    # Poll interval between successful block fetches.
+    BLOCK_POLLER_POLL_INTERVAL_SECONDS: float = 5.0
+    # Number of retries after the initial fetch attempt.
+    BLOCK_POLLER_MAX_RETRIES: int = 3
+    # Exponential backoff base delay and hard cap, in seconds.
+    BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS: float = 30.0
+    # Fraction of the computed delay that may be randomised (0.0 - 1.0).
+    BLOCK_POLLER_RETRY_JITTER_RATIO: float = 0.25
+    # Sliding-window rate limit applied to upstream block fetches.
+    BLOCK_POLLER_RATE_LIMIT_REQUESTS: int = 10
+    BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS: float = 1.0
+    # Input sanitization bounds for untrusted block payloads.
+    BLOCK_POLLER_MAX_PAYLOAD_BYTES: int = 5 * 1024 * 1024
+    BLOCK_POLLER_MAX_TRANSACTIONS: int = 1000
+    BLOCK_POLLER_MAX_IDENTIFIER_LENGTH: int = 256
+    BLOCK_POLLER_MAX_STRING_LENGTH: int = 4096
+    BLOCK_POLLER_MAX_COLLECTION_ITEMS: int = 10000
+    BLOCK_POLLER_MAX_DEPTH: int = 8
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
@@ -132,6 +292,22 @@ def validate_critical_settings(config: Settings) -> None:
 
     if not config.VERSION.strip():
         errors.append("VERSION must not be empty.")
+
+    # API version negotiation (#499): the served version must sit inside the
+    # advertised supported range, otherwise every pinned client is rejected.
+    min_version = parse_api_version(config.API_VERSION_MIN_SUPPORTED)
+    max_version = parse_api_version(config.API_VERSION_MAX_SUPPORTED)
+    current_version = parse_api_version(config.VERSION)
+    if min_version is None:
+        errors.append("API_VERSION_MIN_SUPPORTED must be a dotted numeric version such as 1.0.0.")
+    if max_version is None:
+        errors.append("API_VERSION_MAX_SUPPORTED must be a dotted numeric version such as 1.0.0.")
+    if current_version is None:
+        errors.append("VERSION must be a dotted numeric version such as 1.0.0.")
+    if None not in (min_version, max_version) and min_version > max_version:
+        errors.append("API_VERSION_MIN_SUPPORTED must not be greater than API_VERSION_MAX_SUPPORTED.")
+    if None not in (min_version, max_version, current_version) and not (min_version <= current_version <= max_version):
+        errors.append("VERSION must fall within [API_VERSION_MIN_SUPPORTED, API_VERSION_MAX_SUPPORTED].")
 
     if not config.API_V1_PREFIX.startswith("/"):
         errors.append("API_V1_PREFIX must start with '/'.")
@@ -173,6 +349,16 @@ def validate_critical_settings(config: Settings) -> None:
         if not config.CELERY_RESULT_BACKEND.strip():
             errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
 
+    # #510: fail fast, in the same style as the SECRET_KEY guard. A deployment
+    # that runs every task in-process while showing a queue topology is the
+    # silent failure this catches.
+    if config.CELERY_TASK_ALWAYS_EAGER and config.ENVIRONMENT not in DEV_ENVIRONMENTS:
+        errors.append(
+            f"CELERY_TASK_ALWAYS_EAGER must be false outside development; it runs tasks "
+            f"inline and disables retry/backoff, breaker and dead-letter handling. "
+            f"ENVIRONMENT={config.ENVIRONMENT!r} is not one of {sorted(DEV_ENVIRONMENTS)}."
+        )
+
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")
     if not config.PAYMENT_FROM_ADDRESS.strip():
@@ -183,8 +369,32 @@ def validate_critical_settings(config: Settings) -> None:
     if config.TRUSTED_PROXY_COUNT < 0:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
 
+    # #713: a nonsensical backoff profile either spins (base <= 0 with jitter)
+    # or hides a transient outage behind an unbounded pause, so reject it at
+    # boot instead of at the first failed Horizon call.
+    if not 1 <= config.TX_INDEXER_BATCH_SIZE <= 200:
+        errors.append("TX_INDEXER_BATCH_SIZE must be between 1 and 200.")
+    if not 1 <= config.TX_INDEXER_MAX_ATTEMPTS <= 10:
+        errors.append("TX_INDEXER_MAX_ATTEMPTS must be between 1 and 10.")
+    if config.TX_INDEXER_BACKOFF_BASE_SECONDS <= 0:
+        errors.append("TX_INDEXER_BACKOFF_BASE_SECONDS must be > 0.")
+    if config.TX_INDEXER_BACKOFF_MAX_SECONDS < config.TX_INDEXER_BACKOFF_BASE_SECONDS:
+        errors.append("TX_INDEXER_BACKOFF_MAX_SECONDS must be >= TX_INDEXER_BACKOFF_BASE_SECONDS.")
+    if not 0 <= config.TX_INDEXER_BACKOFF_JITTER_RATIO <= 1:
+        errors.append("TX_INDEXER_BACKOFF_JITTER_RATIO must be between 0 and 1.")
+    if config.TX_INDEXER_TIMEOUT_SECONDS <= 0:
+        errors.append("TX_INDEXER_TIMEOUT_SECONDS must be > 0.")
+    if config.TX_INDEXER_HEALTH_MAX_LAG_SECONDS <= 0:
+        errors.append("TX_INDEXER_HEALTH_MAX_LAG_SECONDS must be > 0.")
+    if config.TX_INDEXER_STATE_TTL_SECONDS <= 0:
+        errors.append("TX_INDEXER_STATE_TTL_SECONDS must be > 0.")
+
     if config.ENVIRONMENT not in {"local", "test"}:
-        if not config.SECRET_KEY or config.SECRET_KEY == DEFAULT_SECRET_KEY or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH:
+        if (
+            not config.SECRET_KEY
+            or config.SECRET_KEY == DEFAULT_SECRET_KEY
+            or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH
+        ):
             errors.append(
                 f"SECRET_KEY must be set to a secure, non-default value in non-local environments. "
                 f"Current value is the development default or too short (< {MIN_SECRET_KEY_LENGTH} chars). "
@@ -199,8 +409,21 @@ def validate_critical_settings(config: Settings) -> None:
             )
 
         if not config.PAYMENT_WEBHOOK_SECRET:
+            errors.append(f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}.")
+
+        encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
+        if not encryption_key:
+            errors.append(f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}.")
+
+    encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
+    if encryption_key:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(encryption_key.encode("utf-8"))
+        except Exception:
             errors.append(
-                f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key " "(32 url-safe base64-encoded bytes)."
             )
 
     try:
@@ -215,11 +438,62 @@ def validate_critical_settings(config: Settings) -> None:
     if config.WEBHOOK_RETRY_MAX_DELAY_SECONDS <= 0:
         errors.append("WEBHOOK_RETRY_MAX_DELAY_SECONDS must be > 0.")
 
+    if config.MAX_WEBHOOK_MAX_RETRIES < 0:
+        errors.append("MAX_WEBHOOK_MAX_RETRIES must be >= 0.")
+
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES must be > 0.")
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.BLOCK_POLLER_POLL_INTERVAL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_POLL_INTERVAL_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_RETRIES < 0:
+        errors.append("BLOCK_POLLER_MAX_RETRIES must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS < 0:
+        errors.append("BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if not 0 <= config.BLOCK_POLLER_RETRY_JITTER_RATIO <= 1:
+        errors.append("BLOCK_POLLER_RETRY_JITTER_RATIO must be between 0 and 1.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_REQUESTS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_REQUESTS must be > 0.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_PAYLOAD_BYTES <= 0:
+        errors.append("BLOCK_POLLER_MAX_PAYLOAD_BYTES must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_TRANSACTIONS <= 0:
+        errors.append("BLOCK_POLLER_MAX_TRANSACTIONS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_IDENTIFIER_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_IDENTIFIER_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_STRING_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_STRING_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_COLLECTION_ITEMS <= 0:
+        errors.append("BLOCK_POLLER_MAX_COLLECTION_ITEMS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_DEPTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_DEPTH must be > 0.")
+
+    if config.EVENT_LISTENER_CACHE_TTL_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_CACHE_TTL_SECONDS must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))

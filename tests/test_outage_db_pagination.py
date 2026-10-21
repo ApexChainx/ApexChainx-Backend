@@ -4,7 +4,7 @@ Validates that the list() method uses COUNT(*) OVER() for efficient
 pagination and supports include_total=False to skip count entirely.
 """
 
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 from app.repositories.outage_repository import OutageRepository
 
@@ -78,7 +78,7 @@ class TestOutageListWindowFunction:
         mock_q.first.return_value = mock_row
         mock_q.all.return_value = []
 
-        result = repo.list(include_total=True)
+        repo.list(include_total=True)
 
         # Verify func.count().over() was called (window function)
         mock_func.count.assert_called()

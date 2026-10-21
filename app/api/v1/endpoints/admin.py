@@ -4,9 +4,10 @@ Provides REST API for two-step admin and operator transfers on the
 Soroban SLA calculator contract.  All endpoints require admin role.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_admin
 from app.services.audit_log import audit_log
 from app.services.contracts.governance_client import (
@@ -39,12 +40,12 @@ def api_propose_admin(
     try:
         result = propose_admin(payload.new_admin_address)
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     audit_log.log(
         event_type="governance_propose_admin",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "new_admin": payload.new_admin_address,
             "tx_hash": result["tx_hash"],
         },
@@ -60,12 +61,12 @@ def api_accept_admin(
     try:
         result = accept_admin()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     audit_log.log(
         event_type="governance_accept_admin",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
@@ -80,12 +81,12 @@ def api_cancel_admin_proposal(
     try:
         result = cancel_admin_proposal()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     audit_log.log(
         event_type="governance_cancel_admin_proposal",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
@@ -100,12 +101,12 @@ def api_renounce_admin(
     try:
         result = renounce_admin()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     audit_log.log(
         event_type="governance_renounce_admin",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
@@ -121,12 +122,12 @@ def api_propose_operator(
     try:
         result = propose_operator(payload.new_operator_address)
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     audit_log.log(
         event_type="governance_propose_operator",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "new_operator": payload.new_operator_address,
             "tx_hash": result["tx_hash"],
         },
@@ -142,12 +143,12 @@ def api_accept_operator(
     try:
         result = accept_operator()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
 
     audit_log.log(
         event_type="governance_accept_operator",
         details={
-            "actor": getattr(current_user, "username", None),
+            "actor": current_user.email,
             "tx_hash": result["tx_hash"],
         },
     )
