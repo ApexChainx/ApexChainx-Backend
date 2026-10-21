@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Partial unique index on (url, events) for live webhooks (issue #562).
 
 Without a DB constraint, two concurrent ``POST /webhooks`` calls with the same

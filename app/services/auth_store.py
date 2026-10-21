@@ -200,7 +200,7 @@ class AuthStore:
             expires_at=expires_at,
         )
 
-        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.user_id)
+        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.id)
 
         return AuthSessionResponse(
             access_token=access_token,
