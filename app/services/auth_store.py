@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,9 @@ from app.repositories.user_repository import UserRepository, user_orm_to_pydanti
 from app.services.audit_log import audit_log
 from app.services.auth_cache import AuthCache
 from app.services.user_cache import UserCache
+
+if TYPE_CHECKING:
+    from app.services.user_cache import UserCache
 
 TOKEN_TTL_SECONDS = 3600
 

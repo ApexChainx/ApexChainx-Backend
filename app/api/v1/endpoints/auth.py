@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
-from app.core.rate_limiter import rate_limiter
+from app.core.db_retry import run_with_db_retry
+from app.core.rate_limiter import rate_limiter, with_rate_limit_responses
 from app.core.security import get_current_user, hash_token, require_admin
 from app.core.tracing import traced
 from app.db.session import get_db
@@ -230,11 +231,13 @@ class RefreshRequest(BaseModel):
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user",
     description="Create a new engineer account and return its public profile. Rate-limited per client IP.",
-    responses={
-        201: {"description": "User created"},
-        400: {"description": "User already exists or password fails policy"},
-        429: {"description": "Too many registration attempts from this IP"},
-    },
+    responses=with_rate_limit_responses(
+        {
+            201: {"description": "User created"},
+            400: {"description": "User already exists or password fails policy"},
+            429: {"description": "Too many registration attempts from this IP"},
+        }
+    ),
 )
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
@@ -291,11 +294,13 @@ def admin_create_user(
         "Exchange email/password credentials for an access and refresh token pair. "
         "Rate-limited per IP and guarded by credential-stuffing detection."
     ),
-    responses={
-        200: {"description": "Authentication succeeded"},
-        401: {"description": "Invalid credentials"},
-        429: {"description": "Too many attempts or account temporarily locked"},
-    },
+    responses=with_rate_limit_responses(
+        {
+            200: {"description": "Authentication succeeded"},
+            401: {"description": "Invalid credentials"},
+            429: {"description": "Too many attempts or account temporarily locked"},
+        }
+    ),
 )
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     from app.services.audit_log import audit_log
@@ -346,7 +351,19 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise CodedHTTPException(status_code=401, detail=str(exc), error_code="invalid_credentials") from exc
 
 
-@router.post("/refresh", response_model=AuthSessionResponse)
+@router.post(
+    "/refresh",
+    response_model=AuthSessionResponse,
+    summary="Refresh an access token",
+    description="Exchange a refresh token for a new token pair. Rate-limited per client IP.",
+    responses=with_rate_limit_responses(
+        {
+            200: {"description": "Tokens refreshed"},
+            401: {"description": "Invalid or expired refresh token"},
+            429: {"description": "Too many refresh attempts from this IP"},
+        }
+    ),
+)
 @traced("auth.refresh")
 def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = _get_client_ip(request)
@@ -382,12 +399,15 @@ def me(current_user: AuthUser = Depends(get_current_user)):
     response_model=AuthUser,
     summary="Update the current user's profile",
     description="Update mutable profile fields (full_name, stellar_wallet). Role and email are immutable.",
-    responses={
-        200: {"description": "Profile updated"},
-        400: {"description": "No updatable fields provided"},
-        404: {"description": "User not found"},
-        422: {"description": "Invalid stellar wallet address"},
-    },
+    responses=with_rate_limit_responses(
+        {
+            200: {"description": "Profile updated"},
+            400: {"description": "No updatable fields provided"},
+            404: {"description": "User not found"},
+            422: {"description": "Invalid stellar wallet address"},
+            429: {"description": "Too many profile updates for this user"},
+        }
+    ),
 )
 def update_profile(
     payload: ProfileUpdateRequest,
@@ -618,7 +638,19 @@ class ImpersonateResponse(BaseModel):
     acting_as: str
 
 
-@router.post("/impersonate", response_model=ImpersonateResponse)
+@router.post(
+    "/impersonate",
+    response_model=ImpersonateResponse,
+    summary="Impersonate a user (admin)",
+    description="Issue a short-lived, audit-logged token acting as a non-admin user. Rate-limited per admin.",
+    responses=with_rate_limit_responses(
+        {
+            200: {"description": "Impersonation token issued"},
+            403: {"description": "Caller is not an admin or target is an admin"},
+            429: {"description": "Too many impersonation attempts by this admin"},
+        }
+    ),
+)
 def impersonate_user(
     payload: ImpersonateRequest,
     admin_user: AuthUser = Depends(require_admin),

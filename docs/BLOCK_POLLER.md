@@ -1,154 +1,108 @@
-# Block Poller
+# BlockPoller
 
-`app/services/block_poller_hardening.py` provides a reusable, fault-tolerant poller for
-sequential blockchain blocks. It is intentionally transport-agnostic: callers
-supply a `fetch_block(sequence)` callable and a `process_block(block)` callable,
-so the poller can sit in front of Horizon, a Soroban RPC endpoint, or a local
-fixture.
+`BlockPoller` tails Stellar Horizon ledgers and confirms pending
+`payment_transactions` rows whose transaction hash closed successfully.
 
-The implementation covers the following tracked issues:
+It addresses four tracked issues:
 
-| Issue | Capability |
-|-------|------------|
-| #725 | Sliding-window rate limiting for upstream fetches |
-| #727 | Input sanitization for untrusted block payloads |
-| #728 | Small, single-purpose methods to keep cyclomatic complexity low |
-| #729 | Retry with exponential backoff and jitter |
+| Issue | Scope |
+| --- | --- |
+| #722 | Prometheus metrics for poll cycles, ledgers, transactions, confirmations, cache and errors |
+| #723 | Batched reconciliation query plus a partial index for pending transaction hashes |
+| #724 | Redis cache for the cursor, per-ledger transaction hashes and the last poll summary |
+| #726 | OpenAPI/Swagger documentation for the operator status endpoint |
 
-## Usage
+## Flow
 
-```python
-from app.services.block_poller_hardening import BlockPoller
+1. Celery beat dispatches `app.tasks.block_poller_tasks.poll_stellar_blocks`
+   every `BLOCK_POLLER_INTERVAL_SECONDS`.
+2. The task exits immediately unless `BLOCK_POLLER_ENABLED=true`.
+3. `BlockPoller.poll_once()` loads the Horizon paging token from Redis. On a
+   cold start it reads the latest ledger, processes it immediately, and seeds
+   the cursor there instead of replaying the whole chain.
+4. Ledgers after the cursor are fetched with `GET /ledgers`.
+5. For each ledger, successful transaction hashes are fetched from
+   `GET /ledgers/{sequence}/transactions`. The hash list is cached in Redis so
+   a replayed poll does not call Horizon twice for the same ledger.
+6. All hashes from the poll are reconciled in one transaction using a batched
+   `UPDATE ... WHERE transaction_hash IN (...) AND status = 'pending'`.
+7. Only after the database commit does the poller advance the cursor and
+   publish the last-poll summary to Redis.
 
-poller = BlockPoller(
-    fetch_block=horizon.get_ledger,
-    process_block=store_ledger,
-    start_sequence=current_cursor,
-)
-
-poller.start()          # background daemon thread
-try:
-    ...
-finally:
-    poller.stop()       # sets the stop event and joins the thread
-```
-
-For synchronous workers, call `poller.poll_once()` directly. It returns a
-`PollResult` with one of two statuses:
-
-| Status | Meaning |
-|--------|---------|
-| `processed` | A block was fetched, sanitized, processed, and the cursor advanced |
-| `rate_limited` | The request budget was exhausted; no upstream call was made |
-
-The next sequence is exposed as `poller.next_sequence`. If `process_block`
-raises, the cursor is **not** advanced so the same block is retried on the next
-cycle.
-
-## Retry with backoff (#729)
-
-Transient fetch failures are retried `BLOCK_POLLER_MAX_RETRIES` times after the
-initial attempt. The delay for retry `n` (zero-based) is:
-
-```text
-delay = min(BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS,
-            BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS * 2^n)
-```
-
-By default the delay is then jittered into
-`[(1 - ratio) * delay, delay]` using
-`BLOCK_POLLER_RETRY_JITTER_RATIO`. Jitter prevents multiple workers from
-retrying in lockstep.
-
-Validation failures are never retried: a malformed payload cannot be fixed by
-trying again, so `BlockPollerValidationError` is raised immediately. Once the
-retry budget is exhausted, `BlockPollerFetchError` is raised with the final
-exception chained. `run_forever` logs the failure and continues with the next
-cycle.
-
-## Input sanitization (#727)
-
-`sanitize_block_payload` validates every untrusted field before it reaches
-domain code:
-
-- Payloads must be JSON-serializable objects below
-  `BLOCK_POLLER_MAX_PAYLOAD_BYTES`.
-- Block sequences must be integers (or digit-only strings) in
-  `[0, 2^63 - 1]`. The `sequence`, `ledger`, and `ledger_sequence` keys are
-  accepted, and `sequence` is always populated in the result.
-- Strings have control characters and null bytes removed and are bounded by
-  `BLOCK_POLLER_MAX_STRING_LENGTH`.
-- Identifier fields (`hash`, `id`, `tx_hash`, `transaction_hash`,
-  `paging_token`) may only contain letters, digits, and `._:+/=-`.
-- Collections are bounded by `BLOCK_POLLER_MAX_COLLECTION_ITEMS`, nesting by
-  `BLOCK_POLLER_MAX_DEPTH`, and transactions by
-  `BLOCK_POLLER_MAX_TRANSACTIONS`.
-- Non-string mapping keys, unsupported Python types, and non-finite floats are
-  rejected. Keys that collide after sanitization are rejected rather than
-  silently merged.
-
-## Rate limiting (#725)
-
-A thread-safe sliding-window limiter protects the upstream source. At most
-`BLOCK_POLLER_RATE_LIMIT_REQUESTS` fetches are permitted per
-`BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS`. When the budget is exhausted,
-`poll_once()` returns `rate_limited` without calling `fetch_block`, and the
-cursor is unchanged.
-
-A custom limiter can be injected for tests or shared multi-worker budgets:
-
-```python
-from app.services.block_poller_hardening import BlockPoller, SlidingWindowRateLimiter
-
-limiter = SlidingWindowRateLimiter(max_requests=5, window_seconds=2)
-poller = BlockPoller(fetch_block, process_block, rate_limiter=limiter)
-```
-
-## Refactoring for complexity (#728)
-
-The polling flow is split into focused steps: rate-limit admission, retry
-policy, sanitization, processing, and cursor advancement. Payload validation is
-similarly decomposed into mapping, sequence, value, transaction, and size
-helpers. Each helper has a single responsibility, keeping the main poll loop
-small and easy to reason about.
-
-## Metrics
-
-The poller emits the following metrics through `app.services.metrics`:
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `block_poller_blocks_processed_total` | counter | Blocks processed successfully |
-| `block_poller_retries_total` | counter | Fetch retries scheduled |
-| `block_poller_fetch_failures_total` | counter | Fetches that exhausted the retry budget |
-| `block_poller_validation_failures_total` | counter | Payloads rejected by sanitization |
-| `block_poller_processing_failures_total` | counter | `process_block` raised |
-| `block_poller_rate_limited_total` | counter | Cycles skipped by the rate limiter |
-| `block_poller_next_sequence` | gauge | Cursor for the next poll |
+A crash before step 7 replays the same ledgers. Reconciliation is idempotent,
+so replaying cannot double-confirm a payment.
 
 ## Configuration
 
-All settings are validated at startup by `validate_critical_settings` in
-`app/core/config.py` and documented in `.env.example`.
+All settings live in `app/core/config.py` and are documented in `.env.example`.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `BLOCK_POLLER_POLL_INTERVAL_SECONDS` | `5` | Delay between poll cycles |
-| `BLOCK_POLLER_MAX_RETRIES` | `3` | Retries after the initial fetch |
-| `BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS` | `1` | Base for exponential backoff |
-| `BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS` | `30` | Hard cap for any retry delay |
-| `BLOCK_POLLER_RETRY_JITTER_RATIO` | `0.25` | Fraction of delay randomised |
-| `BLOCK_POLLER_RATE_LIMIT_REQUESTS` | `10` | Fetches allowed per window |
-| `BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS` | `1` | Sliding-window length |
-| `BLOCK_POLLER_MAX_PAYLOAD_BYTES` | `5242880` | Maximum serialized payload size |
-| `BLOCK_POLLER_MAX_TRANSACTIONS` | `1000` | Maximum transactions per block |
-| `BLOCK_POLLER_MAX_IDENTIFIER_LENGTH` | `256` | Maximum identifier length |
-| `BLOCK_POLLER_MAX_STRING_LENGTH` | `4096` | Maximum generic string length |
-| `BLOCK_POLLER_MAX_COLLECTION_ITEMS` | `10000` | Maximum items in a collection |
-| `BLOCK_POLLER_MAX_DEPTH` | `8` | Maximum mapping/list nesting depth |
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `STELLAR_HORIZON_URL` | network default | Horizon endpoint. Empty uses `testnet`, `mainnet`, `futurenet` or `standalone` defaults. |
+| `BLOCK_POLLER_ENABLED` | `false` | Enables the Celery task. |
+| `BLOCK_POLLER_INTERVAL_SECONDS` | `15` | Beat interval. |
+| `BLOCK_POLLER_BATCH_SIZE` | `20` | Ledgers fetched per poll. |
+| `BLOCK_POLLER_DB_BATCH_SIZE` | `500` | Hashes per reconciliation `UPDATE`. |
+| `BLOCK_POLLER_CACHE_TTL_SECONDS` | `300` | TTL for ledger transaction caches and last-poll status. |
+| `BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS` | `10` | Horizon HTTP timeout. |
+| `BLOCK_POLLER_CURSOR_KEY` | `block_poller:cursor` | Redis cursor key. |
+| `BLOCK_POLLER_LEDGER_CACHE_PREFIX` | `block_poller:ledger` | Redis per-ledger cache prefix. |
+| `BLOCK_POLLER_LAST_POLL_KEY` | `block_poller:last_poll` | Redis last-poll summary key. |
 
-## Tests
+The poller reuses `CELERY_BROKER_URL` as its Redis connection string, matching
+the other Redis-backed services in this codebase.
 
-`tests/test_block_poller.py` covers payload sanitization, retry timing and
-exhaustion, non-retryable validation errors, rate-limit admission, cursor
-advancement, processing failures, graceful stop, and configuration validation.
+## Metrics
+
+Exposed through `GET /api/v1/metrics` (JSON) and
+`GET /api/v1/metrics/prometheus` (text):
+
+- `block_poller_poll_total`
+- `block_poller_initialized_total`
+- `block_poller_ledgers_processed_total`
+- `block_poller_transactions_scanned_total`
+- `block_poller_payments_confirmed_total`
+- `block_poller_errors_total{reason}`
+- `block_poller_cache_hits_total`
+- `block_poller_cache_misses_total`
+- `block_poller_last_ledger_sequence` (gauge)
+- `block_poller_poll_duration_ms` (timer/histogram)
+
+## Status endpoint
+
+`GET /api/v1/block-poller/status` requires the `engineer` role and returns the
+cached last-poll summary. It does not call Horizon or PostgreSQL. The response
+model is published in the generated OpenAPI schema and Swagger UI.
+
+Example:
+
+```json
+{
+  "enabled": true,
+  "cursor": "51234567",
+  "last_poll_at": "2026-10-20T15:30:00+00:00",
+  "last_ledger_sequence": 51234567,
+  "ledgers_processed": 3,
+  "transactions_scanned": 42,
+  "payments_confirmed": 2,
+  "cache_hits": 1,
+  "cache_misses": 2,
+  "error": null
+}
+```
+
+## Operational notes
+
+- **Redis outage**: the poller keeps working using an in-process cursor. New
+  polls still reconcile, but a worker restart loses the cursor and triggers a
+  cold start from the latest ledger.
+- **Horizon outage**: the poll cycle logs a warning, increments
+  `block_poller_errors_total`, and returns without advancing the cursor. The
+  next beat tick retries the same ledgers.
+- **Database failure**: the transaction rolls back and the cursor is not
+  advanced, so the next poll retries.
+- **Reorgs**: only successful transactions confirm payments. A later ledger
+  that no longer contains a hash is not treated as a failure; use the payment
+  reconciliation endpoint for manual status changes.
+- **Index**: migration `0033_block_poller_pending_hash_index` adds the partial
+  pending-hash index used by the batched update.

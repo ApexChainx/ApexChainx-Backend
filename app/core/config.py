@@ -82,6 +82,20 @@ class Settings(BaseSettings):
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
     PAYMENT_WEBHOOK_SECRET: str = ""
+    # Horizon endpoint used by the Stellar block poller. Empty falls back to
+    # the public endpoint for STELLAR_NETWORK.
+    STELLAR_HORIZON_URL: str = ""
+    # BlockPoller (#722-#726): tails Horizon ledgers and confirms pending
+    # payment rows whose transaction hash closed successfully.
+    BLOCK_POLLER_ENABLED: bool = False
+    BLOCK_POLLER_INTERVAL_SECONDS: int = 15
+    BLOCK_POLLER_BATCH_SIZE: int = 20
+    BLOCK_POLLER_DB_BATCH_SIZE: int = 500
+    BLOCK_POLLER_CACHE_TTL_SECONDS: int = 300
+    BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS: float = 10.0
+    BLOCK_POLLER_CURSOR_KEY: str = "block_poller:cursor"
+    BLOCK_POLLER_LEDGER_CACHE_PREFIX: str = "block_poller:ledger"
+    BLOCK_POLLER_LAST_POLL_KEY: str = "block_poller:last_poll"
     WALLET_CACHE_TTL_SECONDS: int = 60  # how long wallet data is considered fresh
     # SLA cache TTL in seconds
     SLA_CACHE_TTL_SECONDS: int = 60
@@ -348,6 +362,30 @@ def validate_critical_settings(config: Settings) -> None:
             errors.append("CELERY_BROKER_URL must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
         if not config.CELERY_RESULT_BACKEND.strip():
             errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
+
+    # BlockPoller (#722-#726): a zero/negative interval would busy-loop, and a
+    # non-positive batch size would make the reconciliation query invalid.
+    if config.BLOCK_POLLER_INTERVAL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_INTERVAL_SECONDS must be > 0.")
+    if config.BLOCK_POLLER_BATCH_SIZE <= 0:
+        errors.append("BLOCK_POLLER_BATCH_SIZE must be > 0.")
+    if config.BLOCK_POLLER_DB_BATCH_SIZE <= 0:
+        errors.append("BLOCK_POLLER_DB_BATCH_SIZE must be > 0.")
+    if config.BLOCK_POLLER_CACHE_TTL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_CACHE_TTL_SECONDS must be > 0.")
+    if config.BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS must be > 0.")
+    if config.STELLAR_HORIZON_URL.strip():
+        parsed_horizon_url = urlparse(config.STELLAR_HORIZON_URL)
+        if parsed_horizon_url.scheme not in {"http", "https"} or not parsed_horizon_url.netloc:
+            errors.append("STELLAR_HORIZON_URL must be an http(s) URL when set.")
+    for key_name, key_value in (
+        ("BLOCK_POLLER_CURSOR_KEY", config.BLOCK_POLLER_CURSOR_KEY),
+        ("BLOCK_POLLER_LEDGER_CACHE_PREFIX", config.BLOCK_POLLER_LEDGER_CACHE_PREFIX),
+        ("BLOCK_POLLER_LAST_POLL_KEY", config.BLOCK_POLLER_LAST_POLL_KEY),
+    ):
+        if not key_value.strip():
+            errors.append(f"{key_name} must not be empty.")
 
     # #510: fail fast, in the same style as the SECRET_KEY guard. A deployment
     # that runs every task in-process while showing a queue topology is the

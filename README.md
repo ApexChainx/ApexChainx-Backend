@@ -93,6 +93,7 @@ Current active routes:
 
 - `/health` — liveness and readiness probes
 - `/api/v1/audit` — immutable event audit log
+- `/api/v1/block-poller` — Stellar block poller status and OpenAPI docs
 - `/api/v1/jobs`
 - `/api/v1/outages` — full outage lifecycle management
 - `/api/v1/sla` — SLA computation, analytics, and exports

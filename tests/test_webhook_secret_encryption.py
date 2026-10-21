@@ -170,6 +170,9 @@ class TestStartupValidation:
             "WEBHOOK_SECRET_ENCRYPTION_KEY": "V5OOA_Ao70n9OxGEbj1WmRsZX6vI4IdtuJ_jYcIhNDg=",
         }
         defaults.update(overrides)
+        # #510: eager Celery is rejected outside local/test.
+        if defaults["ENVIRONMENT"] not in {"local", "test"} and "CELERY_TASK_ALWAYS_EAGER" not in overrides:
+            defaults["CELERY_TASK_ALWAYS_EAGER"] = False
         return Settings.model_construct(**defaults)
 
     def test_startup_fails_when_encryption_key_missing_in_production(self):
