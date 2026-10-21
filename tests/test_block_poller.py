@@ -1,410 +1,527 @@
-"""Tests for the Stellar BlockPoller (#722, #723, #724, #726)."""
+"""Unit and integration coverage for the Horizon ledger poller (#718-#721).
+
+Unit tests inject a fake ``BlockSource`` to pin cursor semantics, the retry
+budget, handler-failure behaviour, and structured log fields. Integration tests
+wire a real ``HorizonBlockSource`` to an ``httpx.MockTransport`` so the
+Horizon query parameters, pagination, and HTTP error classification are
+exercised end to end without touching the network.
+"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+import json
+import logging
+from collections import deque
+from typing import Any, Sequence
 
-import fakeredis
 import httpx
 import pytest
-from redis.exceptions import RedisError
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
 
-from app.api.v1.endpoints.block_poller import BlockPollerStatus, get_block_poller_status
-from app.db.base import Base
-from app.models.orm.payment import PaymentTransactionORM
-from app.services import block_poller as bp
-from app.services.metrics import metrics
-
-
-# --------------------------------------------------------------------------- #
-# Fakes / fixtures
-# --------------------------------------------------------------------------- #
-class FakeHorizon:
-    def __init__(self, latest=None, ledgers=None, transactions=None) -> None:
-        self.latest = latest
-        self.ledgers = ledgers or []
-        self.transactions = transactions or {}
-        self.transaction_calls: list[int] = []
-        self.fail_latest = False
-        self.fail_ledgers = False
-
-    def latest_ledger(self):
-        if self.fail_latest:
-            raise bp.HorizonError("horizon down")
-        return self.latest
-
-    def ledgers_after(self, cursor, limit):
-        if self.fail_ledgers:
-            raise bp.HorizonError("horizon down")
-        return list(self.ledgers)[:limit]
-
-    def transactions_for_ledger(self, sequence, limit=bp.MAX_TRANSACTIONS_PER_PAGE):
-        self.transaction_calls.append(sequence)
-        return list(self.transactions.get(sequence, []))
+from app.services.block_poller import (
+    Block,
+    BlockFetchError,
+    BlockHandlerError,
+    BlockPoller,
+    HorizonBlockSource,
+)
 
 
-@pytest.fixture
-def redis_client():
-    return fakeredis.FakeRedis(decode_responses=True)
+class FakeSource:
+    def __init__(self, pages: Sequence[Any]) -> None:
+        self.pages = deque(pages)
+        self.calls: list[tuple[str | None, int]] = []
+
+    def fetch_blocks(self, *, cursor: str | None, limit: int) -> Sequence[Block]:
+        self.calls.append((cursor, limit))
+        if not self.pages:
+            return []
+        item = self.pages.popleft()
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
-@pytest.fixture
-def cache(redis_client):
-    return bp.BlockPollerCache(redis_client, ttl=300)
+class AlwaysFailSource:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.calls = 0
+
+    def fetch_blocks(self, *, cursor: str | None, limit: int) -> Sequence[Block]:
+        self.calls += 1
+        raise self.error
 
 
-@pytest.fixture
-def db_factory():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine, tables=[PaymentTransactionORM.__table__])
-    factory = sessionmaker(bind=engine)
-    yield factory
-    engine.dispose()
+class StopAfterWait:
+    """Minimal stand-in for threading.Event that stops after one wait."""
+
+    def __init__(self) -> None:
+        self._set = False
+        self.waits = 0
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def wait(self, timeout: float) -> bool:
+        self.waits += 1
+        self._set = True
+        return True
+
+    def set(self) -> None:
+        self._set = True
 
 
-def _ledger(sequence: int, token: str | None = None) -> bp.HorizonLedger:
-    return bp.HorizonLedger(sequence=sequence, hash=f"ledger-{sequence}", paging_token=token or str(sequence))
+def _block(height: int) -> Block:
+    return Block(cursor=f"cursor-{height}", height=height, payload={"sequence": height})
 
 
-def _tx(tx_hash: str, successful: bool = True) -> bp.HorizonTransaction:
-    return bp.HorizonTransaction(hash=tx_hash, successful=successful)
+def _structured_records(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    return [json.loads(record.message) for record in caplog.records if record.name == "block_poller"]
 
 
-def _add_payment(factory, tx_hash: str, status: str = "pending") -> None:
-    with factory() as db:
-        db.add(
-            PaymentTransactionORM(
-                id=f"pay-{tx_hash}",
-                transaction_hash=tx_hash,
-                type="reward",
-                amount=100,
-                asset_code="USDC",
-                from_address="GPOOL",
-                to_address="GOPS",
-                status=status,
-                outage_id=None,
-                sla_result_id=None,
-                created_at=datetime.now(UTC),
-            )
+class TestBlockPollerUnit:
+    def test_processes_blocks_in_order_and_advances_cursor(self):
+        first, second = _block(10), _block(11)
+        source = FakeSource([[first, second]])
+        handled: list[int] = []
+
+        poller = BlockPoller(source, lambda block: handled.append(block.height))
+        result = poller.poll_once()
+
+        assert handled == [10, 11]
+        assert result.blocks_processed == 2
+        assert result.latest_height == 11
+        assert result.cursor == "cursor-11"
+        assert poller.cursor == "cursor-11"
+        assert source.calls == [(None, 50)]
+
+    def test_next_poll_uses_the_previous_cursor(self):
+        source = FakeSource([[_block(1)], [_block(2)]])
+        poller = BlockPoller(source, batch_size=10)
+
+        poller.poll_once()
+        poller.poll_once()
+
+        assert source.calls == [(None, 10), ("cursor-1", 10)]
+
+    def test_empty_page_is_a_success_and_keeps_the_cursor(self):
+        source = FakeSource([[_block(5)], []])
+        poller = BlockPoller(source)
+
+        poller.poll_once()
+        result = poller.poll_once()
+
+        assert result.blocks_processed == 0
+        assert result.cursor == "cursor-5"
+        assert poller.health()["status"] == "healthy"
+
+    def test_handler_failure_does_not_skip_the_failed_block(self):
+        first, second = _block(1), _block(2)
+        gap_source = FakeSource([[first, second], [second]])
+
+        def flaky_handler(block: Block) -> None:
+            if block.height == 2 and gap_source.calls == [(None, 50)]:
+                raise RuntimeError("database unavailable")
+
+        poller = BlockPoller(gap_source, flaky_handler)
+
+        with pytest.raises(BlockHandlerError) as exc_info:
+            poller.poll_once()
+
+        assert exc_info.value.block is second
+        assert poller.cursor == "cursor-1"
+        assert poller.health()["status"] == "degraded"
+
+        result = poller.poll_once()
+        assert result.cursor == "cursor-2"
+        assert gap_source.calls[1] == ("cursor-1", 50)
+
+    def test_retryable_fetch_errors_use_bounded_exponential_backoff(self):
+        delays: list[float] = []
+        source = FakeSource(
+            [
+                BlockFetchError("rate limited", retryable=True, status_code=429),
+                BlockFetchError("unavailable", retryable=True, status_code=503),
+                [_block(1)],
+            ]
         )
-        db.commit()
+
+        poller = BlockPoller(
+            source,
+            max_attempts=3,
+            retry_base_delay_seconds=0.5,
+            retry_max_delay_seconds=4.0,
+            sleep=delays.append,
+        )
+        result = poller.poll_once()
+
+        assert result.attempts == 3
+        assert result.blocks_processed == 1
+        assert delays == [0.5, 1.0]
+
+    def test_retry_delay_is_capped(self):
+        delays: list[float] = []
+        source = FakeSource(
+            [
+                BlockFetchError("boom", retryable=True),
+                BlockFetchError("boom", retryable=True),
+                BlockFetchError("boom", retryable=True),
+                [_block(1)],
+            ]
+        )
+
+        poller = BlockPoller(
+            source,
+            max_attempts=4,
+            retry_base_delay_seconds=5.0,
+            retry_max_delay_seconds=6.0,
+            sleep=delays.append,
+        )
+        poller.poll_once()
+
+        assert delays == [5.0, 6.0, 6.0]
+
+    def test_terminal_fetch_error_is_not_retried(self):
+        source = AlwaysFailSource(BlockFetchError("not found", retryable=False, status_code=404))
+        poller = BlockPoller(source, max_attempts=5, sleep=lambda _delay: None)
+
+        with pytest.raises(BlockFetchError) as exc_info:
+            poller.poll_once()
+
+        assert exc_info.value.retryable is False
+        assert source.calls == 1
+        assert poller.cursor is None
+        assert poller.health()["status"] == "degraded"
+
+    def test_retry_budget_exhaustion_keeps_cursor_and_reports_failures(self):
+        source = AlwaysFailSource(BlockFetchError("still down", retryable=True))
+        poller = BlockPoller(source, max_attempts=2, sleep=lambda _delay: None)
+
+        with pytest.raises(BlockFetchError, match="still down"):
+            poller.poll_once()
+
+        assert source.calls == 2
+        assert poller.cursor is None
+        health = poller.health()
+        assert health["status"] == "degraded"
+        assert health["last_error_type"] == "BlockFetchError"
+        assert health["consecutive_failures"] == 1
+
+        with pytest.raises(BlockFetchError, match="still down"):
+            poller.poll_once()
+
+        assert poller.health()["status"] == "unhealthy"
+        assert poller.health()["consecutive_failures"] == 2
+
+    def test_unexpected_source_exception_is_wrapped_and_retried(self):
+        delays: list[float] = []
+        source = FakeSource([RuntimeError("connection reset"), [_block(1)]])
+        poller = BlockPoller(source, max_attempts=2, sleep=delays.append)
+
+        result = poller.poll_once()
+
+        assert result.attempts == 2
+        assert delays == [0.5]
+
+    def test_source_returning_non_blocks_is_rejected_without_retry(self):
+        source = FakeSource([["not-a-block"]])
+        poller = BlockPoller(source, max_attempts=3, sleep=lambda _delay: None)
+
+        with pytest.raises(BlockFetchError, match="non-Block"):
+            poller.poll_once()
+
+        assert source.calls == [(None, 50)]
+
+    def test_run_continues_after_fetch_failure_and_stops_cleanly(self):
+        source = AlwaysFailSource(BlockFetchError("horizon down", retryable=False))
+        stop_event = StopAfterWait()
+        poller = BlockPoller(source, max_attempts=1, sleep=lambda _delay: None)
+
+        poller.run(stop_event)  # type: ignore[arg-type]
+
+        assert source.calls == 1
+        assert stop_event.waits == 1
+        assert poller.running is False
+
+    def test_run_can_be_stopped_from_the_handler(self):
+        source = FakeSource([[_block(1)]])
+        poller = BlockPoller(source)
+
+        poller._handler = lambda _block: poller.stop()  # type: ignore[assignment]
+        poller.run()
+
+        assert source.calls == [(None, 50)]
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"poll_interval_seconds": 0}, "poll_interval_seconds"),
+            ({"batch_size": 0}, "batch_size"),
+            ({"batch_size": 201}, "batch_size"),
+            ({"max_attempts": 0}, "max_attempts"),
+            ({"retry_base_delay_seconds": -1}, "retry_base_delay_seconds"),
+            (
+                {"retry_base_delay_seconds": 2, "retry_max_delay_seconds": 1},
+                "retry_max_delay_seconds",
+            ),
+        ],
+    )
+    def test_invalid_configuration_is_rejected(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            BlockPoller(FakeSource([]), **kwargs)
+
+    def test_block_rejects_empty_cursor_and_negative_height(self):
+        with pytest.raises(ValueError, match="cursor"):
+            Block(cursor="", height=1)
+        with pytest.raises(ValueError, match="height"):
+            Block(cursor="c", height=-1)
+
+    def test_health_starts_in_starting_state(self):
+        health = BlockPoller(FakeSource([])).health()
+
+        assert health["status"] == "starting"
+        assert health["running"] is False
+        assert health["cursor"] is None
+        assert health["last_success_at"] is None
 
 
-def _payment_status(factory, tx_hash: str) -> PaymentTransactionORM:
-    with factory() as db:
-        row = db.query(PaymentTransactionORM).filter_by(transaction_hash=tx_hash).one()
-        db.expunge(row)
-        return row
+class TestBlockPollerStructuredLogging:
+    def test_successful_cycle_logs_structured_context(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="block_poller")
+        poller = BlockPoller(FakeSource([[_block(7), _block(8)]]))
+
+        poller.poll_once()
+
+        records = _structured_records(caplog)
+        completed = [record for record in records if record.get("event") == "poll_completed"]
+        assert len(completed) == 1
+        event = completed[0]
+        assert event["message"] == "block_poller.poll_completed"
+        assert event["cursor"] == "cursor-8"
+        assert event["blocks_processed"] == 2
+        assert event["latest_height"] == 8
+        assert event["attempts"] == 1
+        assert event["duration_ms"] >= 0
+        assert event["level"] == "INFO"
+        assert event["logger"] == "block_poller"
+
+    def test_retry_and_terminal_failure_are_logged(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="block_poller")
+        source = AlwaysFailSource(BlockFetchError("horizon 503", retryable=True, status_code=503))
+        poller = BlockPoller(source, max_attempts=2, retry_base_delay_seconds=0.25, sleep=lambda _delay: None)
+
+        with pytest.raises(BlockFetchError):
+            poller.poll_once()
+
+        records = _structured_records(caplog)
+        retry = next(record for record in records if record.get("event") == "fetch_retry")
+        failure = next(record for record in records if record.get("event") == "fetch_failed")
+
+        assert retry["message"] == "block_poller.fetch_retry"
+        assert retry["attempt"] == 1
+        assert retry["max_attempts"] == 2
+        assert retry["delay_seconds"] == 0.25
+        assert retry["status_code"] == 503
+        assert retry["error_type"] == "BlockFetchError"
+        assert retry["level"] == "WARNING"
+
+        assert failure["attempts"] == 2
+        assert failure["retryable"] is True
+        assert failure["status_code"] == 503
+        assert failure["message"] == "block_poller.fetch_failed"
+        assert failure["level"] == "ERROR"
+
+    def test_handler_failure_log_identifies_the_block(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="block_poller")
+
+        def reject(_block: Block) -> None:
+            raise ValueError("bad ledger payload")
+
+        poller = BlockPoller(FakeSource([[_block(42)]]), reject)
+
+        with pytest.raises(BlockHandlerError):
+            poller.poll_once()
+
+        records = _structured_records(caplog)
+        event = next(record for record in records if record.get("event") == "handler_failed")
+        assert event["cursor"] == "cursor-42"
+        assert event["height"] == 42
+        assert event["error"] == "bad ledger payload"
+        assert event["error_type"] == "ValueError"
+        assert event["consecutive_failures"] == 1
 
 
-def _counter_value(name: str) -> float:
-    counters = metrics.get_metrics_summary()["counters"]
-    return sum(value for key, value in counters.items() if key.startswith(f"{name}{{"))
+def _ledger(sequence: int) -> dict[str, Any]:
+    return {
+        "paging_token": f"ledger-{sequence}",
+        "sequence": sequence,
+        "hash": f"hash-{sequence}",
+        "closed_at": "2026-10-20T00:00:00Z",
+    }
 
 
-# --------------------------------------------------------------------------- #
-# Horizon client
-# --------------------------------------------------------------------------- #
-class TestStellarHorizonClient:
-    def test_ledgers_and_transactions_are_parsed_and_paginated(self):
-        requests: list[httpx.URL] = []
+def _page(*sequences: int) -> dict[str, Any]:
+    return {"_embedded": {"records": [_ledger(sequence) for sequence in sequences]}}
+
+
+class TestHorizonBlockSourceIntegration:
+    def test_poller_walks_horizon_pages_using_the_paging_token(self):
+        requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request.url)
-            if request.url.path == "/ledgers" and request.url.params.get("order") == "desc":
-                return httpx.Response(
-                    200,
-                    json={
-                        "_embedded": {
-                            "records": [
-                                {
-                                    "sequence": 42,
-                                    "hash": "abc",
-                                    "paging_token": "42",
-                                    "closed_at": "2026-10-20T12:00:00Z",
-                                }
-                            ]
-                        }
-                    },
-                )
-            if request.url.path == "/ledgers":
-                return httpx.Response(
-                    200,
-                    json={
-                        "_embedded": {
-                            "records": [
-                                {"sequence": 43, "hash": "def", "paging_token": "43"},
-                            ]
-                        }
-                    },
-                )
-            if request.url.path == "/ledgers/43/transactions":
-                if request.url.params.get("cursor") is None:
-                    return httpx.Response(
-                        200,
-                        json={
-                            "_embedded": {
-                                "records": [
-                                    {"hash": "tx-1", "successful": True, "paging_token": "t1"},
-                                    {"hash": "tx-2", "successful": False, "paging_token": "t2"},
-                                ]
-                            }
-                        },
-                    )
-                return httpx.Response(
-                    200,
-                    json={
-                        "_embedded": {
-                            "records": [{"hash": "tx-3", "successful": True, "paging_token": "t3"}],
-                        }
-                    },
-                )
+            requests.append(request)
+            assert request.url.path == "/ledgers"
+            assert request.url.params["order"] == "asc"
+            assert request.url.params["limit"] == "2"
+            cursor = request.url.params.get("cursor")
+            if cursor is None:
+                return httpx.Response(200, json=_page(1, 2))
+            if cursor == "ledger-2":
+                return httpx.Response(200, json=_page(3, 4))
+            return httpx.Response(200, json=_page())
+
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        handled: list[int] = []
+        poller = BlockPoller(source, lambda block: handled.append(block.height), batch_size=2)
+
+        first = poller.poll_once()
+        second = poller.poll_once()
+
+        assert handled == [1, 2, 3, 4]
+        assert first.cursor == "ledger-2"
+        assert second.cursor == "ledger-4"
+        assert [request.url.params.get("cursor") for request in requests] == [None, "ledger-2"]
+
+    def test_transient_horizon_failure_is_retried(self):
+        responses = [
+            httpx.Response(503, json={"title": "service unavailable"}),
+            httpx.Response(200, json=_page(9)),
+        ]
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return responses.pop(0)
+
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        delays: list[float] = []
+        poller = BlockPoller(source, max_attempts=2, sleep=delays.append)
+
+        result = poller.poll_once()
+
+        assert result.attempts == 2
+        assert result.blocks_processed == 1
+        assert result.cursor == "ledger-9"
+        assert delays == [0.5]
+        assert len(requests) == 2
+
+    def test_rate_limit_is_classified_as_retryable(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(429)
+
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        poller = BlockPoller(source, max_attempts=2, sleep=lambda _delay: None)
+
+        with pytest.raises(BlockFetchError) as exc_info:
+            poller.poll_once()
+
+        assert exc_info.value.retryable is True
+        assert exc_info.value.status_code == 429
+        assert len(requests) == 2
+
+    def test_terminal_http_error_is_not_retried(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
             return httpx.Response(404)
 
-        client = httpx.Client(transport=httpx.MockTransport(handler))
-        horizon = bp.StellarHorizonClient(base_url="https://horizon.test", http_client=client)
-
-        latest = horizon.latest_ledger()
-        assert latest == bp.HorizonLedger(sequence=42, hash="abc", paging_token="42", closed_at="2026-10-20T12:00:00Z")
-
-        ledgers = horizon.ledgers_after("42", limit=1)
-        assert [ledger.sequence for ledger in ledgers] == [43]
-
-        transactions = horizon.transactions_for_ledger(43, limit=2)
-        assert [tx.hash for tx in transactions] == ["tx-1", "tx-2", "tx-3"]
-        assert transactions[1].successful is False
-        # The second page is requested with the paging token of the last row.
-        assert requests[-1].params.get("cursor") == "t2"
-
-    def test_missing_sequence_is_a_horizon_error(self):
-        with pytest.raises(bp.HorizonError):
-            bp._parse_ledger({"hash": "abc", "paging_token": "1"})
-
-
-# --------------------------------------------------------------------------- #
-# Redis cache
-# --------------------------------------------------------------------------- #
-class TestBlockPollerCache:
-    def test_cursor_and_ledger_round_trip(self, cache, redis_client):
-        assert cache.get_cursor() is None
-        cache.set_cursor("123")
-        assert cache.get_cursor() == "123"
-        assert redis_client.ttl(cache.cursor_key) == -1  # cursor does not expire
-
-        cache.set_ledger_transactions(7, ["a", "b"])
-        assert cache.get_ledger_transactions(7) == ["a", "b"]
-        assert 0 < redis_client.ttl("block_poller:ledger:7") <= 300
-
-    def test_corrupt_ledger_cache_is_a_miss(self, cache, redis_client):
-        redis_client.set("block_poller:ledger:8", "not-json")
-        assert cache.get_ledger_transactions(8) is None
-
-    def test_redis_failure_degrades_to_a_miss(self):
-        class BrokenRedis:
-            def get(self, *_args, **_kwargs):
-                raise RedisError("redis down")
-
-            def set(self, *_args, **_kwargs):
-                raise RedisError("redis down")
-
-            def setex(self, *_args, **_kwargs):
-                raise RedisError("redis down")
-
-        cache = bp.BlockPollerCache(BrokenRedis())
-        assert cache.get_cursor() is None
-        cache.set_cursor("1")  # must not raise
-        assert cache.get_ledger_transactions(1) is None
-        cache.set_ledger_transactions(1, ["a"])  # must not raise
-        assert cache.get_last_poll() is None
-
-
-# --------------------------------------------------------------------------- #
-# Poll cycles
-# --------------------------------------------------------------------------- #
-class TestPollOnce:
-    def test_cold_start_processes_latest_ledger_and_seeds_cursor(self, cache, db_factory):
-        _add_payment(db_factory, "h1")
-        horizon = FakeHorizon(
-            latest=_ledger(200, token="200"),
-            transactions={200: [_tx("h1"), _tx("h-failed", successful=False)]},
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
-        poller = bp.BlockPoller(db_factory=db_factory, horizon_client=horizon, cache=cache)
+        poller = BlockPoller(source, max_attempts=4, sleep=lambda _delay: None)
 
-        result = poller.poll_once()
+        with pytest.raises(BlockFetchError) as exc_info:
+            poller.poll_once()
 
-        assert result.initialized is True
-        assert result.ledgers_processed == 1
-        assert result.payments_confirmed == 1
-        assert result.cursor == "200"
-        assert cache.get_cursor() == "200"
-        assert _payment_status(db_factory, "h1").status == "confirmed"
-        assert _payment_status(db_factory, "h1").confirmed_at is not None
+        assert exc_info.value.retryable is False
+        assert len(requests) == 1
 
-    def test_advances_only_after_reconciliation_and_confirms_matches(self, cache, db_factory):
-        _add_payment(db_factory, "h1")
-        _add_payment(db_factory, "h2")
-        _add_payment(db_factory, "h3")
-        cache.set_cursor("100")
-        horizon = FakeHorizon(
-            ledgers=[_ledger(101, token="101"), _ledger(102, token="102")],
-            transactions={
-                101: [_tx("h1"), _tx("h-miss", successful=False)],
-                102: [_tx("h2")],
-            },
+    def test_malformed_horizon_response_is_terminal(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"unexpected": "shape"})
+
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
-        poller = bp.BlockPoller(db_factory=db_factory, horizon_client=horizon, cache=cache)
+        poller = BlockPoller(source, max_attempts=3, sleep=lambda _delay: None)
 
-        result = poller.poll_once()
+        with pytest.raises(BlockFetchError, match="_embedded"):
+            poller.poll_once()
 
-        assert result.ledgers_processed == 2
-        assert result.transactions_scanned == 3
-        assert result.payments_confirmed == 2
-        assert result.cursor == "102"
-        assert _payment_status(db_factory, "h1").status == "confirmed"
-        assert _payment_status(db_factory, "h2").status == "confirmed"
-        assert _payment_status(db_factory, "h3").status == "pending"
+        assert len(requests) == 1
+        assert poller.cursor is None
 
-    def test_replayed_ledgers_are_served_from_redis(self, cache, db_factory):
-        _add_payment(db_factory, "h1")
-        cache.set_cursor("100")
-        horizon = FakeHorizon(ledgers=[_ledger(101)], transactions={101: [_tx("h1")]})
-        poller = bp.BlockPoller(db_factory=db_factory, horizon_client=horizon, cache=cache)
-        poller.poll_once()
+    def test_network_error_is_wrapped_as_retryable(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused", request=request)
 
-        # Simulate a crash after the DB commit but before the cursor was durable.
-        cache.set_cursor("100")
-        horizon.transaction_calls.clear()
-
-        result = poller.poll_once()
-
-        assert horizon.transaction_calls == []
-        assert result.cache_hits == 1
-        assert result.cache_misses == 0
-        assert result.payments_confirmed == 0
-
-    def test_horizon_failure_does_not_advance_cursor(self, cache, db_factory):
-        cache.set_cursor("100")
-        horizon = FakeHorizon()
-        horizon.fail_ledgers = True
-        poller = bp.BlockPoller(db_factory=db_factory, horizon_client=horizon, cache=cache)
-
-        result = poller.poll_once()
-
-        assert result.error == "horizon down"
-        assert result.cursor is None
-        assert cache.get_cursor() == "100"
-
-    def test_batched_update_uses_one_statement_per_batch(self, db_factory):
-        for suffix in ("a", "b", "c", "d", "e"):
-            _add_payment(db_factory, f"h-{suffix}")
-
-        engine = db_factory.kw["bind"]
-        statements: list[str] = []
-
-        def record(_conn, _cursor, statement, _params, _context, _executemany):
-            if statement.lstrip().upper().startswith("UPDATE PAYMENT_TRANSACTIONS"):
-                statements.append(statement)
-
-        event.listen(engine, "before_cursor_execute", record)
-        try:
-            poller = bp.BlockPoller(
-                db_factory=db_factory,
-                horizon_client=FakeHorizon(),
-                cache=MagicMock(),
-                db_batch_size=2,
-            )
-            confirmed = poller._reconcile_payments(["h-a", "h-b", "h-c", "h-d", "h-e"])
-        finally:
-            event.remove(engine, "before_cursor_execute", record)
-
-        assert confirmed == 5
-        assert len(statements) == 3  # ceil(5 / 2)
-        assert all(row.status == "confirmed" for row in (_payment_status(db_factory, f"h-{s}") for s in "abcde"))
-
-    def test_metrics_are_recorded(self, cache, db_factory):
-        _add_payment(db_factory, "h1")
-        cache.set_cursor("100")
-        horizon = FakeHorizon(ledgers=[_ledger(101)], transactions={101: [_tx("h1")]})
-        poller = bp.BlockPoller(db_factory=db_factory, horizon_client=horizon, cache=cache)
-        before = {
-            name: _counter_value(name)
-            for name in (
-                bp.BLOCK_POLLER_POLL_TOTAL,
-                bp.BLOCK_POLLER_LEDGERS_TOTAL,
-                bp.BLOCK_POLLER_TRANSACTIONS_TOTAL,
-                bp.BLOCK_POLLER_PAYMENTS_CONFIRMED_TOTAL,
-            )
-        }
-
-        poller.poll_once()
-
-        assert _counter_value(bp.BLOCK_POLLER_POLL_TOTAL) == before[bp.BLOCK_POLLER_POLL_TOTAL] + 1
-        assert _counter_value(bp.BLOCK_POLLER_LEDGERS_TOTAL) == before[bp.BLOCK_POLLER_LEDGERS_TOTAL] + 1
-        assert _counter_value(bp.BLOCK_POLLER_TRANSACTIONS_TOTAL) == before[bp.BLOCK_POLLER_TRANSACTIONS_TOTAL] + 1
-        assert (
-            _counter_value(bp.BLOCK_POLLER_PAYMENTS_CONFIRMED_TOTAL)
-            == before[bp.BLOCK_POLLER_PAYMENTS_CONFIRMED_TOTAL] + 1
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
-        summary = metrics.get_metrics_summary()
-        assert any("block_poller_last_ledger_sequence" in key for key in summary["gauges"])
-        assert any("block_poller_poll_duration_ms" in key for key in summary["timers"])
+        poller = BlockPoller(source, max_attempts=2, sleep=lambda _delay: None)
 
+        with pytest.raises(BlockFetchError, match="Horizon request failed") as exc_info:
+            poller.poll_once()
 
-# --------------------------------------------------------------------------- #
-# Task + OpenAPI status endpoint
-# --------------------------------------------------------------------------- #
-class TestTask:
-    def test_task_is_a_noop_when_disabled(self):
-        from app.tasks.block_poller_tasks import poll_stellar_blocks
+        assert exc_info.value.retryable is True
 
-        with patch("app.tasks.block_poller_tasks.settings.BLOCK_POLLER_ENABLED", False):
-            assert poll_stellar_blocks() == {"skipped": True, "reason": "BLOCK_POLLER_ENABLED is false"}
+    def test_source_sends_cursor_and_limit_and_maps_records(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.params["cursor"] == "ledger-10"
+            assert request.url.params["limit"] == "1"
+            return httpx.Response(200, json=_page(11))
 
-    def test_task_delegates_to_the_poller_when_enabled(self):
-        from app.tasks.block_poller_tasks import poll_stellar_blocks
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
 
-        fake_poller = MagicMock()
-        fake_poller.poll_once.return_value = bp.PollResult(ledgers_processed=2, payments_confirmed=1)
-        with (
-            patch("app.tasks.block_poller_tasks.settings.BLOCK_POLLER_ENABLED", True),
-            patch("app.services.block_poller.build_block_poller", return_value=fake_poller),
-        ):
-            result = poll_stellar_blocks()
+        blocks = source.fetch_blocks(cursor="ledger-10", limit=1)
 
-        assert result["skipped"] is False
-        assert result["ledgers_processed"] == 2
-        assert result["payments_confirmed"] == 1
+        assert len(blocks) == 1
+        assert blocks[0].cursor == "ledger-11"
+        assert blocks[0].height == 11
+        assert blocks[0].payload["hash"] == "hash-11"
 
+    @pytest.mark.parametrize("limit", [0, 201])
+    def test_source_rejects_out_of_range_limits(self, limit):
+        source = HorizonBlockSource(
+            "https://horizon.test",
+            client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200))),
+        )
 
-class TestStatusEndpoint:
-    def test_status_reads_the_cached_poll_summary(self):
-        fake_cache = MagicMock()
-        fake_cache.get_last_poll.return_value = {
-            "cursor": "51234567",
-            "polled_at": "2026-10-20T15:30:00+00:00",
-            "last_ledger_sequence": 51234567,
-            "ledgers_processed": 3,
-            "transactions_scanned": 42,
-            "payments_confirmed": 2,
-            "cache_hits": 1,
-            "cache_misses": 2,
-            "error": None,
-        }
+        with pytest.raises(ValueError, match="limit"):
+            source.fetch_blocks(limit=limit)
 
-        status = get_block_poller_status(current_user=None, cache=fake_cache)
-
-        assert isinstance(status, BlockPollerStatus)
-        assert status.cursor == "51234567"
-        assert status.last_ledger_sequence == 51234567
-        assert status.last_poll_at == "2026-10-20T15:30:00+00:00"
-
-    def test_status_is_in_the_openapi_schema(self):
-        from app.main import app
-
-        schema = app.openapi()
-        assert "/api/v1/block-poller/status" in schema["paths"]
-        response_schema = schema["paths"]["/api/v1/block-poller/status"]["get"]["responses"]["200"]
-        assert response_schema["content"]["application/json"]["schema"]["$ref"].endswith("/BlockPollerStatus")
+    @pytest.mark.parametrize("base_url", ["", "   ", "horizon.test"])
+    def test_source_rejects_invalid_base_urls(self, base_url):
+        with pytest.raises(ValueError, match="base_url"):
+            HorizonBlockSource(base_url)

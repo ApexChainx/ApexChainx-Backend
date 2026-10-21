@@ -142,15 +142,8 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-def _validate_wallet_or_422(value: str) -> None:
-    """Validate a Stellar wallet address, raising a coded 422 on failure (#680)."""
-    try:
-        normalize_wallet(value)
-    except WalletAddressError as exc:
-        raise CodedHTTPException(status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key") from exc
-
-
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
 def _validate_email_param(email: str) -> str:
@@ -161,7 +154,12 @@ def _validate_email_param(email: str) -> str:
     return cleaned
 
 
-_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
+def _validate_wallet_or_422(value: str) -> None:
+    """Validate a Stellar wallet address, raising a coded 422 on failure (#680)."""
+    try:
+        normalize_wallet(value)
+    except WalletAddressError as exc:
+        raise CodedHTTPException(status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key") from exc
 
 
 def _validate_user_id(user_id: str) -> str:
