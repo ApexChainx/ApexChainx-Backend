@@ -1,243 +1,144 @@
-"""Persistence for :mod:`app.services.tx_indexer` (#710).
+"""Persistence for :mod:`app.services.tx_indexer`.
 
 The ingest path is append-mostly: every batch is a set of Horizon payments that
-may already be stored, because the cursor is at-least-once and a re-delivered
-page re-sends rows. The insert is therefore a single ``ON CONFLICT DO NOTHING``
-statement keyed on the unique ``payment_transactions.transaction_hash``: one
-round trip, no read-then-write race, and a re-delivered page inserts zero rows
-instead of raising.
-
-PostgreSQL is the production dialect; SQLite is supported because the test
-suite runs the same code paths there. Any other backend falls back to a
-read-then-insert in the same transaction.
+may already be stored (the cursor is at-least-once, and a retried batch
+re-delivers rows). The insert is therefore a single parameterized PostgreSQL
+``ON CONFLICT DO NOTHING`` statement keyed on the unique
+``payment_transactions.transaction_hash`` — one round trip, no read-then-write
+race, and a re-delivered batch inserts zero rows instead of raising.
 """
 
 from __future__ import annotations
 
-import operator
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any
 
-from sqlalchemy import and_, or_
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import or_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.orm.payment import PaymentTransactionORM
 from app.services.tx_indexer import IndexedTransaction
+from app.services.tx_indexer_query import (
+    validate_account,
+    validate_amount_range,
+    validate_asset_code,
+    validate_limit,
+    validate_outage_id,
+    validate_sort,
+    validate_status,
+    validate_timestamp_range,
+    validate_transaction_hash,
+    validate_transaction_type,
+)
 
 
 class TxIndexerRepository:
-    """Idempotent sink and read model for indexed chain transactions."""
-
-    #: Exact-match filters the read API exposes. Keeping them as a table means
-    #: adding a filter is one dict entry instead of another branch in
-    #: ``build_query`` (#712).
-    EQUALITY_COLUMNS = {
-        "transaction_hash": PaymentTransactionORM.transaction_hash,
-        "asset_code": PaymentTransactionORM.asset_code,
-        "status": PaymentTransactionORM.status,
-        "type": PaymentTransactionORM.type,
-    }
-
-    #: (filter name, comparison) pairs applied to the ledger close time.
-    DATE_BOUNDS = (
-        ("created_after", operator.ge),
-        ("created_before", operator.le),
-    )
+    """Idempotent sink for indexed chain transactions."""
 
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    # ── write side ──────────────────────────────────────────────────────
+    SORT_COLUMNS = {
+        "created_at": PaymentTransactionORM.created_at,
+        "confirmed_at": PaymentTransactionORM.confirmed_at,
+        "amount": PaymentTransactionORM.amount,
+        "status": PaymentTransactionORM.status,
+    }
+
+    def search(
+        self,
+        *,
+        transaction_hash: object | None = None,
+        account: object | None = None,
+        asset_code: object | None = None,
+        status: object | None = None,
+        transaction_type: object | None = None,
+        outage_id: object | None = None,
+        min_amount: object | None = None,
+        max_amount: object | None = None,
+        created_after: object | None = None,
+        created_before: object | None = None,
+        sort_by: object | None = None,
+        sort_dir: object | None = None,
+        limit: object | None = None,
+    ) -> list[PaymentTransactionORM]:
+        """Return indexed transactions matching the validated filters.
+
+        Every value is validated by ``app.services.tx_indexer_query`` *before*
+        the query is built, then bound as a statement parameter. The ORDER BY
+        column is looked up in ``SORT_COLUMNS`` by whitelisted name, so no user
+        text ever becomes SQL.
+        """
+        hash_filter = validate_transaction_hash(transaction_hash)
+        account_filter = validate_account(account)
+        asset_filter = validate_asset_code(asset_code)
+        status_filter = validate_status(status)
+        type_filter = validate_transaction_type(transaction_type)
+        outage_filter = validate_outage_id(outage_id)
+        amount_low, amount_high = validate_amount_range(min_amount, max_amount)
+        created_start, created_end = validate_timestamp_range(created_after, created_before)
+        sort_field, direction = validate_sort(sort_by, sort_dir)
+        row_limit = validate_limit(limit)
+
+        query = self.db.query(PaymentTransactionORM)
+        if hash_filter is not None:
+            query = query.filter(PaymentTransactionORM.transaction_hash == hash_filter)
+        if account_filter is not None:
+            query = query.filter(
+                or_(
+                    PaymentTransactionORM.from_address == account_filter,
+                    PaymentTransactionORM.to_address == account_filter,
+                )
+            )
+        if asset_filter is not None:
+            query = query.filter(PaymentTransactionORM.asset_code == asset_filter)
+        if status_filter is not None:
+            query = query.filter(PaymentTransactionORM.status == status_filter)
+        if type_filter is not None:
+            query = query.filter(PaymentTransactionORM.type == type_filter)
+        if outage_filter is not None:
+            query = query.filter(PaymentTransactionORM.outage_id == outage_filter)
+        if amount_low is not None:
+            query = query.filter(PaymentTransactionORM.amount >= amount_low)
+        if amount_high is not None:
+            query = query.filter(PaymentTransactionORM.amount <= amount_high)
+        if created_start is not None:
+            query = query.filter(PaymentTransactionORM.created_at >= created_start)
+        if created_end is not None:
+            query = query.filter(PaymentTransactionORM.created_at <= created_end)
+
+        column = self.SORT_COLUMNS[sort_field]
+        order = column.asc() if direction == "asc" else column.desc()
+        return query.order_by(order, PaymentTransactionORM.id.asc()).limit(row_limit).all()
 
     def upsert_many(self, transactions: Sequence[IndexedTransaction]) -> int:
         """Insert *transactions*, skipping hashes that are already stored.
 
         Returns the number of rows actually inserted.
         """
-        rows = self._rows(transactions)
-        if not rows:
+        if not transactions:
             return 0
 
-        inserted = self.db.execute(self._insert_statement(rows)).rowcount
-        self.db.commit()
-        return int(inserted or 0)
-
-    def _rows(self, transactions: Sequence[IndexedTransaction]) -> list[dict[str, Any]]:
-        """Build insert rows, deduplicated by transaction hash.
-
-        ``ON CONFLICT`` cannot be combined with two identical keys in the same
-        statement, and the ingest path already collapses operations per
-        transaction, so the dedupe here is a guard rather than a hot path.
-        """
-        seen: set[str] = set()
-        rows: list[dict[str, Any]] = []
-        for transaction in transactions:
-            if transaction.transaction_hash in seen:
-                continue
-            seen.add(transaction.transaction_hash)
-            rows.append(
-                {
-                    "id": transaction.id,
-                    "transaction_hash": transaction.transaction_hash,
-                    "type": transaction.type,
-                    "amount": transaction.amount,
-                    "asset_code": transaction.asset_code,
-                    "from_address": transaction.from_address,
-                    "to_address": transaction.to_address,
-                    "status": transaction.status,
-                    "created_at": transaction.created_at,
-                    "confirmed_at": datetime.now(UTC),
-                    "retry_count": 0,
-                }
-            )
-        return rows
-
-    def _insert_statement(self, rows: list[dict[str, Any]]) -> Any:
-        """Return a conflict-tolerant INSERT for the configured dialect."""
-        dialect = self.db.get_bind().dialect.name
-        if dialect == "postgresql":
-            return (
-                postgresql_insert(PaymentTransactionORM)
-                .values(rows)
-                .on_conflict_do_nothing(index_elements=["transaction_hash"])
-            )
-        if dialect == "sqlite":
-            return (
-                sqlite_insert(PaymentTransactionORM)
-                .values(rows)
-                .on_conflict_do_nothing(index_elements=["transaction_hash"])
-            )
-        return self._dedupe_against_existing(rows)
-
-    def _dedupe_against_existing(self, rows: list[dict[str, Any]]) -> Any:
-        """Portable fallback: drop hashes already in the table, then insert."""
-        hashes = [row["transaction_hash"] for row in rows]
-        existing = {
-            value
-            for (value,) in self.db.query(PaymentTransactionORM.transaction_hash)
-            .filter(PaymentTransactionORM.transaction_hash.in_(hashes))
-            .all()
-        }
-        fresh = [row for row in rows if row["transaction_hash"] not in existing]
-        return PaymentTransactionORM.__table__.insert().values(fresh)
-
-    # ── read side ───────────────────────────────────────────────────────
-
-    def list_indexed(
-        self,
-        *,
-        transaction_hash: str | None = None,
-        account: str | None = None,
-        asset_code: str | None = None,
-        status: str | None = None,
-        transaction_type: str | None = None,
-        created_after: datetime | None = None,
-        created_before: datetime | None = None,
-        limit: int = 50,
-        offset: int = 0,
-        after: tuple[datetime, str] | None = None,
-    ) -> list[PaymentTransactionORM]:
-        """Return indexed transactions matching every supplied filter.
-
-        ``after`` is a keyset position ``(created_at, id)`` from a previous
-        page. It is applied as a strict "older than this row" predicate, so
-        inserts that land while a client pages cannot shift or duplicate the
-        results the way an ``OFFSET`` can.
-        """
-        query = self.build_query(
-            transaction_hash=transaction_hash,
-            account=account,
-            asset_code=asset_code,
-            status=status,
-            transaction_type=transaction_type,
-            created_after=created_after,
-            created_before=created_before,
-        )
-        query = self._apply_cursor(query, after)
-        return list(
-            query.order_by(PaymentTransactionORM.created_at.desc(), PaymentTransactionORM.id.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
-
-    def _apply_cursor(self, query: Any, after: tuple[datetime, str] | None) -> Any:
-        """Restrict the query to rows older than the cursor position."""
-        if after is None:
-            return query
-
-        created_at, row_id = after
-        return query.filter(
-            or_(
-                PaymentTransactionORM.created_at < created_at,
-                and_(
-                    PaymentTransactionORM.created_at == created_at,
-                    PaymentTransactionORM.id < row_id,
-                ),
-            )
-        )
-
-    def get_by_hash(self, transaction_hash: str) -> PaymentTransactionORM | None:
-        """Return the indexed row for *transaction_hash*, if any."""
-        return (
-            self.db.query(PaymentTransactionORM)
-            .filter(PaymentTransactionORM.transaction_hash == transaction_hash)
-            .first()
-        )
-
-    def build_query(
-        self,
-        *,
-        transaction_hash: str | None = None,
-        account: str | None = None,
-        asset_code: str | None = None,
-        status: str | None = None,
-        transaction_type: str | None = None,
-        created_after: datetime | None = None,
-        created_before: datetime | None = None,
-    ) -> Any:
-        """Build the filtered query shared by the list and count paths."""
-        query = self.db.query(PaymentTransactionORM)
-        query = self._apply_equalities(
-            query,
+        rows = [
             {
-                "transaction_hash": transaction_hash,
-                "asset_code": asset_code,
-                "status": status,
-                "type": transaction_type,
-            },
+                "id": tx.id,
+                "transaction_hash": tx.transaction_hash,
+                "type": tx.type,
+                "amount": tx.amount,
+                "asset_code": tx.asset_code,
+                "from_address": tx.from_address,
+                "to_address": tx.to_address,
+                "status": "confirmed",
+                "created_at": tx.created_at,
+                "confirmed_at": datetime.now(UTC),
+                "retry_count": 0,
+            }
+            for tx in transactions
+        ]
+        statement = (
+            pg_insert(PaymentTransactionORM).values(rows).on_conflict_do_nothing(index_elements=["transaction_hash"])
         )
-        query = self._apply_account(query, account)
-        return self._apply_bounds(
-            query,
-            {"created_after": created_after, "created_before": created_before},
-        )
-
-    def _apply_equalities(self, query: Any, values: dict[str, Any]) -> Any:
-        """Apply every supplied exact-match filter."""
-        for name, value in values.items():
-            if value:
-                query = query.filter(self.EQUALITY_COLUMNS[name] == value)
-        return query
-
-    def _apply_account(self, query: Any, account: str | None) -> Any:
-        """Match *account* against either side of the payment."""
-        if not account:
-            return query
-        return query.filter(
-            or_(
-                PaymentTransactionORM.from_address == account,
-                PaymentTransactionORM.to_address == account,
-            )
-        )
-
-    def _apply_bounds(self, query: Any, bounds: dict[str, datetime | None]) -> Any:
-        """Apply the inclusive ledger-close-time window."""
-        for name, compare in self.DATE_BOUNDS:
-            bound = bounds[name]
-            if bound is not None:
-                query = query.filter(compare(PaymentTransactionORM.created_at, bound))
-        return query
+        result = self.db.execute(statement)
+        self.db.commit()
+        return int(result.rowcount or 0)

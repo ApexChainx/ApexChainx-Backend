@@ -1,327 +1,172 @@
-"""TxIndexer read API (#710).
+"""TxIndexer health probe (#714).
 
-The indexer's write path lives in :mod:`app.services.tx_indexer` and
-:mod:`app.repositories.tx_indexer_repository`. This module is the read side:
-the two routes below expose what the indexer has stored, so partners do not
-have to scrape Horizon themselves.
-
-Both routes are documented for OpenAPI/Swagger generation on purpose:
-
-* every parameter carries a description and its bounds, so the generated
-  Swagger UI shows an operator exactly what may be sent;
-* every response the handler can produce is declared with ``responses``,
-  including the 404 on the single-transaction route and the 422 raised when a
-  query value fails validation;
-* the response model carries a request example, so "Try it out" in Swagger UI
-  starts from a realistic payload instead of an empty object.
+Served from the API process, which never runs the ingest loop itself: the probe
+reads the worker's Redis heartbeat (see ``app/services/tx_indexer_health.py``)
+and pings the ledger database, then reports ``ok`` / ``degraded`` / ``down``.
+``down`` returns 503 so a load balancer or orchestrator can act on it;
+``degraded`` stays 200 because a single failed pass (or a fresh deployment that
+has not indexed yet) must not take the API out of rotation.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.coded_errors import CodedHTTPException
+from app.core.config import settings
 from app.core.security import require_engineer
-from app.db.session import get_db
-from app.models.orm.payment import PaymentTransactionORM
+from app.db.session import engine, get_db
 from app.repositories.tx_indexer_repository import TxIndexerRepository
-from app.services.tx_indexer_input import (
-    MAX_ACCOUNT_LENGTH,
-    MAX_ASSET_CODE_LENGTH,
-    MAX_HASH_LENGTH,
-    MAX_TOKEN_LENGTH,
-    TxIndexerValidationError,
-    TxIndexFilters,
-    sanitize_transaction_hash,
+from app.services.tx_indexer_health import (
+    TxIndexerStateStore,
+    build_indexer_health,
 )
-from app.utils.cursor import decode_cursor, encode_cursor
+from app.services.tx_indexer_query import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    TxIndexerQueryError,
+)
 
 router = APIRouter()
 
-#: Default and maximum page size for the read API. The cap mirrors Horizon's
-#: own page limit so a client cannot ask the index for more than the indexer
-#: would ever write in one ingest pass.
-DEFAULT_PAGE_SIZE = 50
-MAX_PAGE_SIZE = 200
-
 
 class IndexedTransactionResponse(BaseModel):
-    """An on-chain transaction as stored by the indexer."""
+    """A row as stored by the ingest loop."""
 
-    model_config = ConfigDict(
-        from_attributes=True,
-        json_schema_extra={
-            "example": {
-                "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
-                "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
-                "type": "payment",
-                "amount": 150000000,
-                "asset_code": "USDC",
-                "from_address": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-                "to_address": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBXY",
-                "status": "confirmed",
-                "created_at": "2026-10-20T12:00:00Z",
-                "confirmed_at": "2026-10-20T12:00:05Z",
-            }
-        },
-    )
+    model_config = ConfigDict(from_attributes=True)
 
-    id: str = Field(description="Index row id, derived from the transaction hash (``idx_<hash>``).")
-    transaction_hash: str = Field(description="Stellar transaction hash. Unique in the index.")
-    type: str = Field(description="Horizon operation type that was indexed, e.g. ``payment``.")
-    amount: int = Field(description="Amount in stroops. 1 unit = 10^7 stroops.")
-    asset_code: str = Field(description="Asset code; ``XLM`` for native payments.")
-    from_address: str = Field(description="Source Stellar account of the payment.")
-    to_address: str = Field(description="Destination Stellar account of the payment.")
-    status: str = Field(description="Ledger status of the indexed row; always ``confirmed``.")
-    created_at: datetime = Field(description="Ledger close time reported by Horizon (UTC).")
-    confirmed_at: datetime | None = Field(
-        default=None,
-        description="When the indexer stored the row. Not the on-chain confirmation time.",
-    )
+    id: str
+    transaction_hash: str
+    type: str
+    amount: int
+    asset_code: str
+    from_address: str
+    to_address: str
+    status: str
+    outage_id: str | None = None
+    created_at: datetime
+    confirmed_at: datetime | None = None
 
 
-class IndexedTransactionPage(BaseModel):
-    """One page of the transaction index."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "items": [
-                    {
-                        "id": "idx_9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
-                        "transaction_hash": "9c1f4f2f0f5b4a1d8c3e2b7a6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c",
-                        "type": "payment",
-                        "amount": 150000000,
-                        "asset_code": "USDC",
-                        "from_address": "GAAAA...",
-                        "to_address": "GBBBB...",
-                        "status": "confirmed",
-                        "created_at": "2026-10-20T12:00:00Z",
-                        "confirmed_at": "2026-10-20T12:00:05Z",
-                    }
-                ],
-                "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9",
-                "has_more": True,
-            }
-        }
-    )
-
-    items: list[IndexedTransactionResponse] = Field(description="Rows on this page, newest first.")
-    next_cursor: str | None = Field(
-        default=None,
-        description=(
-            "Opaque cursor for the next page. Pass it back as ``cursor``. Null when this is " "the last page."
-        ),
-    )
-    has_more: bool = Field(description="True when at least one more row matches the filters.")
+class IndexerHealthComponent(BaseModel):
+    status: str
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
-def _to_response(row: object) -> IndexedTransactionResponse:
-    """Validate one ORM row against the response model."""
-    return IndexedTransactionResponse.model_validate(row)
+class IndexerHealthResponse(BaseModel):
+    status: str = Field(description="ok | degraded | down")
+    reason: str | None = Field(default=None, description="Why the probe is not ok")
+    observed_at: str
+    last_attempt_at: str | None = None
+    last_success_at: str | None = None
+    lag_seconds: float | None = Field(default=None, description="Seconds since the last successful pass")
+    max_lag_seconds: int
+    consecutive_failures: int
+    last_error: str | None = None
+    last_inserted: int
+    components: dict[str, IndexerHealthComponent]
 
 
-def _decode_cursor_param(cursor: str | None) -> tuple[datetime, str] | None:
-    """Decode the opaque ``cursor`` query parameter into a keyset position.
+def get_state_store() -> TxIndexerStateStore:
+    """Factory kept separate so tests can substitute an in-memory store."""
+    return TxIndexerStateStore()
 
-    A cursor that cannot be decoded is a 422 rather than a silent first page:
-    restarting from the top makes a client loop over the same rows forever
-    while believing it is paging forward.
-    """
-    if cursor is None:
-        return None
 
-    decoded = decode_cursor(cursor)
-    if decoded is None:
-        raise CodedHTTPException(status_code=422, detail="Invalid cursor")
-
-    row_id, sort_value = decoded
+def _database_status() -> tuple[bool, str | None]:
+    """Return (reachable, error). A probe failure is never raised to the caller."""
     try:
-        created_at = datetime.fromisoformat(str(sort_value))
-    except (TypeError, ValueError) as exc:
-        raise CodedHTTPException(status_code=422, detail="Invalid cursor") from exc
-
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=UTC)
-    return created_at, str(row_id)
-
-
-def _build_page(rows: Sequence[PaymentTransactionORM], limit: int) -> IndexedTransactionPage:
-    """Trim a ``limit + 1`` result set into a page plus its continuation cursor."""
-    has_more = len(rows) > limit
-    page_rows = list(rows[:limit])
-
-    next_cursor = None
-    if has_more and page_rows:
-        last = page_rows[-1]
-        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
-
-    return IndexedTransactionPage(
-        items=[_to_response(row) for row in page_rows],
-        next_cursor=next_cursor,
-        has_more=has_more,
-    )
-
-
-def _validated_filters(**raw: object) -> TxIndexFilters:
-    """Sanitize query values, mapping the first invalid one to a 422.
-
-    Validation happens before the repository is touched, so a malformed filter
-    never reaches SQL and never costs a query.
-    """
-    try:
-        filters = TxIndexFilters.from_query(**raw)  # type: ignore[arg-type]
-    except TxIndexerValidationError as exc:
-        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
-
-    if filters.created_after and filters.created_before and filters.created_after > filters.created_before:
-        raise CodedHTTPException(status_code=422, detail="created_after cannot be after created_before")
-    return filters
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"[:240]
+    return True, None
 
 
 @router.get(
     "/transactions",
-    response_model=IndexedTransactionPage,
-    summary="List indexed Stellar transactions",
+    response_model=list[IndexedTransactionResponse],
+    summary="Search indexed transactions",
     description=(
-        "Return the transactions the indexer has stored, newest first. All filters are optional "
-        "and combine with AND.\n\n"
-        "Paging is cursor based: send ``limit`` (1-200, default 50) and pass the returned "
-        "``next_cursor`` back as ``cursor`` until ``has_more`` is false. The cursor encodes the "
-        "``(created_at, id)`` of the last row, so rows inserted while a client pages do not "
-        "shift or duplicate results. ``offset`` is still accepted for callers that cannot hold "
-        "a cursor; when ``cursor`` is present it takes precedence and ``offset`` is ignored.\n\n"
-        "Requires an engineer or admin bearer token."
+        "Query the transactions the indexer has stored. All filters are optional and every "
+        "value is validated before any SQL is prepared: hashes must be 64-hex, accounts must "
+        "be valid Stellar keys, statuses/sort keys come from fixed whitelists, and amounts are "
+        "bounded integers. Invalid filters return 422 with the reason."
     ),
-    response_description="One page of matching indexed transactions, plus the cursor for the next page.",
-    operation_id="listIndexedTransactions",
     responses={
-        200: {"description": "One page of matching indexed transactions."},
-        401: {"description": "Missing or invalid bearer token."},
-        403: {"description": "The caller's role cannot read the transaction index."},
-        422: {
-            "description": (
-                "A query parameter failed validation (for example ``limit=0``), the date window is "
-                "reversed, or ``cursor`` is not a cursor issued by this endpoint."
-            )
-        },
+        200: {"description": "Matching transactions, newest first by default"},
+        422: {"description": "A filter value is invalid"},
     },
 )
 def list_indexed_transactions(
-    transaction_hash: str | None = Query(
-        default=None,
-        max_length=MAX_HASH_LENGTH,
-        description=(
-            "Exact Stellar transaction hash to look up: 64 hexadecimal characters "
-            "(case-insensitive; normalized to lower case)."
-        ),
-    ),
-    account: str | None = Query(
-        default=None,
-        max_length=MAX_ACCOUNT_LENGTH,
-        description="Stellar account; matches either ``from_address`` or ``to_address``.",
-    ),
-    asset_code: str | None = Query(
-        default=None,
-        max_length=MAX_ASSET_CODE_LENGTH,
-        description="Asset code filter, for example ``USDC`` or ``XLM`` (normalized to upper case).",
-    ),
-    status: str | None = Query(
-        default=None,
-        max_length=MAX_TOKEN_LENGTH,
-        description="Ledger status filter. Indexed rows are always ``confirmed``.",
-    ),
-    type: str | None = Query(
-        default=None,
-        max_length=MAX_TOKEN_LENGTH,
-        description="Horizon operation type filter, for example ``payment``.",
-    ),
-    created_after: datetime | None = Query(
-        default=None,
-        description="Only rows whose ledger close time is at or after this UTC timestamp.",
-    ),
-    created_before: datetime | None = Query(
-        default=None,
-        description="Only rows whose ledger close time is at or before this UTC timestamp.",
-    ),
-    limit: int = Query(
-        default=DEFAULT_PAGE_SIZE,
-        ge=1,
-        le=MAX_PAGE_SIZE,
-        description=f"Maximum number of rows to return (1-{MAX_PAGE_SIZE}).",
-    ),
-    cursor: str | None = Query(
-        default=None,
-        description=("Opaque cursor from a previous page's ``next_cursor``. Takes precedence over ``offset``."),
-    ),
-    offset: int = Query(
-        default=0,
-        ge=0,
-        description="Rows to skip when paging by offset. Ignored when ``cursor`` is supplied.",
-    ),
+    transaction_hash: str | None = Query(default=None, max_length=64),
+    account: str | None = Query(default=None, max_length=56, description="Matches from_address or to_address"),
+    asset_code: str | None = Query(default=None, max_length=12),
+    status: str | None = Query(default=None, max_length=16),
+    type: str | None = Query(default=None, max_length=32),
+    outage_id: str | None = Query(default=None, max_length=64),
+    min_amount: int | None = Query(default=None, ge=0, description="Stroops"),
+    max_amount: int | None = Query(default=None, ge=0, description="Stroops"),
+    created_after: datetime | None = Query(default=None),
+    created_before: datetime | None = Query(default=None),
+    sort_by: str = Query(default="created_at", max_length=32),
+    sort_dir: str = Query(default="desc", max_length=4),
+    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     current_user=Depends(require_engineer),
     db: Session = Depends(get_db),
-) -> IndexedTransactionPage:
-    """List indexed transactions with filtering and cursor-first pagination."""
-    filters = _validated_filters(
-        transaction_hash=transaction_hash,
-        account=account,
-        asset_code=asset_code,
-        status=status,
-        transaction_type=type,
-        created_after=created_after,
-        created_before=created_before,
-    )
-    after = _decode_cursor_param(cursor)
+) -> list[IndexedTransactionResponse]:
+    """Search the indexer's view of the chain (#716)."""
+    try:
+        rows = TxIndexerRepository(db).search(
+            transaction_hash=transaction_hash,
+            account=account,
+            asset_code=asset_code,
+            status=status,
+            transaction_type=type,
+            outage_id=outage_id,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            created_after=created_after,
+            created_before=created_before,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            limit=limit,
+        )
+    except TxIndexerQueryError as exc:
+        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
 
-    rows = TxIndexerRepository(db).list_indexed(
-        **asdict(filters),
-        limit=limit + 1,
-        offset=0 if after else offset,
-        after=after,
-    )
-    return _build_page(rows, limit)
+    return [IndexedTransactionResponse.model_validate(row) for row in rows]
 
 
 @router.get(
-    "/transactions/{transaction_hash}",
-    response_model=IndexedTransactionResponse,
-    summary="Get one indexed transaction",
+    "/health",
+    response_model=IndexerHealthResponse,
+    summary="TxIndexer ingest health",
     description=(
-        "Return a single indexed transaction by its Stellar transaction hash. Returns 404 when "
-        "the indexer has not stored that hash (either it is not a payment, or the ingest cursor "
-        "has not reached it yet)."
+        "Report whether the transaction indexer is keeping up. Reads the worker heartbeat from "
+        "Redis and pings the ledger database. Returns 503 only when the database is unreachable; "
+        "a stale or failing indexer is reported as 200 with status=degraded."
     ),
-    response_description="The indexed transaction.",
-    operation_id="getIndexedTransaction",
     responses={
-        200: {"description": "The indexed transaction."},
-        401: {"description": "Missing or invalid bearer token."},
-        403: {"description": "The caller's role cannot read the transaction index."},
-        404: {"description": "No indexed transaction exists for that hash."},
-        422: {"description": "The hash is not a 64-character hexadecimal Stellar transaction hash."},
+        200: {"description": "Indexer is healthy or degraded"},
+        503: {"description": "Ledger database unreachable"},
     },
 )
-def get_indexed_transaction(
-    transaction_hash: str,
-    current_user=Depends(require_engineer),
-    db: Session = Depends(get_db),
-) -> IndexedTransactionResponse:
-    """Return one indexed transaction by hash."""
-    try:
-        canonical_hash = sanitize_transaction_hash(transaction_hash)
-    except TxIndexerValidationError as exc:
-        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
+def indexer_health(response: Response) -> IndexerHealthResponse:
+    state = get_state_store().load()
+    database_ok, database_error = _database_status()
+    report = build_indexer_health(
+        state,
+        max_lag_seconds=settings.TX_INDEXER_HEALTH_MAX_LAG_SECONDS,
+        database_ok=database_ok,
+        database_error=database_error,
+    )
 
-    assert canonical_hash is not None  # a path parameter is always present
-    row = TxIndexerRepository(db).get_by_hash(canonical_hash)
-    if row is None:
-        raise CodedHTTPException(status_code=404, detail="Indexed transaction not found")
-    return _to_response(row)
+    if report["status"] == "down":
+        response.status_code = 503
+    return IndexerHealthResponse(**report)

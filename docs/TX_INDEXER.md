@@ -1,201 +1,226 @@
 # TxIndexer
 
-TxIndexer keeps a queryable copy of Stellar payments in the backend's ledger of
-record, so partners and operators can list a transaction without calling
-Horizon themselves.
+`TxIndexer` keeps the `payment_transactions` table in step with the Stellar
+chain. It reads the Horizon payment stream one bounded page at a time, maps
+each record onto the ledger row shape, and inserts it idempotently.
 
-Issues: #710 (OpenAPI/Swagger documentation).
+| Piece | Location |
+| --- | --- |
+| Fetch, retry policy, parsing, `run_once` | `app/services/tx_indexer.py` |
+| Idempotent insert | `app/repositories/tx_indexer_repository.py` |
+| Configuration | `app/core/config.py`, `.env.example` §15 |
 
-## Where it lives
+## Ingest contract
 
-| Concern | Module |
-|---------|--------|
-| Ingest: Horizon fetch → normalize → sink | `app/services/tx_indexer.py` |
-| Persistence and read queries | `app/repositories/tx_indexer_repository.py` |
-| Read API | `app/api/v1/endpoints/indexer.py` |
-| Scheduled entrypoint | `app/tasks/tx_indexer_tasks.py` |
-
-The index is **`payment_transactions`**, the table the payments API already
-reads. It is unique on `transaction_hash`, so re-delivering a Horizon page is
-idempotent: the insert is a single `ON CONFLICT DO NOTHING` statement keyed on
-that column.
-
-## Ingest flow
-
-1. `HorizonClient.fetch_payments(cursor, limit)` reads
-   `GET {TX_INDEXER_HORIZON_URL}/payments?order=asc&limit=…` and returns the
-   page plus the `paging_token` of its last record.
-2. `IndexedTransaction.from_horizon_record` normalizes each record:
-
-   | Horizon field | Stored as | Notes |
-   |---------------|-----------|-------|
-   | `transaction_hash` | `transaction_hash` | Required; the unique key |
-   | `amount` (decimal string) | `amount` (integer) | Converted to stroops (×10⁷) |
-   | `asset_code` | `asset_code` | `XLM` for native payments |
-   | `from` / `source_account` / `funder` | `from_address` | First present wins |
-   | `to` / `account` | `to_address` | First present wins |
-   | `created_at` | `created_at` | Ledger close time, UTC |
-   | `type` | `type` | Horizon operation type |
-
-3. A record that cannot be normalized (no hash, unparseable or negative
-   amount, no account pair) is logged as `tx_indexer_skipped_record` and
-   skipped. It never reaches the sink.
-4. `TxIndexerRepository.upsert_many` inserts the page; already-indexed hashes
-   insert zero rows.
-5. The pass returns an `IngestResult` whose `cursor` is the position to resume
-   from.
-
-### One row per transaction
-
-Horizon streams *operations*, and one transaction can contain several payment
-operations. The index is keyed by transaction, so the first payment operation
-seen for a transaction wins and the rest are collapsed into it. One row per
-operation would need a dedicated table and a migration; collapsing keeps the
-index consistent with the payments API.
-
-## Configuration
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `TX_INDEXER_HORIZON_URL` | `https://horizon-testnet.stellar.org` | Horizon base URL. Must not be empty |
-| `TX_INDEXER_BATCH_SIZE` | `200` | Payments per pass, 1–200 (Horizon's page cap) |
-
-Both are validated by `validate_critical_settings()` at startup, and both are
-listed in `.env.example`.
-
-## Running an ingest pass
-
-```python
-from app.tasks.tx_indexer_tasks import index_transactions
-
-result = index_transactions.delay(cursor=None).get()
-# {"fetched": 200, "stored": 197, "skipped": 0, "cursor": "1234567890"}
+```
+Horizon /payments --fetch (retry)--> FetchedPage --parse--> IndexedTransaction[] --upsert--> payment_transactions
 ```
 
-The task is intentionally **not** on the Celery beat schedule: a deployment
-runs it from its own scheduler and persists the returned `cursor`. Passing the
-previous cursor replays nothing; passing `None` re-walks the stream from the
-beginning (safe, because the write is idempotent).
+* **One page per pass.** `run_once(cursor)` fetches at most
+  `TX_INDEXER_BATCH_SIZE` records and returns
+  `IndexResult(fetched, inserted, next_cursor)`. The caller owns the cursor and
+  is expected to persist `next_cursor` only after `run_once` returns: the
+  ingest is at-least-once, not at-most-once.
+* **Idempotent.** The insert is a single PostgreSQL
+  `INSERT ... ON CONFLICT (transaction_hash) DO NOTHING`, so a re-delivered
+  batch (retry, replay, overlapping runs) inserts zero rows rather than
+  raising or duplicating a payment. `IndexResult.inserted` reports the rows
+  that were actually new.
+* **Strict parsing.** Amounts are converted from Horizon's decimal strings to
+  exact stroops (7 decimal places) and timestamps are normalized to
+  timezone-aware UTC. A record without a `transaction_hash` cannot take part
+  in conflict resolution, so it fails the batch (`TxIndexerError`) instead of
+  being stored.
+* Indexed rows are prefixed `txidx_` and carry `status="confirmed"`, which
+  keeps them distinguishable from settlement rows minted by
+  `PaymentRepository` (`pay_...`).
 
-## Read API
+## Retry with backoff (#713)
 
-Both routes require an engineer or admin bearer token.
+Horizon answers `429`/`5xx` and drops connections during ordinary operation. A
+single blip used to abort the pass, leaving the cursor stalled and every later
+payment unindexed. `RetryPolicy` now wraps the fetch:
 
-| Route | Purpose |
-|-------|---------|
-| `GET /api/v1/indexer/transactions` | Filtered, cursor-paginated page of transactions, newest first |
-| `GET /api/v1/indexer/transactions/{transaction_hash}` | One transaction, 404 when not indexed |
+| Attempt | Delay (defaults, before jitter) |
+| --- | --- |
+| 1 | immediate |
+| 2 | 0.5 s |
+| 3 | 1.0 s |
+| 4 | 2.0 s |
+| 5+ | 4.0 s, 8.0 s, capped at `TX_INDEXER_BACKOFF_MAX_SECONDS` |
 
-Filters: `transaction_hash`, `account` (matches sender or recipient),
-`asset_code`, `status`, `type`, `created_after`, `created_before`. A
-`created_after` later than `created_before` returns `422`.
+* **What is retried:** `httpx` timeout/transport errors and HTTP
+  `408, 425, 429, 500, 502, 503, 504`. Everything else — notably a `400` from a
+  malformed cursor — fails on the first attempt because it would fail
+  identically on every retry.
+* **Jitter:** each delay is scaled by a uniform factor in
+  `[1 - TX_INDEXER_BACKOFF_JITTER_RATIO, 1 + TX_INDEXER_BACKOFF_JITTER_RATIO]`
+  and clamped to the max delay, so a fleet of workers does not retry in
+  lockstep against a recovering Horizon.
+* **Bounded:** retries are capped by attempt count (`TX_INDEXER_MAX_ATTEMPTS`),
+  not elapsed time. Exhaustion raises `TxIndexerRetryExhausted` chained from
+  the last transport error; the caller decides whether to log, alert or
+  re-schedule.
+* Every failed attempt logs the structured event `tx_indexer_retry` with the
+  attempt number, delay and error; exhaustion logs
+  `tx_indexer_retry_exhausted`.
 
-### Pagination
+### Configuration
 
-List responses use a page envelope:
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `TX_INDEXER_BATCH_SIZE` | `50` | Payments per page (Horizon caps at 200). |
+| `TX_INDEXER_MAX_ATTEMPTS` | `4` | Total attempts per fetch, first try included. |
+| `TX_INDEXER_BACKOFF_BASE_SECONDS` | `0.5` | Delay before the first retry. |
+| `TX_INDEXER_BACKOFF_MAX_SECONDS` | `8.0` | Ceiling for a single backoff. |
+| `TX_INDEXER_BACKOFF_JITTER_RATIO` | `0.5` | ± fraction applied to each delay. |
+| `TX_INDEXER_TIMEOUT_SECONDS` | `10.0` | Horizon HTTP timeout. |
+
+Out-of-range values are rejected at startup by `validate_critical_settings`,
+so a typo cannot silently turn the indexer into a tight retry loop.
+
+## Operating notes
+
+* Cursor storage is the runner's responsibility. Persist `next_cursor` after a
+  successful `run_once`; on `TxIndexerRetryExhausted`, leave the cursor where it
+  is and let the next scheduled pass re-fetch the same page — the upsert makes
+  the overlap free.
+* The retry budget bounds one page, not the whole stream; a sustained Horizon
+  outage surfaces as repeated `tx_indexer_retry_exhausted` events rather than a
+  hung worker.
+* `HorizonPaymentSource` reads `STELLAR_HORIZON_URL` from the environment (see
+  `docs/STELLAR_INTEGRATION.md`) and is inert unless the indexer is scheduled.
+
+## Health probe (#714)
+
+`GET /api/v1/indexer/health` reports whether the stream is actually being
+indexed. The ingest loop runs in a worker process and the probe is served by
+the API process, so the worker publishes a heartbeat to Redis
+(`tx_indexer:state`, TTL `TX_INDEXER_STATE_TTL_SECONDS`) after every pass, and
+the probe reads it back alongside a `SELECT 1` against the ledger database.
 
 ```json
 {
-  "items": [ ... ],
-  "next_cursor": "eyJpZCI6ICJpZHhfLi4uIiwgInYiOiAiMjAyNi0xMC0yMFQxMjowMDowMCswMDowMCJ9",
-  "has_more": true
+  "status": "ok",
+  "reason": null,
+  "observed_at": "2026-10-20T12:00:00+00:00",
+  "last_attempt_at": "2026-10-20T11:59:50+00:00",
+  "last_success_at": "2026-10-20T11:59:50+00:00",
+  "lag_seconds": 10.0,
+  "max_lag_seconds": 120,
+  "consecutive_failures": 0,
+  "last_error": null,
+  "last_inserted": 42,
+  "components": {
+    "database": {"status": "ok", "details": {}},
+    "state_store": {"status": "ok", "details": {}}
+  }
 }
 ```
 
-* `limit` — 1–200, default 50.
-* `cursor` — pass the previous page's `next_cursor` back unchanged. The cursor
-  encodes the `(created_at, id)` of the last row, and the next query is a
-  strict "older than that row" predicate. Rows inserted while a client pages
-  therefore cannot shift or duplicate results, which is the failure mode of
-  `OFFSET` pagination on a table that is being written continuously.
-* `offset` — still accepted for callers that cannot hold a cursor. When
-  `cursor` is present it takes precedence and `offset` is ignored.
-* `has_more` is derived by fetching one row beyond `limit`, so a page never
-  reports `has_more: true` without a next page and never needs a `COUNT(*)`.
-* A cursor that cannot be decoded, or whose position is not a timestamp, is a
-  `422 Invalid cursor` — silently restarting at page one would make a client
-  loop over the same rows forever.
+| Status | HTTP | When |
+| --- | --- | --- |
+| `ok` | 200 | A successful pass within `TX_INDEXER_HEALTH_MAX_LAG_SECONDS`. |
+| `degraded` | 200 | No successful pass recorded, the last pass failed, or the heartbeat is stale (`reason` names which). |
+| `down` | 503 | The ledger database is unreachable, so no write can land. |
 
-Request and response fields are described in the generated OpenAPI document
-(`/openapi.json`, Swagger UI at `/docs`) and in
-[docs/API.md](API.md#transaction-indexer-txindexer).
+Precedence is deliberate: a database outage outranks indexer state, `degraded`
+never returns 503 (a fresh deployment or one failed pass must not drain the API
+from the load balancer), and a Redis failure is fail-open — an unreadable
+heartbeat reports `no_successful_run`, never `down`. The response is
+unauthenticated, like `/health/readiness`; `last_error` is truncated to 240
+characters.
 
-### Input validation
+## Query path hardening (#716)
 
-Both sides of the indexer treat input as untrusted: query filters on the read
-API and every field of a Horizon record. Validation is **allow-list based**
-(`app/services/tx_indexer_input.py`), so a value either canonicalizes to the
-form the database expects or the request is rejected.
+The read side (`GET /api/v1/indexer/transactions`) accepts eleven optional
+filters. Everything a caller sends is untrusted, so the path is built in two
+layers:
 
-| Field | Accepted form | Normalization |
-|-------|---------------|---------------|
-| `transaction_hash` | 64 hexadecimal characters | lower-cased |
-| `account` | letters, digits, `_`, `*`, `:`; max 69 | — |
-| `asset_code` | 1-12 alphanumerics | upper-cased |
-| `status`, `type` | `lower_snake_case` tokens, max 32 | lower-cased |
-| `created_after`, `created_before` | ISO-8601 | naive timestamps become UTC; offsets convert to UTC |
+1. **`app/services/tx_indexer_query.py` — validate, then bind.**
+   - `transaction_hash`: 64 hex characters, lowercased. Anything else (including
+     `'; DROP TABLE ...`) is a `422`.
+   - `account`: a syntactically valid Stellar public key, normalized through
+     `app.utils.wallet_address.normalize`; it is compared against
+     `from_address` **or** `to_address`.
+   - `asset_code`: 1-12 alphanumerics, uppercased.
+   - `status`: one of `pending`, `confirmed`, `failed` (from `PaymentStatus`).
+   - `type`: lowercase label grammar `^[a-z][a-z0-9_]{0,31}$`.
+   - `outage_id`: `^[A-Za-z0-9_-]{1,64}$`.
+   - `min_amount` / `max_amount`: coerced to exact `BIGINT` stroops, range
+     checked, and `min <= max` enforced. Floats, booleans and `2**63` are
+     rejected.
+   - `created_after` / `created_before`: real `datetime`s with the ordering
+     enforced.
+   - `sort_by`: resolved through the `{created_at, confirmed_at, amount,
+     status}` whitelist; `sort_dir` through `{asc, desc}`. The repository looks
+     the **whitelisted name** up in its column map, so a caller can never name a
+     column (or inject SQL through the order-by).
+   - `limit`: 1-200.
+2. **Repository binds every value.** `TxIndexerRepository.search` filters with
+   SQLAlchemy comparison operators (`==`, `>=`, `<=`, `OR`), i.e. every value
+   becomes a statement parameter. There is no `text()` or f-string SQL in the
+   query path, and the ORDER BY clause is a column object from the map above.
 
-Additional rules:
+The endpoint maps `TxIndexerQueryError` to a coded `422` with the reason, so a
+bad filter is a clear client error rather than a 500 — and a rejected filter
+never reaches the database.
 
-* surrounding whitespace is stripped; a value that is empty after stripping is
-  rejected rather than treated as "no filter";
-* NUL and any other control/format character is rejected;
-* quotes, semicolons and comment markers cannot survive the allow-list, so an
-  injection attempt is a `422` instead of a silently empty result set;
-* validation runs **before** the repository is called — a malformed filter
-  never reaches the database.
+`escape_like()` is exported for any future prefix search: `%`, `_` and `\` are
+escaped so user text cannot turn a bounded lookup into a full scan.
 
-On the ingest path the same allow-list applies to `transaction_hash`,
-`asset_code`, operation type and account fields, and amounts are bounded to a
-signed 64-bit stroop value. A record that fails is logged as
-`tx_indexer_skipped_record` and dropped; it never aborts the batch or writes a
-row the ledger cannot represent.
+## Distributed tracing (#715)
 
-### Error responses
+Spans use the project-wide OTel setup (`app/core/tracing.py`), which is
+initialised once in `app/main.py` and exported over OTLP when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set. One ingest pass is one trace:
 
-| Status | `error_code` | When |
-|--------|--------------|------|
-| 401 | `unauthorized` | Missing or invalid bearer token |
-| 403 | `forbidden` | Caller's role cannot read the index |
-| 404 | `not_found` | Hash is not indexed |
-| 422 | `unprocessable_entity` | A filter does not match its allow-list, `created_after` > `created_before`, or `cursor` is invalid |
+| Span | Parent | Key attributes |
+| --- | --- | --- |
+| `tx_indexer.run_once` | (root of the pass) | `tx_indexer.component`, `tx_indexer.cursor_present`, `tx_indexer.fetched`, `tx_indexer.inserted` |
+| `tx_indexer.fetch_page` | `run_once` | `tx_indexer.batch_size`, `tx_indexer.cursor_present`, `tx_indexer.next_cursor_present` |
+| `tx_indexer.persist` | `run_once` | `tx_indexer.fetched`, `tx_indexer.inserted` |
 
-Errors use the RFC 7807 envelope described in
-[docs/RFC7807.md](RFC7807.md).
+* **Retries are span events**, not spans: each backoff adds a `retry` event on
+  `fetch_page` with `attempt`, `delay_seconds` and `error.type`, so a flappy
+  Horizon shows up as a single span with a burst of events instead of a span
+  forest.
+* **Failures** record the exception (`exception` event) and set the span status
+  to `ERROR`; the pass and the failing child both carry it, so a trace search
+  for `ERROR` finds the ingest, not just the leaf.
+* **Context propagation:** the active W3C `traceparent` is sent on the Horizon
+  request, so an instrumented upstream joins the same trace. No active span
+  means no header — the client stays a plain HTTP call.
+* The tracer is injectable (`TxIndexer(..., tracer=...)`); production uses the
+  module tracer and tests assert span shape against an in-memory exporter
+  without touching the process-global provider.
 
-## Complexity budget
-
-The indexer's modules are kept deliberately flat (`app/services/tx_indexer.py`,
-`app/services/tx_indexer_input.py`, `app/repositories/tx_indexer_repository.py`,
-`app/api/v1/endpoints/indexer.py`). Rather than refactor once and let nesting
-creep back, `tests/test_tx_indexer_complexity.py` measures every function with
-the standard McCabe count and fails above **8**:
-
-```
-complexity = 1 + decision points (if/elif, for, while, except,
-             conditional expression, assert, match cases, extra boolean
-             operands, comprehensions)
-```
-
-Single-purpose helpers keep each unit small:
-
-| Was | Now |
-|-----|-----|
-| `IndexedTransaction.from_horizon_record` (11) | one parser per field: `_parse_transaction_hash`, `_parse_amount`, `_parse_accounts`, `_parse_asset_code`, `_parse_operation_type` |
-| `HorizonClient.fetch_payments` (9) | `_get_page` (transport + error mapping), `_send`, `_page_params`, `_decode_page` |
-| `TxIndexerRepository.build_query` (8) | `_apply_equalities`, `_apply_account`, `_apply_bounds`, driven by the `EQUALITY_COLUMNS` / `DATE_BOUNDS` tables |
-
-The guard is part of the normal test run — no extra tooling, no new
-dependency — and fails with the offending function names and scores.
+> Note: `get_current_traceparent()` previously emitted an extra `0` in front of
+> the flags field (`...-001`), which is not a valid W3C `traceparent`, so
+> receivers dropped the context. This PR fixes the header to the 2-hex flags
+> form; it also repairs propagation for webhook deliveries, which use the same
+> helper.
 
 ## Tests
 
-| File | Covers |
-|------|--------|
-| `tests/test_tx_indexer_ingest.py` | Record normalization, stroop conversion, skip behaviour, cursor advance |
-| `tests/test_tx_indexer_openapi.py` | OpenAPI document: paths, parameters, descriptions, response codes, examples |
-| `tests/test_tx_indexer_input_sanitization.py` | Allow-list sanitizers and their HTTP/ingest failure modes |
-| `tests/test_tx_indexer_complexity.py` | Cyclomatic-complexity budget for every indexer module |
+`tests/test_tx_indexer_retry.py` covers the backoff curve, jitter bounds,
+retryable-vs-final classification, exhaustion semantics, the retry path through
+`TxIndexer.run_once`, record parsing, and the `ON CONFLICT` dedupe (Postgres
+marked). Sleep and RNG are injected, so the suite never waits.
 
-No network access is needed: the Horizon transport is injectable and the sink is
-a fake.
+`tests/test_tx_indexer_health.py` covers state transitions and JSON
+round-tripping, the fail-open Redis behaviour, every status/reason branch of
+the probe, the heartbeat written by `TxIndexer.run_once`, and the endpoint's
+200/503 mapping against a stubbed store and database probe.
+
+`tests/test_tx_indexer_sql_safety.py` covers the validators (including
+injection payloads in every field), inverted ranges, the sort whitelist, the
+`LIKE` escaping helper, filtered search against real rows, a compiled-statement
+assertion that the hash value is a bind parameter and absent from the SQL text,
+and the endpoint's `422` mapping — each followed by a `SELECT count(*)` proving
+the table survived.
+
+`tests/test_tx_indexer_tracing.py` asserts the span tree (names, shared trace
+id, parent span id), pass attributes, retry events, `ERROR` status and recorded
+exceptions on fetch/sink failures, `traceparent` forwarding (and absence without
+an active span), and that a non-recording tracer changes nothing.

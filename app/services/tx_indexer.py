@@ -1,177 +1,179 @@
-"""TxIndexer — incremental ingest of Stellar transactions into the ledger of record (#710).
+"""TxIndexer — incremental ingest of Stellar transactions into the ledger of record.
 
-The indexer walks the Stellar Horizon payment stream one bounded page at a time
-and writes every operation it sees into ``payment_transactions``, the table the
-payments API already reads. That table carries a unique ``transaction_hash``, so
-re-playing a page is idempotent: the sink skips hashes it has already stored
-instead of raising.
-
-One row per on-chain transaction
---------------------------------
-Horizon streams *operations*, and a single transaction can contain several
-payment operations (a batch payout, for example). The ledger of record is keyed
-by transaction, so the first payment operation seen for a transaction wins and
-the remaining operations of that same transaction are collapsed into it. The
-alternative — one row per operation — would need a new table and a migration;
-this keeps the existing payment history consistent.
+The indexer walks the Stellar payment stream one bounded page at a time and
+upserts every record into ``payment_transactions`` (idempotent on
+``transaction_hash``). Issue #713 adds retry with exponential backoff and
+jitter around the Horizon fetch: Horizon answers 429/5xx and drops connections
+during ordinary operation, and a single blip used to abort the whole pass, so
+the cursor stalled and every later batch stayed unindexed.
 
 Design notes
 ------------
-* ``IndexedTransaction.from_horizon_record`` is deliberately strict about the
-  fields the storage layer depends on. A record without a ``transaction_hash``
-  or a parseable amount is logged and skipped; it never reaches the sink,
-  because an un-keyable or mis-scaled row corrupts the ledger.
-* Amounts are converted from Horizon's decimal string to **stroops**
-  (1 unit = 10^7 stroops) so the stored value stays an exact integer.
-* The Horizon client is injectable and the transport is a plain
-  ``httpx.Client``, so tests exercise the whole ingest path without network
-  access.
+* ``RetryPolicy`` is a tiny, dependency-free reimplementation of what
+  ``tenacity`` gives us in ``app/core/db_retry.py``. It is used here instead of
+  ``tenacity`` because the fetch needs per-attempt logging with the ingest
+  context (cursor, batch size) and a jitter profile driven by settings, and
+  because the sleep and RNG are injected so the backoff curve can be asserted
+  without wall-clock waits.
+* Only *transient* failures are retried: connection/timeout errors, plus
+  408/425/429/500/502/503/504 responses. A 400 (malformed cursor) is retried
+  zero times — retrying it just burns the budget.
+* Retries are bounded by the total number of attempts, not by elapsed time, so
+  one pass cannot outlive its caller's expectations (batch size is small and
+  the delays cap at ``TX_INDEXER_BACKOFF_MAX_SECONDS``).
+* Parsing is deliberately strict: a record without a ``transaction_hash`` would
+  break the upsert's conflict target, so it fails the batch instead of writing
+  a row that can never be deduplicated.
+* Tracing (#715) follows the project-wide OTel setup in ``app/core/tracing.py``:
+  each pass is one ``tx_indexer.run_once`` span with ``fetch_page`` and
+  ``persist`` children, retries are span events, failures set the span status
+  to ERROR with the exception recorded, and the W3C ``traceparent`` of the
+  active span is forwarded to Horizon so the upstream call joins the same
+  trace. The tracer is injectable, so tests assert spans without touching the
+  process-global provider.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+import os
+import random
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 import httpx
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode, Tracer
 
-from app.services.tx_indexer_input import (
-    TxIndexerValidationError,
-    sanitize_account,
-    sanitize_asset_code,
-    sanitize_operation_type,
-    sanitize_transaction_hash,
-)
+from app.core.config import settings
+from app.core.tracing import get_current_traceparent
 
 logger = logging.getLogger(__name__)
 
-#: Horizon refuses ``limit`` values above 200 for the payments endpoint.
-HORIZON_MAX_PAGE_SIZE = 200
+#: HTTP statuses worth another attempt. Everything else (notably 4xx client
+#: errors) is deterministic and would fail identically on every retry.
+RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
-#: Stellar amounts are decimal strings with 7 decimal places.
+HORIZON_DEFAULT_URL = "https://horizon-testnet.stellar.org"
+
+#: Stellar amounts are decimal strings with 7 decimal places; the ledger column
+#: is an exact integer, so every amount is stored in stroops.
 STROOPS_PER_UNIT = Decimal(10) ** 7
-
-#: Native payments carry no ``asset_code``; this is the code used for XLM.
-NATIVE_ASSET_CODE = "XLM"
-
-#: Indexed rows are confirmed by definition — they come from a closed ledger.
-INDEXED_STATUS = "confirmed"
-
-#: ``payment_transactions.amount`` is a signed 64-bit column. A Horizon value
-#: that would overflow it is rejected at normalization time instead of raising a
-#: database error that aborts the whole batch.
-MAX_AMOUNT_STROOPS = 2**63 - 1
 
 
 class TxIndexerError(RuntimeError):
-    """Base class for every failure raised by the indexer."""
+    """A batch could not be fetched, parsed or stored."""
 
 
-class TxIndexerRecordError(TxIndexerError):
-    """A Horizon record cannot be normalized into an indexed transaction."""
+class TxIndexerRetryExhausted(TxIndexerError):
+    """The fetch still failed after every configured attempt."""
 
 
-class TxIndexerTransportError(TxIndexerError):
-    """Horizon could not be reached, or answered with an error status."""
+def is_retryable(exc: BaseException) -> bool:
+    """Return True when retrying *exc* has a realistic chance of succeeding."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRYABLE_STATUS_CODES
+    return False
 
 
-def _parse_transaction_hash(record: Mapping[str, Any]) -> str:
-    """Return the record's canonical transaction hash."""
-    return _sanitize_record_field(
-        record.get("transaction_hash"),
-        sanitizer=sanitize_transaction_hash,
-        error="record has no transaction_hash",
-    )
+@dataclass
+class RetryPolicy:
+    """Bounded exponential backoff with jitter.
 
-
-def _parse_amount(raw: Any) -> int:
-    """Convert Horizon's decimal amount string to stroops."""
-    try:
-        amount = int(Decimal(str(raw)) * STROOPS_PER_UNIT)
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise TxIndexerRecordError(f"invalid amount: {raw!r}") from exc
-
-    if amount < 0:
-        raise TxIndexerRecordError(f"negative amount: {raw!r}")
-    if amount > MAX_AMOUNT_STROOPS:
-        raise TxIndexerRecordError(f"amount out of range: {raw!r}")
-    return amount
-
-
-def _parse_accounts(record: Mapping[str, Any]) -> tuple[str, str]:
-    """Return the (source, destination) account pair for the payment type."""
-    source = record.get("from") or record.get("source_account") or record.get("funder")
-    destination = record.get("to") or record.get("account")
-    if not source or not destination:
-        raise TxIndexerRecordError("record has no from/to account pair")
-
-    return (
-        _sanitize_record_field(source, sanitizer=sanitize_account, error="invalid source account"),
-        _sanitize_record_field(destination, sanitizer=sanitize_account, error="invalid destination account"),
-    )
-
-
-def _parse_asset_code(record: Mapping[str, Any]) -> str:
-    """Return the asset code, defaulting native payments to ``XLM``."""
-    return _sanitize_record_field(
-        record.get("asset_code") or NATIVE_ASSET_CODE,
-        sanitizer=sanitize_asset_code,
-        error="invalid asset_code",
-    )
-
-
-def _parse_operation_type(record: Mapping[str, Any]) -> str:
-    """Return the operation type, defaulting to ``payment``."""
-    return _sanitize_record_field(
-        record.get("type") or "payment",
-        sanitizer=sanitize_operation_type,
-        error="invalid operation type",
-    )
-
-
-def _sanitize_record_field(
-    value: Any,
-    *,
-    sanitizer: Callable[[str | None], str | None],
-    error: str,
-) -> str:
-    """Run one allow-list sanitizer over a Horizon field.
-
-    Horizon values are untrusted input: they are the remote half of the ingest
-    path. A value that fails the allow-list is a record error, so the batch
-    skips it instead of writing something the ledger cannot represent.
+    The delay before retry ``n`` (1-based) is
+    ``min(base_delay * 2 ** (n - 1), max_delay)`` scaled by a uniform factor in
+    ``[1 - jitter_ratio, 1 + jitter_ratio]``. The jitter is what keeps a fleet
+    of indexers from hammering a recovering Horizon in lockstep.
     """
-    if value is None or str(value).strip() == "":
-        raise TxIndexerRecordError(error)
-    try:
-        sanitized = sanitizer(str(value))
-    except TxIndexerValidationError as exc:
-        raise TxIndexerRecordError(f"{error}: {exc.reason}") from exc
-    if not sanitized:
-        raise TxIndexerRecordError(error)
-    return sanitized
 
+    max_attempts: int = 4
+    base_delay: float = 0.5
+    max_delay: float = 8.0
+    jitter_ratio: float = 0.5
+    sleep: Callable[[float], None] = time.sleep
+    rng: Callable[[], float] = field(default=random.random)
 
-def _parse_created_at(value: Any) -> datetime:
-    """Parse Horizon's ISO-8601 ``created_at`` into an aware UTC datetime."""
-    if not value:
-        raise TxIndexerRecordError("record has no created_at")
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise TxIndexerRecordError(f"invalid created_at: {value!r}") from exc
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
+        if self.base_delay <= 0:
+            raise ValueError("base_delay must be > 0")
+        if self.max_delay < self.base_delay:
+            raise ValueError("max_delay must be >= base_delay")
+        if not 0 <= self.jitter_ratio <= 1:
+            raise ValueError("jitter_ratio must be between 0 and 1")
+
+    def compute_delay(self, attempt: int) -> float:
+        """Seconds to wait before retry number *attempt* (1 = first retry)."""
+        if attempt < 1:
+            raise ValueError("attempt must be >= 1")
+        raw = min(self.base_delay * (2 ** (attempt - 1)), self.max_delay)
+        factor = 1.0 + self.jitter_ratio * (2.0 * self.rng() - 1.0)
+        return min(max(raw * factor, 0.0), self.max_delay)
+
+    def call(
+        self,
+        fn: Callable[[], Any],
+        *,
+        description: str,
+        on_retry: Callable[[int, float, BaseException], None] | None = None,
+    ) -> Any:
+        """Run *fn*, retrying transient failures with backoff.
+
+        *on_retry* is invoked with (attempt, delay, error) before each sleep so
+        callers can attach span events without this class depending on OTel.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return fn()
+            except Exception as exc:
+                retryable = is_retryable(exc)
+                if not retryable or attempt >= self.max_attempts:
+                    if retryable:
+                        logger.error(
+                            "tx_indexer_retry_exhausted",
+                            extra={
+                                "event": "tx_indexer_retry_exhausted",
+                                "description": description,
+                                "attempts": attempt,
+                                "error": str(exc),
+                            },
+                        )
+                        raise TxIndexerRetryExhausted(
+                            f"{description} failed after {attempt} attempt(s): {exc}"
+                        ) from exc
+                    raise
+                delay = self.compute_delay(attempt)
+                if on_retry is not None:
+                    on_retry(attempt, delay, exc)
+                logger.warning(
+                    "tx_indexer_retry",
+                    extra={
+                        "event": "tx_indexer_retry",
+                        "description": description,
+                        "attempt": attempt,
+                        "max_attempts": self.max_attempts,
+                        "delay_seconds": round(delay, 3),
+                        "error": str(exc),
+                    },
+                )
+                self.sleep(delay)
 
 
 @dataclass(frozen=True)
 class IndexedTransaction:
-    """One on-chain payment operation normalized for the ledger of record."""
+    """One Horizon payment normalized to the ``payment_transactions`` shape."""
 
-    id: str
     transaction_hash: str
     type: str
     amount: int
@@ -179,169 +181,239 @@ class IndexedTransaction:
     from_address: str
     to_address: str
     created_at: datetime
-    status: str = INDEXED_STATUS
 
-    @classmethod
-    def from_horizon_record(cls, record: Mapping[str, Any]) -> IndexedTransaction:
-        """Normalize one Horizon payment record.
-
-        The field parsers are separate functions so this method stays a flat
-        list of "what a record needs" rather than a nested decision tree
-        (#712); each parser owns one field and one reason to fail.
-
-        Raises:
-            TxIndexerRecordError: the record is missing a field the ledger of
-                record relies on, or a field cannot be parsed.
-        """
-        transaction_hash = _parse_transaction_hash(record)
-        from_address, to_address = _parse_accounts(record)
-
-        return cls(
-            id=f"idx_{transaction_hash}",
-            transaction_hash=transaction_hash,
-            type=_parse_operation_type(record),
-            amount=_parse_amount(record.get("amount")),
-            asset_code=_parse_asset_code(record),
-            from_address=from_address,
-            to_address=to_address,
-            created_at=_parse_created_at(record.get("created_at")),
-        )
+    @property
+    def id(self) -> str:
+        # Deterministic and prefixed so an indexed row is never confused with a
+        # settlement row minted by PaymentRepository ("pay_...").
+        return f"txidx_{self.transaction_hash[:24]}"
 
 
-class TxSink(Protocol):
-    """The write side of the indexer (implemented by the repository)."""
+def _to_stroops(raw: Any) -> int:
+    """Convert a Horizon decimal amount string to an exact stroop count."""
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise TxIndexerError(f"Invalid payment amount {raw!r}") from exc
+    if not value.is_finite() or value < 0:
+        raise TxIndexerError(f"Invalid payment amount {raw!r}")
+    return int(value * STROOPS_PER_UNIT)
 
-    def upsert_many(self, transactions: Sequence[IndexedTransaction]) -> int:
-        """Store *transactions* idempotently and return the number of new rows."""
+
+def _parse_created_at(raw: Any) -> datetime:
+    if not raw:
+        return datetime.now(UTC)
+    text = str(raw).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise TxIndexerError(f"Invalid created_at {raw!r}") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def parse_horizon_record(record: Mapping[str, Any]) -> IndexedTransaction:
+    """Normalize a Horizon payment record.
+
+    Raises ``TxIndexerError`` for records that cannot be stored faithfully
+    rather than writing a half-populated row.
+    """
+    transaction_hash = str(record.get("transaction_hash") or "").strip()
+    if not transaction_hash:
+        raise TxIndexerError("Horizon record is missing transaction_hash")
+
+    return IndexedTransaction(
+        transaction_hash=transaction_hash,
+        type=str(record.get("type") or "payment"),
+        amount=_to_stroops(record.get("amount", "0")),
+        asset_code=str(record.get("asset_code") or "XLM"),
+        from_address=str(record.get("from") or ""),
+        to_address=str(record.get("to") or ""),
+        created_at=_parse_created_at(record.get("created_at")),
+    )
 
 
 @dataclass(frozen=True)
-class IngestResult:
-    """Outcome of a single ingest pass."""
+class FetchedPage:
+    """A page of raw Horizon records plus the cursor to resume from."""
+
+    records: Sequence[Mapping[str, Any]]
+    next_cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class IndexResult:
+    """What one ``TxIndexer.run_once`` pass did."""
 
     fetched: int
-    stored: int
-    skipped: int
-    cursor: str | None
+    inserted: int
+    next_cursor: str | None
 
 
-class HorizonClient:
-    """Minimal Horizon payments reader.
+class PaymentSource(Protocol):
+    """Upstream transaction stream (Horizon in production, a fake in tests)."""
 
-    Only the one endpoint the indexer needs is implemented: ``GET /payments``
-    ordered ascending, with cursor pagination.
+    def fetch_payments(self, cursor: str | None, limit: int) -> FetchedPage: ...
+
+    def close(self) -> None: ...
+
+
+class TransactionSink(Protocol):
+    """Durable destination for normalized transactions."""
+
+    def upsert_many(self, transactions: Sequence[IndexedTransaction]) -> int: ...
+
+
+class StateRecorder(Protocol):
+    """Publishes the outcome of a pass for the health probe (#714)."""
+
+    def record_success(self, *, cursor: str | None, inserted: int) -> None: ...
+
+    def record_failure(self, *, error: str) -> None: ...
+
+
+class HorizonPaymentSource:
+    """Thin Horizon ``/payments`` client.
+
+    Kept intentionally small: the retry policy, parsing and persistence live in
+    the indexer so this class has no policy of its own.
     """
 
     def __init__(
         self,
-        base_url: str,
-        *,
-        timeout: float = 10.0,
+        base_url: str | None = None,
+        timeout: float | None = None,
         client: httpx.Client | None = None,
     ) -> None:
-        if not base_url:
-            raise ValueError("base_url must not be empty")
-        self._base_url = base_url.rstrip("/")
-        self._timeout = timeout
-        self._client = client
+        self._base_url = (base_url or os.getenv("STELLAR_HORIZON_URL") or HORIZON_DEFAULT_URL).rstrip("/")
+        self._owns_client = client is None
+        self._client = client or httpx.Client(timeout=timeout or settings.TX_INDEXER_TIMEOUT_SECONDS)
 
-    def fetch_payments(
-        self,
-        cursor: str | None,
-        limit: int,
-    ) -> tuple[list[Mapping[str, Any]], str | None]:
-        """Fetch up to *limit* payments, returning them plus the next cursor."""
-        response = self._get_page(cursor, limit)
-        if response.status_code >= 400:
-            raise TxIndexerTransportError(f"Horizon returned HTTP {response.status_code}")
-        return _decode_page(response.json())
+    def fetch_payments(self, cursor: str | None, limit: int) -> FetchedPage:
+        params: dict[str, str] = {"order": "asc", "limit": str(limit)}
+        if cursor:
+            params["cursor"] = cursor
+        # Forward the active trace context (when there is one) so Horizon-side
+        # instrumentation and our span join the same distributed trace.
+        traceparent = get_current_traceparent()
+        headers = {"traceparent": traceparent} if traceparent else None
+        response = self._client.get(f"{self._base_url}/payments", params=params, headers=headers)
+        # 4xx/5xx become HTTPStatusError; RetryPolicy decides whether it is
+        # transient (429/5xx) or final (400 from a malformed cursor).
+        response.raise_for_status()
+        payload = response.json()
+        records = payload.get("_embedded", {}).get("records", [])
+        next_cursor = records[-1].get("paging_token") if records else cursor
+        return FetchedPage(records=records, next_cursor=str(next_cursor) if next_cursor else None)
 
-    def _get_page(self, cursor: str | None, limit: int) -> httpx.Response:
-        """Issue the request, translating transport failures into domain errors."""
-        try:
-            return self._send(_page_params(cursor, limit))
-        except httpx.HTTPError as exc:
-            raise TxIndexerTransportError(f"Horizon request failed: {exc}") from exc
-
-    def _send(self, params: dict[str, Any]) -> httpx.Response:
-        """Send with either the injected client or a short-lived one."""
-        if self._client is not None:
-            return self._client.get("/payments", params=params)
-        with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
-            return client.get("/payments", params=params)
-
-
-def _page_params(cursor: str | None, limit: int) -> dict[str, Any]:
-    """Build Horizon's query string for one page."""
-    params: dict[str, Any] = {"order": "asc", "limit": limit}
-    if cursor:
-        params["cursor"] = cursor
-    return params
-
-
-def _decode_page(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], str | None]:
-    """Extract the records and the resume cursor from a Horizon page."""
-    embedded = payload.get("_embedded") or {}
-    records = embedded.get("records") or []
-    next_cursor = records[-1].get("paging_token") if records else None
-    return [record for record in records if isinstance(record, Mapping)], next_cursor
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
 
 
 class TxIndexer:
-    """Fetch a page from Horizon, normalize it, and hand it to the sink."""
+    """Fetches one page per pass and hands the parsed rows to a sink."""
 
-    def __init__(self, client: HorizonClient, sink: TxSink, *, batch_size: int = HORIZON_MAX_PAGE_SIZE) -> None:
-        if not 1 <= batch_size <= HORIZON_MAX_PAGE_SIZE:
-            raise ValueError(f"batch_size must be between 1 and {HORIZON_MAX_PAGE_SIZE}")
-        self._client = client
+    def __init__(
+        self,
+        source: PaymentSource,
+        sink: TransactionSink,
+        policy: RetryPolicy | None = None,
+        batch_size: int | None = None,
+        state_recorder: StateRecorder | None = None,
+        tracer: Tracer | None = None,
+    ) -> None:
+        self._source = source
         self._sink = sink
-        self._batch_size = batch_size
+        self._state_recorder = state_recorder
+        self._tracer = tracer or trace.get_tracer(__name__)
+        self._policy = policy or RetryPolicy(
+            max_attempts=settings.TX_INDEXER_MAX_ATTEMPTS,
+            base_delay=settings.TX_INDEXER_BACKOFF_BASE_SECONDS,
+            max_delay=settings.TX_INDEXER_BACKOFF_MAX_SECONDS,
+            jitter_ratio=settings.TX_INDEXER_BACKOFF_JITTER_RATIO,
+        )
+        self._batch_size = batch_size or settings.TX_INDEXER_BATCH_SIZE
 
     @property
     def batch_size(self) -> int:
         return self._batch_size
 
-    def run_once(self, cursor: str | None = None) -> IngestResult:
-        """Run a single ingest pass starting after *cursor*."""
-        records, next_cursor = self._client.fetch_payments(cursor, self._batch_size)
-        transactions, skipped = self._normalize(records)
-        stored = self._sink.upsert_many(transactions) if transactions else 0
+    def fetch_page(self, cursor: str | None) -> FetchedPage:
+        """Fetch one page, retrying transient Horizon failures."""
+        with self._tracer.start_as_current_span("tx_indexer.fetch_page") as span:
+            span.set_attribute("tx_indexer.component", "tx-indexer")
+            span.set_attribute("tx_indexer.batch_size", self._batch_size)
+            span.set_attribute("tx_indexer.cursor_present", cursor is not None)
 
-        logger.info(
-            "tx_indexer_pass",
-            extra={
-                "event": "tx_indexer_pass",
-                "cursor": cursor,
-                "next_cursor": next_cursor,
-                "fetched": len(records),
-                "stored": stored,
-                "skipped": skipped,
-            },
-        )
-        return IngestResult(
-            fetched=len(records),
-            stored=stored,
-            skipped=skipped,
-            cursor=next_cursor or cursor,
-        )
-
-    def _normalize(self, records: Iterable[Mapping[str, Any]]) -> tuple[list[IndexedTransaction], int]:
-        """Normalize a page, collapsing operations that share a transaction.
-
-        Returns the deduplicated transactions and the number of records that
-        could not be normalized.
-        """
-        by_hash: dict[str, IndexedTransaction] = {}
-        skipped = 0
-        for record in records:
-            try:
-                transaction = IndexedTransaction.from_horizon_record(record)
-            except TxIndexerRecordError as exc:
-                skipped += 1
-                logger.warning(
-                    "tx_indexer_skipped_record",
-                    extra={"event": "tx_indexer_skipped_record", "error": str(exc)},
+            def _record_retry(attempt: int, delay: float, error: BaseException) -> None:
+                span.add_event(
+                    "retry",
+                    {
+                        "attempt": attempt,
+                        "delay_seconds": round(delay, 3),
+                        "error.type": type(error).__name__,
+                    },
                 )
-                continue
-            by_hash.setdefault(transaction.transaction_hash, transaction)
-        return list(by_hash.values()), skipped
+
+            try:
+                page = self._policy.call(
+                    lambda: self._source.fetch_payments(cursor=cursor, limit=self._batch_size),
+                    description=f"horizon payments fetch (cursor={cursor or 'start'})",
+                    on_retry=_record_retry,
+                )
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
+
+            span.set_attribute("tx_indexer.fetched", len(page.records))
+            span.set_attribute("tx_indexer.next_cursor_present", page.next_cursor is not None)
+            return page
+
+    def run_once(self, cursor: str | None = None) -> IndexResult:
+        """Index a single page and return the cursor the next pass should use."""
+        with self._tracer.start_as_current_span("tx_indexer.run_once") as span:
+            span.set_attribute("tx_indexer.component", "tx-indexer")
+            span.set_attribute("tx_indexer.cursor_present", cursor is not None)
+            try:
+                page = self.fetch_page(cursor)
+                transactions = [parse_horizon_record(record) for record in page.records]
+                with self._tracer.start_as_current_span("tx_indexer.persist") as persist_span:
+                    persist_span.set_attribute("tx_indexer.fetched", len(transactions))
+                    inserted = self._sink.upsert_many(transactions)
+                    persist_span.set_attribute("tx_indexer.inserted", inserted)
+            except Exception as exc:
+                # Every failure path (retries exhausted, unparseable record,
+                # write error) is visible to the health probe and to the trace.
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                self._record_failure(str(exc))
+                raise
+
+            span.set_attribute("tx_indexer.fetched", len(transactions))
+            span.set_attribute("tx_indexer.inserted", inserted)
+
+            logger.info(
+                "tx_indexer_batch_indexed",
+                extra={
+                    "event": "tx_indexer_batch_indexed",
+                    "fetched": len(transactions),
+                    "inserted": inserted,
+                    "cursor": cursor,
+                    "next_cursor": page.next_cursor,
+                },
+            )
+            self._record_success(cursor=page.next_cursor, inserted=inserted)
+            return IndexResult(
+                fetched=len(transactions),
+                inserted=inserted,
+                next_cursor=page.next_cursor,
+            )
+
+    def _record_success(self, *, cursor: str | None, inserted: int) -> None:
+        if self._state_recorder is not None:
+            self._state_recorder.record_success(cursor=cursor, inserted=inserted)
+
+    def _record_failure(self, error: str) -> None:
+        if self._state_recorder is not None:
+            self._state_recorder.record_failure(error=error)

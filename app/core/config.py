@@ -93,11 +93,21 @@ class Settings(BaseSettings):
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
-    # TxIndexer (#710): where one ingest pass reads from and how much it reads.
-    # ``TX_INDEXER_BATCH_SIZE`` mirrors Horizon's own page cap of 200; asking
-    # for more is rejected by Horizon, so the default is the maximum.
-    TX_INDEXER_HORIZON_URL: str = "https://horizon-testnet.stellar.org"
-    TX_INDEXER_BATCH_SIZE: int = 200
+    # TxIndexer (#713): the chain-ingest loop fetches one page of payments per
+    # pass and retries transient Horizon failures with exponential backoff.
+    # The delay before retry N is BATCH-independent: min(base * 2**(N-1), max)
+    # with +/- TX_INDEXER_BACKOFF_JITTER_RATIO jitter on top.
+    TX_INDEXER_BATCH_SIZE: int = 50  # payments fetched per Horizon page
+    TX_INDEXER_MAX_ATTEMPTS: int = 4  # total attempts per page fetch (first try included)
+    TX_INDEXER_BACKOFF_BASE_SECONDS: float = 0.5  # delay before the first retry
+    TX_INDEXER_BACKOFF_MAX_SECONDS: float = 8.0  # ceiling for any single backoff
+    TX_INDEXER_BACKOFF_JITTER_RATIO: float = 0.5  # +/- fraction applied to each delay
+    TX_INDEXER_TIMEOUT_SECONDS: float = 10.0  # Horizon HTTP timeout
+    # #714: the ingest worker publishes a heartbeat to Redis; the health probe
+    # (served by the API process) reads it back. Above this lag the probe
+    # reports "degraded" because the stream is no longer keeping up.
+    TX_INDEXER_HEALTH_MAX_LAG_SECONDS: int = 120
+    TX_INDEXER_STATE_TTL_SECONDS: int = 7 * 24 * 3600  # heartbeat key expiry
     # Trusted-proxy settings (#205)
     # Number of trusted reverse-proxy hops in front of this app.
     # Set to 0 when running without a proxy (uses direct connection IP).
@@ -187,6 +197,21 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
     WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
+    # Event listener fan-out policy (#740, #741).
+    # How long a resolved subscriber list is considered fresh. The webhook rows
+    # themselves are always re-read from the database, so this only bounds how
+    # long a registration change takes to be noticed.
+    EVENT_LISTENER_CACHE_TTL_SECONDS: int = 15
+    # How many events a single subscriber may receive per window. The number
+    # of emissions is not under the subscriber's control (one event per
+    # affected device), so without a budget one subscriber can amplify the
+    # whole fan-out. The default is deliberately generous -- an incident that
+    # affects a hundred devices emits a hundred events to the same subscriber
+    # -- and only exists to stop a runaway fan-out.
+    EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER: int = 600
+    # Length of the subscriber event budget window, in seconds.
+    EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
     # Fix #576: hard cap on how many completed Idempotency-Key records are
@@ -231,6 +256,27 @@ class Settings(BaseSettings):
     # current behaviour; requests without the header are served as "latest".
     API_VERSION_MIN_SUPPORTED: str = "1.0.0"
     API_VERSION_MAX_SUPPORTED: str = "1.0.0"
+
+    # Block poller settings (#725, #727, #728, #729)
+    # Poll interval between successful block fetches.
+    BLOCK_POLLER_POLL_INTERVAL_SECONDS: float = 5.0
+    # Number of retries after the initial fetch attempt.
+    BLOCK_POLLER_MAX_RETRIES: int = 3
+    # Exponential backoff base delay and hard cap, in seconds.
+    BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS: float = 30.0
+    # Fraction of the computed delay that may be randomised (0.0 - 1.0).
+    BLOCK_POLLER_RETRY_JITTER_RATIO: float = 0.25
+    # Sliding-window rate limit applied to upstream block fetches.
+    BLOCK_POLLER_RATE_LIMIT_REQUESTS: int = 10
+    BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS: float = 1.0
+    # Input sanitization bounds for untrusted block payloads.
+    BLOCK_POLLER_MAX_PAYLOAD_BYTES: int = 5 * 1024 * 1024
+    BLOCK_POLLER_MAX_TRANSACTIONS: int = 1000
+    BLOCK_POLLER_MAX_IDENTIFIER_LENGTH: int = 256
+    BLOCK_POLLER_MAX_STRING_LENGTH: int = 4096
+    BLOCK_POLLER_MAX_COLLECTION_ITEMS: int = 10000
+    BLOCK_POLLER_MAX_DEPTH: int = 8
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
@@ -313,14 +359,6 @@ def validate_critical_settings(config: Settings) -> None:
             f"ENVIRONMENT={config.ENVIRONMENT!r} is not one of {sorted(DEV_ENVIRONMENTS)}."
         )
 
-    if not 1 <= config.TX_INDEXER_BATCH_SIZE <= 200:
-        errors.append(
-            f"TX_INDEXER_BATCH_SIZE must be between 1 and 200 (Horizon's page cap), "
-            f"got {config.TX_INDEXER_BATCH_SIZE}."
-        )
-    if not config.TX_INDEXER_HORIZON_URL.strip():
-        errors.append("TX_INDEXER_HORIZON_URL must not be empty.")
-
     if not config.PAYMENT_ASSET_CODE.strip():
         errors.append("PAYMENT_ASSET_CODE must not be empty.")
     if not config.PAYMENT_FROM_ADDRESS.strip():
@@ -330,6 +368,26 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.TRUSTED_PROXY_COUNT < 0:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
+
+    # #713: a nonsensical backoff profile either spins (base <= 0 with jitter)
+    # or hides a transient outage behind an unbounded pause, so reject it at
+    # boot instead of at the first failed Horizon call.
+    if not 1 <= config.TX_INDEXER_BATCH_SIZE <= 200:
+        errors.append("TX_INDEXER_BATCH_SIZE must be between 1 and 200.")
+    if not 1 <= config.TX_INDEXER_MAX_ATTEMPTS <= 10:
+        errors.append("TX_INDEXER_MAX_ATTEMPTS must be between 1 and 10.")
+    if config.TX_INDEXER_BACKOFF_BASE_SECONDS <= 0:
+        errors.append("TX_INDEXER_BACKOFF_BASE_SECONDS must be > 0.")
+    if config.TX_INDEXER_BACKOFF_MAX_SECONDS < config.TX_INDEXER_BACKOFF_BASE_SECONDS:
+        errors.append("TX_INDEXER_BACKOFF_MAX_SECONDS must be >= TX_INDEXER_BACKOFF_BASE_SECONDS.")
+    if not 0 <= config.TX_INDEXER_BACKOFF_JITTER_RATIO <= 1:
+        errors.append("TX_INDEXER_BACKOFF_JITTER_RATIO must be between 0 and 1.")
+    if config.TX_INDEXER_TIMEOUT_SECONDS <= 0:
+        errors.append("TX_INDEXER_TIMEOUT_SECONDS must be > 0.")
+    if config.TX_INDEXER_HEALTH_MAX_LAG_SECONDS <= 0:
+        errors.append("TX_INDEXER_HEALTH_MAX_LAG_SECONDS must be > 0.")
+    if config.TX_INDEXER_STATE_TTL_SECONDS <= 0:
+        errors.append("TX_INDEXER_STATE_TTL_SECONDS must be > 0.")
 
     if config.ENVIRONMENT not in {"local", "test"}:
         if (
@@ -388,6 +446,54 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.BLOCK_POLLER_POLL_INTERVAL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_POLL_INTERVAL_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_RETRIES < 0:
+        errors.append("BLOCK_POLLER_MAX_RETRIES must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS < 0:
+        errors.append("BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if not 0 <= config.BLOCK_POLLER_RETRY_JITTER_RATIO <= 1:
+        errors.append("BLOCK_POLLER_RETRY_JITTER_RATIO must be between 0 and 1.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_REQUESTS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_REQUESTS must be > 0.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_PAYLOAD_BYTES <= 0:
+        errors.append("BLOCK_POLLER_MAX_PAYLOAD_BYTES must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_TRANSACTIONS <= 0:
+        errors.append("BLOCK_POLLER_MAX_TRANSACTIONS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_IDENTIFIER_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_IDENTIFIER_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_STRING_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_STRING_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_COLLECTION_ITEMS <= 0:
+        errors.append("BLOCK_POLLER_MAX_COLLECTION_ITEMS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_DEPTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_DEPTH must be > 0.")
+
+    if config.EVENT_LISTENER_CACHE_TTL_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_CACHE_TTL_SECONDS must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))
