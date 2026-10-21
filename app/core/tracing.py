@@ -195,7 +195,11 @@ def get_current_traceparent() -> str | None:
         return None
 
     span_context = current_span.get_span_context()
-    return f"00-{span_context.trace_id:032x}-{span_context.span_id:016x}-0{span_context.trace_flags:02x}"
+    # W3C traceparent: 2-hex version, 32-hex trace id, 16-hex span id, 2-hex
+    # flags. The flags field used to be prefixed with an extra "0", which made
+    # the header 3 characters wide and invalid, so receivers silently dropped
+    # the context instead of continuing the trace.
+    return f"00-{span_context.trace_id:032x}-{span_context.span_id:016x}-{span_context.trace_flags:02x}"
 
 
 def traced(name: str | None = None, attributes: dict[str, Any] | None = None):

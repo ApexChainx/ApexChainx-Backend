@@ -74,6 +74,39 @@ Configuration (in app.core.config):
 
 logger = logging.getLogger(__name__)
 
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_USER_ID_MAX_LENGTH = 64
+
+
+def _validate_email_param(email: str) -> str:
+    """Normalize a path/query email argument, rejecting malformed input with 422.
+
+    Admin session routes took ``{email}`` straight from the path into a session
+    lookup. Normalizing here keeps the lookup key canonical (Stellar-side
+    accounts are case-insensitive on the local part of our stored emails) and
+    stops junk values from reaching the repository.
+    """
+    normalized = (email or "").strip().lower()
+    if not _EMAIL_PATTERN.match(normalized):
+        raise CodedHTTPException(status_code=422, detail="Invalid email address")
+    return normalized
+
+
+def _validate_user_id(user_id: str) -> str:
+    """Normalize a user id argument, rejecting empty or over-long ids with 422."""
+    normalized = str(user_id or "").strip()
+    if not normalized or len(normalized) > _USER_ID_MAX_LENGTH:
+        raise CodedHTTPException(status_code=422, detail="Invalid user id")
+    return normalized
+
+
+def _validate_wallet_or_422(raw: str) -> None:
+    """Validate a Stellar wallet address, surfacing the reason as 422."""
+    try:
+        normalize_wallet(raw)
+    except WalletAddressError as exc:
+        raise CodedHTTPException(status_code=422, detail=str(exc)) from exc
+
 
 def _get_client_ip(request: Request) -> str:
     """
@@ -215,12 +248,13 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
     try:
         with timer("auth_register_duration", {"endpoint": "register"}):
-            user = AuthStore.register(payload, db=db)
+            AuthStore.register(payload, db=db)
     except ValueError as exc:
         increment_counter("auth_register_total", tags={"status": "error"})
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
+    return user
 
     return user
 
@@ -372,7 +406,8 @@ def update_profile(
 
     repo = UserRepository(db)
     try:
-        updated = repo.update_profile(
+        updated = run_with_db_retry(
+            repo.update_profile,
             user_id=current_user.id,
             full_name=payload.full_name,
             stellar_wallet=payload.stellar_wallet,
