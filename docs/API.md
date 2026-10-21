@@ -801,6 +801,51 @@ Get payment analytics.
 
 ## Transaction Indexer
 
+### GET `/api/v1/indexer/transactions`
+
+Search the transactions the indexer has stored. Requires an engineer role.
+
+| Parameter | Type | Rules |
+| --- | --- | --- |
+| `transaction_hash` | string | 64 hex characters |
+| `account` | string | valid Stellar public key; matches sender or recipient |
+| `asset_code` | string | 1-12 alphanumerics, case-insensitive |
+| `status` | string | `pending`, `confirmed` or `failed` |
+| `type` | string | lowercase label, e.g. `payment` |
+| `outage_id` | string | `^[A-Za-z0-9_-]{1,64}$` |
+| `min_amount` / `max_amount` | integer | stroops, `min <= max` |
+| `created_after` / `created_before` | ISO-8601 | `after <= before` |
+| `sort_by` | string | `created_at` (default), `confirmed_at`, `amount`, `status` |
+| `sort_dir` | string | `asc` or `desc` (default) |
+| `limit` | integer | 1-200, default 50 |
+
+```http
+GET /api/v1/indexer/transactions?account=GABC...&status=confirmed&sort_by=amount&sort_dir=desc&limit=20
+```
+
+```json
+[
+  {
+    "id": "txidx_3b550f2cac6f4a778d7cf",
+    "transaction_hash": "3b550f2cac6f...",
+    "type": "payment",
+    "amount": 3000,
+    "asset_code": "USDC",
+    "from_address": "GABC...",
+    "to_address": "GDEF...",
+    "status": "confirmed",
+    "outage_id": null,
+    "created_at": "2026-10-20T11:50:00+00:00",
+    "confirmed_at": "2026-10-20T11:50:02+00:00"
+  }
+]
+```
+
+Invalid filters return `422` with the reason and never reach the database, e.g.
+sort keys outside the whitelist, non-hex hashes, malformed Stellar accounts or
+an inverted amount/time window. See
+[TX_INDEXER.md](TX_INDEXER.md#query-path-hardening-716).
+
 ### GET `/api/v1/indexer/health`
 
 Probe for the TxIndexer ingest loop. Reads the worker's Redis heartbeat and

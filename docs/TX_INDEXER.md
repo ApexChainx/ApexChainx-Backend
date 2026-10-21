@@ -131,6 +131,44 @@ heartbeat reports `no_successful_run`, never `down`. The response is
 unauthenticated, like `/health/readiness`; `last_error` is truncated to 240
 characters.
 
+## Query path hardening (#716)
+
+The read side (`GET /api/v1/indexer/transactions`) accepts eleven optional
+filters. Everything a caller sends is untrusted, so the path is built in two
+layers:
+
+1. **`app/services/tx_indexer_query.py` — validate, then bind.**
+   - `transaction_hash`: 64 hex characters, lowercased. Anything else (including
+     `'; DROP TABLE ...`) is a `422`.
+   - `account`: a syntactically valid Stellar public key, normalized through
+     `app.utils.wallet_address.normalize`; it is compared against
+     `from_address` **or** `to_address`.
+   - `asset_code`: 1-12 alphanumerics, uppercased.
+   - `status`: one of `pending`, `confirmed`, `failed` (from `PaymentStatus`).
+   - `type`: lowercase label grammar `^[a-z][a-z0-9_]{0,31}$`.
+   - `outage_id`: `^[A-Za-z0-9_-]{1,64}$`.
+   - `min_amount` / `max_amount`: coerced to exact `BIGINT` stroops, range
+     checked, and `min <= max` enforced. Floats, booleans and `2**63` are
+     rejected.
+   - `created_after` / `created_before`: real `datetime`s with the ordering
+     enforced.
+   - `sort_by`: resolved through the `{created_at, confirmed_at, amount,
+     status}` whitelist; `sort_dir` through `{asc, desc}`. The repository looks
+     the **whitelisted name** up in its column map, so a caller can never name a
+     column (or inject SQL through the order-by).
+   - `limit`: 1-200.
+2. **Repository binds every value.** `TxIndexerRepository.search` filters with
+   SQLAlchemy comparison operators (`==`, `>=`, `<=`, `OR`), i.e. every value
+   becomes a statement parameter. There is no `text()` or f-string SQL in the
+   query path, and the ORDER BY clause is a column object from the map above.
+
+The endpoint maps `TxIndexerQueryError` to a coded `422` with the reason, so a
+bad filter is a clear client error rather than a 500 — and a rejected filter
+never reaches the database.
+
+`escape_like()` is exported for any future prefix search: `%`, `_` and `\` are
+escaped so user text cannot turn a bounded lookup into a full scan.
+
 ## Distributed tracing (#715)
 
 Spans use the project-wide OTel setup (`app/core/tracing.py`), which is
@@ -174,6 +212,13 @@ marked). Sleep and RNG are injected, so the suite never waits.
 round-tripping, the fail-open Redis behaviour, every status/reason branch of
 the probe, the heartbeat written by `TxIndexer.run_once`, and the endpoint's
 200/503 mapping against a stubbed store and database probe.
+
+`tests/test_tx_indexer_sql_safety.py` covers the validators (including
+injection payloads in every field), inverted ranges, the sort whitelist, the
+`LIKE` escaping helper, filtered search against real rows, a compiled-statement
+assertion that the hash value is a bind parameter and absent from the SQL text,
+and the endpoint's `422` mapping — each followed by a `SELECT count(*)` proving
+the table survived.
 
 `tests/test_tx_indexer_tracing.py` asserts the span tree (names, shared trace
 id, parent span id), pass attributes, retry events, `ERROR` status and recorded
