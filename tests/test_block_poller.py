@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from app.core.config import settings, validate_critical_settings
-from app.services.block_poller import (
+from app.services.block_poller_hardening import (
     BlockPoller,
     BlockPollerFetchError,
     BlockPollerValidationError,

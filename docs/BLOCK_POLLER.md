@@ -1,6 +1,6 @@
 # Block Poller
 
-`app/services/block_poller.py` provides a reusable, fault-tolerant poller for
+`app/services/block_poller_hardening.py` provides a reusable, fault-tolerant poller for
 sequential blockchain blocks. It is intentionally transport-agnostic: callers
 supply a `fetch_block(sequence)` callable and a `process_block(block)` callable,
 so the poller can sit in front of Horizon, a Soroban RPC endpoint, or a local
@@ -18,7 +18,7 @@ The implementation covers the following tracked issues:
 ## Usage
 
 ```python
-from app.services.block_poller import BlockPoller
+from app.services.block_poller_hardening import BlockPoller
 
 poller = BlockPoller(
     fetch_block=horizon.get_ledger,
@@ -98,7 +98,7 @@ cursor is unchanged.
 A custom limiter can be injected for tests or shared multi-worker budgets:
 
 ```python
-from app.services.block_poller import BlockPoller, SlidingWindowRateLimiter
+from app.services.block_poller_hardening import BlockPoller, SlidingWindowRateLimiter
 
 limiter = SlidingWindowRateLimiter(max_requests=5, window_seconds=2)
 poller = BlockPoller(fetch_block, process_block, rate_limiter=limiter)
