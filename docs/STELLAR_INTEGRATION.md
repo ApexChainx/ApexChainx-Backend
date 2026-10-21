@@ -472,10 +472,27 @@ while page.has_more:
 
 `poll_all()` walks the backlog for you and stops after `max_pages`, so a
 backlog that never shrinks — because the network keeps answering "pending" —
-cannot keep the worker busy forever. A transaction the network cannot be
-reached for is counted as *skipped* and the reason is reported: one
-unreachable transaction never aborts the cycle, so the remaining payments are
-still settled.
+cannot keep the worker busy forever.
+
+### Identifier hardening
+
+Everything the poller accepts from outside the process is validated against an
+allowlist *before* it reaches the database
+(`app/services/block_poller_security.py`):
+
+| Value | Rule |
+| --- | --- |
+| Transaction hash | exactly 64 lowercase hexadecimal characters |
+| Payment status | one of `pending`, `confirmed`, `failed` |
+| Page size | an integer, clamped into `1..100` |
+
+A value that does not match is rejected with `UnsafeIdentifierError` and never
+reaches a statement. The statements themselves only use bound parameters, so
+even a value that slipped through could not change the shape of the query.
+
+A transaction the network cannot be reached for is counted as *skipped* and
+the reason is reported: one unreachable transaction never aborts the cycle, so
+the remaining payments are still settled.
 
 ---
 

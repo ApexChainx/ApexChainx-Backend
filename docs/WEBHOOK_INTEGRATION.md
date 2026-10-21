@@ -391,6 +391,42 @@ always be tied back to the request or task that caused it.
 - Consider receiver timezone (should normalize to UTC internally)
 - Store as UTC datetime (not string) for comparison
 
+### Fan-Out Budget and Subscriber Cache
+
+Every domain event is fanned out by the **event listener**
+(`app/services/event_listener.py`), which is the single place that decides
+*who* hears about an event and *how often* a subscriber may hear about it.
+
+**Subscriber cache.** The set of subscribers for an event is resolved once and
+cached in Redis for `EVENT_LISTENER_CACHE_TTL_SECONDS` (default 15 s). Only the
+subscriber *ids* are cached; the rows themselves are re-read from the database
+on every hit, so a webhook that was deactivated or deleted stops being
+delivered to as soon as the entry expires. Registering, updating or deleting a
+webhook drops the cached subscriber lists immediately, so a new registration
+receives the very next event.
+
+If Redis is unreachable the cache degrades to "no cache" -- it never fails an
+event. After a few consecutive failures it stops talking to Redis for a
+cooldown, so an outage does not add a connection timeout to every event.
+
+**Fan-out budget.** The number of events a subscriber receives is not under the
+subscriber's control: an outage affecting a hundred devices emits a hundred
+`sla.violation` events to the same subscriber. Each subscriber therefore has a
+budget of `EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER` events per
+`EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS` (default 600 per 60 s). The budget
+is kept in Redis so every worker enforces the same limit; without Redis it
+falls back to an in-process counter.
+
+When a subscriber is over its budget the event is **not** delivered to it, and
+the drop is reported:
+
+- the counter `event_listener.rate_limited` is incremented (tagged with the
+  event), and
+- a warning is logged with `event_name=event_listener_rate_limited`.
+
+The rest of the fan-out continues -- one noisy subscriber never stops the
+other subscribers from being told.
+
 ## References
 
 - [RFC 5869: HMAC-based Key Derivation Function](https://tools.ietf.org/html/rfc5869)

@@ -8,6 +8,15 @@ payments that are still pending and asks the network about them.
 The backlog is read with a cursor rather than with OFFSET/LIMIT, because the
 rows the poller walks are exactly the rows that change under it -- a
 payment that gets confirmed shifts every later row (issue #733).
+
+Hardening (issue #732)
+----------------------
+Everything that reaches the database from outside the process is validated
+against an allowlist first (see :mod:`app.services.block_poller_security`).
+A transaction hash that is not 64 lowercase hexadecimal characters, or a
+status outside the known set, is rejected before it can be used as a filter
+value.  The statements themselves only use bound parameters, so even a value
+that slipped through could not change the shape of the query.
 """
 
 from __future__ import annotations
@@ -27,14 +36,20 @@ from app.services.block_poller_pagination import (
     decode_payment_cursor,
     encode_payment_cursor,
 )
+from app.services.block_poller_security import (
+    POLLABLE_PAYMENT_STATUSES,
+    validate_page_size,
+    validate_payment_status,
+    validate_transaction_hash,
+)
+from app.utils.logging import get_structured_logger
+
+logger = get_structured_logger(__name__)
 
 # The statuses the network can report for a transaction.
 NETWORK_STATUS_CONFIRMED = "confirmed"
 NETWORK_STATUS_FAILED = "failed"
 NETWORK_STATUS_PENDING = "pending"
-
-# The poller only ever looks at payments that have not been settled yet.
-POLLABLE_PAYMENT_STATUSES = frozenset({"pending"})
 
 
 class BlockPollerError(RuntimeError):
@@ -128,13 +143,43 @@ class BlockPoller:
 
         return PollerPage(payments=page_rows, next_cursor=next_cursor, has_more=has_more)
 
+    def pending_payments(self, limit: int = 50) -> list[PaymentTransactionORM]:
+        """Return the oldest payments that are still awaiting confirmation.
+
+        The status filter uses a fixed set of values, and the transaction
+        identifiers are bound as parameters -- nothing that reaches the
+        statement is built by string concatenation.
+        """
+        page_size = validate_page_size(limit)
+        return (
+            self._db.query(PaymentTransactionORM)
+            .filter(
+                and_(
+                    PaymentTransactionORM.status.in_(sorted(POLLABLE_PAYMENT_STATUSES)),
+                    PaymentTransactionORM.confirmed_at.is_(None),
+                )
+            )
+            .order_by(PaymentTransactionORM.created_at.asc())
+            .limit(page_size)
+            .all()
+        )
+
+    def payment_by_hash(self, transaction_hash: str) -> PaymentTransactionORM | None:
+        """Return the payment with ``transaction_hash``, if there is one.
+
+        Raises:
+            UnsafeIdentifierError: when the hash is not well formed.
+        """
+        validated = validate_transaction_hash(transaction_hash)
+        return self._db.query(PaymentTransactionORM).filter(PaymentTransactionORM.transaction_hash == validated).first()
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
 
     def mark_confirmed(self, payment: PaymentTransactionORM) -> PaymentTransactionORM:
         """Mark ``payment`` as confirmed on-chain."""
-        payment.status = NETWORK_STATUS_CONFIRMED
+        payment.status = validate_payment_status(NETWORK_STATUS_CONFIRMED)
         payment.confirmed_at = datetime.now(UTC)
         self._db.commit()
         self._db.refresh(payment)
@@ -142,9 +187,15 @@ class BlockPoller:
 
     def mark_failed(self, payment: PaymentTransactionORM, reason: str) -> PaymentTransactionORM:
         """Mark ``payment`` as failed after the network rejected it."""
-        payment.status = NETWORK_STATUS_FAILED
+        payment.status = validate_payment_status(NETWORK_STATUS_FAILED)
         self._db.commit()
         self._db.refresh(payment)
+        logger.warning(
+            "block_poller_payment_failed",
+            event_name="block_poller_payment_failed",
+            payment_id=payment.id,
+            reason=reason,
+        )
         return payment
 
     # ------------------------------------------------------------------
@@ -158,15 +209,17 @@ class BlockPoller:
             One of ``confirmed``, ``failed`` or ``pending``.
 
         Raises:
+            UnsafeIdentifierError: when the hash is not well formed.
             BlockPollerUnavailableError: when there is no network client.
             BlockPollerNetworkError: when the network could not be reached or
                 answered with something the poller does not understand.
         """
+        validated = validate_transaction_hash(transaction_hash)
         if self._horizon is None:
             raise BlockPollerUnavailableError("no network client is configured for the block poller")
 
         try:
-            response = self._horizon.transaction(transaction_hash)
+            response = self._horizon.transaction(validated)
         except Exception as exc:  # the network client may raise anything
             raise BlockPollerNetworkError(f"the network could not be reached: {exc}") from exc
 
@@ -227,6 +280,12 @@ class BlockPoller:
             except BlockPollerError as exc:
                 report.skipped += 1
                 report.errors.append(str(exc))
+                logger.warning(
+                    "block_poller_check_failed",
+                    event_name="block_poller_check_failed",
+                    payment_id=payment.id,
+                    error=str(exc),
+                )
                 continue
 
             if status == NETWORK_STATUS_CONFIRMED:
