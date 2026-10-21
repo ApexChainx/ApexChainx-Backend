@@ -24,7 +24,7 @@ from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, 
 from app.services.audit_log import audit_log
 from app.services.formatters import canonical_json
 from app.services.metrics import increment_counter, set_gauge
-from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
+from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION, invalidate_event_listener_cache
 from app.services.webhook_uniqueness import DuplicateWebhookError, handle_create_integrity_error
 from app.utils.logging import get_structured_logger
 from app.utils.network_validation import validate_webhook_url
@@ -424,6 +424,9 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         raise
     db.refresh(webhook)
     _warn_on_excessive_fanout(db)
+    # A webhook that is registered now must receive the very next event, so the
+    # cached subscriber lists are dropped (#740).
+    invalidate_event_listener_cache()
     return _serialize_webhook(webhook)
 
 
@@ -526,6 +529,9 @@ def update_webhook(
         # Subscribing an existing webhook to more events grows fan-out just as
         # registering a new one does, so the #517 warning applies here too.
         _warn_on_excessive_fanout(db)
+    # The subscription set, the active flag and the registration itself may
+    # have changed, so the cached subscriber lists are dropped (#740).
+    invalidate_event_listener_cache()
     return _serialize_webhook(webhook)
 
 
@@ -556,6 +562,9 @@ def delete_webhook(webhook_id: UUID, current_user=Depends(require_admin), db: Se
             },
         )
         db.commit()
+    # The webhook is no longer a subscriber, so the cached subscriber lists are
+    # dropped (#740).
+    invalidate_event_listener_cache()
 
 
 @router.get("/{webhook_id}/deliveries", response_model=PaginatedWebhookDeliveries)
