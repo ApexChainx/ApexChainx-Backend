@@ -5,6 +5,10 @@ settlement only becomes real once the transaction is confirmed on-chain.
 ``BlockPoller`` is the component that closes that gap: it looks at the
 payments that are still pending and asks the network about them.
 
+The backlog is read with a cursor rather than with OFFSET/LIMIT, because the
+rows the poller walks are exactly the rows that change under it -- a
+payment that gets confirmed shifts every later row (issue #733).
+
 Hardening (issue #732)
 ----------------------
 Everything that reaches the database from outside the process is validated
@@ -21,10 +25,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.orm.payment import PaymentTransactionORM
+from app.services.block_poller_pagination import (
+    DEFAULT_PAGE_SIZE,
+    PollerPage,
+    clamp_page_size,
+    decode_payment_cursor,
+    encode_payment_cursor,
+)
 from app.services.block_poller_security import (
     POLLABLE_PAYMENT_STATUSES,
     validate_page_size,
@@ -84,6 +95,53 @@ class BlockPoller:
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
+
+    def pending_page(self, cursor: str | None = None, limit: int = DEFAULT_PAGE_SIZE) -> PollerPage:
+        """Return one page of the pending payments, oldest first.
+
+        The page is stable while the backlog moves: the next page starts
+        after the ``(created_at, id)`` key of the last row of this one, so a
+        payment that is confirmed halfway through the backlog is neither
+        looked at twice nor skipped.
+        """
+        page_size = clamp_page_size(limit)
+
+        query = self._db.query(PaymentTransactionORM).filter(
+            and_(
+                PaymentTransactionORM.status.in_(sorted(POLLABLE_PAYMENT_STATUSES)),
+                PaymentTransactionORM.confirmed_at.is_(None),
+            )
+        )
+
+        decoded = decode_payment_cursor(cursor)
+        if decoded is not None:
+            payment_id, created_at = decoded
+            query = query.filter(
+                or_(
+                    PaymentTransactionORM.created_at < created_at,
+                    and_(
+                        PaymentTransactionORM.created_at == created_at,
+                        PaymentTransactionORM.id < payment_id,
+                    ),
+                )
+            )
+
+        # One extra row tells us whether there is another page without a
+        # second count query.
+        rows = (
+            query.order_by(PaymentTransactionORM.created_at.asc(), PaymentTransactionORM.id.asc())
+            .limit(page_size + 1)
+            .all()
+        )
+        has_more = len(rows) > page_size
+        page_rows = rows[:page_size]
+
+        next_cursor = None
+        if has_more and page_rows:
+            last = page_rows[-1]
+            next_cursor = encode_payment_cursor(str(last.id), last.created_at)
+
+        return PollerPage(payments=page_rows, next_cursor=next_cursor, has_more=has_more)
 
     def pending_payments(self, limit: int = 50) -> list[PaymentTransactionORM]:
         """Return the oldest payments that are still awaiting confirmation.
@@ -179,15 +237,43 @@ class BlockPoller:
     # Poll cycle
     # ------------------------------------------------------------------
 
-    def poll_once(self, limit: int = 50) -> PollReport:
-        """Poll the network for the pending payments and reconcile what it can.
+    def poll_once(self, limit: int = DEFAULT_PAGE_SIZE) -> PollReport:
+        """Poll the network for one page of pending payments and reconcile them.
 
-        A single unreachable transaction never aborts the cycle: it is counted
-        as skipped and the reason is reported, so one bad row cannot keep the
-        remaining payments from being settled.
+        A single unreachable transaction never aborts the cycle: it is
+        counted as skipped and the reason is reported, so one bad row cannot
+        keep the remaining payments from being settled.
+        """
+        return self.poll_page(self.pending_page(limit=limit).payments)
+
+    def poll_all(self, max_pages: int = 10, limit: int = DEFAULT_PAGE_SIZE) -> PollReport:
+        """Walk the whole backlog, one cursor page at a time.
+
+        The walk stops at ``max_pages`` so a backlog that never shrinks --
+        because the network keeps answering "pending" -- cannot keep the
+        worker busy forever.
         """
         report = PollReport()
-        for payment in self.pending_payments(limit=limit):
+        cursor: str | None = None
+        for _ in range(max(1, max_pages)):
+            page = self.pending_page(cursor=cursor, limit=limit)
+            if not page.payments:
+                break
+            page_report = self.poll_page(page.payments)
+            report.checked += page_report.checked
+            report.confirmed += page_report.confirmed
+            report.failed += page_report.failed
+            report.skipped += page_report.skipped
+            report.errors.extend(page_report.errors)
+            if not page.has_more or page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        return report
+
+    def poll_page(self, payments: list[PaymentTransactionORM]) -> PollReport:
+        """Reconcile the given payments and report what happened."""
+        report = PollReport()
+        for payment in payments:
             report.checked += 1
             try:
                 status = self.network_status(payment.transaction_hash)
