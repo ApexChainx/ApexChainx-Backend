@@ -356,6 +356,108 @@
         "title": "AuthUser",
         "type": "object"
       },
+      "BlockPollerStatus": {
+        "description": "Last observed BlockPoller state.\n\nValues come from Redis so the endpoint stays cheap and can be scraped\nwithout touching Horizon or PostgreSQL.",
+        "properties": {
+          "cache_hits": {
+            "default": 0,
+            "description": "Ledgers served from the Redis transaction cache in the last poll.",
+            "example": 1,
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "cache_misses": {
+            "default": 0,
+            "description": "Ledgers fetched from Horizon because the Redis cache missed.",
+            "example": 2,
+            "title": "Cache Misses",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last committed Horizon paging token.",
+            "example": "1234567890",
+            "title": "Cursor"
+          },
+          "enabled": {
+            "description": "Whether BLOCK_POLLER_ENABLED is true for this deployment.",
+            "example": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Error from the last poll cycle, if it failed.",
+            "title": "Error"
+          },
+          "last_ledger_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Highest Stellar ledger sequence processed by the last poll.",
+            "example": 51234567,
+            "title": "Last Ledger Sequence"
+          },
+          "last_poll_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC timestamp of the last completed poll cycle.",
+            "example": "2026-10-20T15:30:00+00:00",
+            "title": "Last Poll At"
+          },
+          "ledgers_processed": {
+            "default": 0,
+            "description": "Ledgers processed in the last poll cycle.",
+            "example": 3,
+            "title": "Ledgers Processed",
+            "type": "integer"
+          },
+          "payments_confirmed": {
+            "default": 0,
+            "description": "Pending payments confirmed in the last poll cycle.",
+            "example": 2,
+            "title": "Payments Confirmed",
+            "type": "integer"
+          },
+          "transactions_scanned": {
+            "default": 0,
+            "description": "Horizon transactions fetched in the last poll cycle.",
+            "example": 42,
+            "title": "Transactions Scanned",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "BlockPollerStatus",
+        "type": "object"
+      },
       "Body_import_outages_api_v1_outages_import_post": {
         "properties": {
           "file": {
@@ -5128,6 +5230,62 @@
         "summary": "Get the current user's sessions",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/block-poller/status": {
+      "get": {
+        "description": "Return the last BlockPoller poll summary from Redis.\n\nThe poller tails Stellar Horizon ledgers on the Celery beat schedule and confirms pending payment transactions whose hash closed successfully. This endpoint does not contact Horizon or PostgreSQL; it reports the most recent checkpoint.",
+        "operationId": "get_block_poller_status_api_v1_block_poller_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockPollerStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "403": {
+            "description": "Caller does not have the engineer role."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get BlockPoller status",
+        "tags": [
+          "block-poller"
         ]
       }
     },
