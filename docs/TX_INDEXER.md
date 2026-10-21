@@ -131,6 +131,38 @@ heartbeat reports `no_successful_run`, never `down`. The response is
 unauthenticated, like `/health/readiness`; `last_error` is truncated to 240
 characters.
 
+## Distributed tracing (#715)
+
+Spans use the project-wide OTel setup (`app/core/tracing.py`), which is
+initialised once in `app/main.py` and exported over OTLP when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set. One ingest pass is one trace:
+
+| Span | Parent | Key attributes |
+| --- | --- | --- |
+| `tx_indexer.run_once` | (root of the pass) | `tx_indexer.component`, `tx_indexer.cursor_present`, `tx_indexer.fetched`, `tx_indexer.inserted` |
+| `tx_indexer.fetch_page` | `run_once` | `tx_indexer.batch_size`, `tx_indexer.cursor_present`, `tx_indexer.next_cursor_present` |
+| `tx_indexer.persist` | `run_once` | `tx_indexer.fetched`, `tx_indexer.inserted` |
+
+* **Retries are span events**, not spans: each backoff adds a `retry` event on
+  `fetch_page` with `attempt`, `delay_seconds` and `error.type`, so a flappy
+  Horizon shows up as a single span with a burst of events instead of a span
+  forest.
+* **Failures** record the exception (`exception` event) and set the span status
+  to `ERROR`; the pass and the failing child both carry it, so a trace search
+  for `ERROR` finds the ingest, not just the leaf.
+* **Context propagation:** the active W3C `traceparent` is sent on the Horizon
+  request, so an instrumented upstream joins the same trace. No active span
+  means no header — the client stays a plain HTTP call.
+* The tracer is injectable (`TxIndexer(..., tracer=...)`); production uses the
+  module tracer and tests assert span shape against an in-memory exporter
+  without touching the process-global provider.
+
+> Note: `get_current_traceparent()` previously emitted an extra `0` in front of
+> the flags field (`...-001`), which is not a valid W3C `traceparent`, so
+> receivers dropped the context. This PR fixes the header to the 2-hex flags
+> form; it also repairs propagation for webhook deliveries, which use the same
+> helper.
+
 ## Tests
 
 `tests/test_tx_indexer_retry.py` covers the backoff curve, jitter bounds,
@@ -142,3 +174,8 @@ marked). Sleep and RNG are injected, so the suite never waits.
 round-tripping, the fail-open Redis behaviour, every status/reason branch of
 the probe, the heartbeat written by `TxIndexer.run_once`, and the endpoint's
 200/503 mapping against a stubbed store and database probe.
+
+`tests/test_tx_indexer_tracing.py` asserts the span tree (names, shared trace
+id, parent span id), pass attributes, retry events, `ERROR` status and recorded
+exceptions on fetch/sink failures, `traceparent` forwarding (and absence without
+an active span), and that a non-recording tracer changes nothing.
