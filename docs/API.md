@@ -963,6 +963,21 @@ X-RateLimit-Remaining: 95
 X-RateLimit-Reset: 1705405200
 ```
 
+### Limiter failure behaviour
+
+The limiter (`app/core/rate_limiter.py`) degrades instead of failing closed:
+
+- Transient Redis errors are retried up to 3 times with exponential backoff
+  (50 ms, then 100 ms) before the fallback path takes over.
+- Once Redis is deemed unavailable the circuit stays open for 30 seconds, so a
+  failing Redis is not hammered on every request.
+- With a database session the persistent attempt ledger remains authoritative;
+  without one the in-memory limiter enforces the same limits.
+- Every retry and fallback logs the structured fields `rate_limiter_key`,
+  `backend`, `error_type` and `attempt`.
+- `check_or_raise(key)` raises `RateLimitError` (carrying the offending `key`)
+  when a caller is over its limit, so endpoints can answer HTTP `429`.
+
 ---
 
 ## Pagination
