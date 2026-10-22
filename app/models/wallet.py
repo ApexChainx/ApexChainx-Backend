@@ -92,3 +92,31 @@ class WalletFundingStateResponse(BaseModel):
     # BE-033: Cache metadata
     cache_status: str = "fresh"
     cached_at: datetime | None = None
+
+
+# ── Pagination (#701) ──────────────────────────────────────────────────────────
+
+
+class WalletListResponse(BaseModel):
+    """Paginated list of wallets (issue #701)."""
+
+    items: list[Wallet]
+    total: int | None = None
+    page: int
+    page_size: int
+
+
+# ── Health check (#698) ────────────────────────────────────────────────────────
+
+
+class WalletHealthComponent(BaseModel):
+    status: str  # "ok" | "warn" | "down"
+    details: dict
+
+
+class WalletHealthResponse(BaseModel):
+    """Health report for the WalletAPI service (issue #698)."""
+
+    status: str  # "ok" | "warn" | "down"
+    components: dict[str, WalletHealthComponent]
+    timestamp: str
