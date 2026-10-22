@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import patch
 from app.services.contracts.governance_client import (
     propose_admin,
     accept_admin,
@@ -8,11 +7,14 @@ from app.services.contracts.governance_client import (
 )
 
 
-@pytest.mark.parametrize("fn,args", [
-    (propose_admin, ("GADDRESS123",)),
-    (accept_admin, ("GADDRESS123",)),
-    (renounce_admin, ("GADDRESS123",)),
-])
+@pytest.mark.parametrize(
+    "fn,args",
+    [
+        (propose_admin, ("GADDRESS123",)),
+        (accept_admin, ("GADDRESS123",)),
+        (renounce_admin, ("GADDRESS123",)),
+    ],
+)
 def test_governance_ops_raise_when_disabled(settings, fn, args):
     """With GOVERNANCE_ENABLED off (the default), every governance op
     must fail loudly rather than fabricate a success response."""

@@ -1,6 +1,7 @@
 """Retry queue item with an integer amount, matching the BIGINT column
 instead of a float that can lose precision above 2**53.
 """
+
 from pydantic import BaseModel, field_validator
 
 

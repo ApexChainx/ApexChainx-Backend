@@ -25,11 +25,10 @@ from app.core.config import Settings, validate_critical_settings
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_PATH = REPO_ROOT / ".env.example"
 
-# Documented in the template but deliberately not settings: the Stellar network
-# endpoints/keys (documented in docs/STELLAR_INTEGRATION.md, injected at
-# runtime) and the placeholder used for third-party provider keys.
+# Documented in the template but deliberately not settings: the Soroban RPC
+# endpoint and Stellar account keys (documented in docs/STELLAR_INTEGRATION.md,
+# injected at runtime) and the placeholder used for third-party provider keys.
 DOCUMENTED_ONLY = {
-    "STELLAR_HORIZON_URL",
     "STELLAR_SOROBAN_RPC_URL",
     "STELLAR_POOL_PUBLIC_KEY",
     "STELLAR_POOL_SECRET_KEY",
@@ -93,7 +92,9 @@ class TestTemplateCoverage:
         """The required-secret section must not ship a literal value."""
         text = _example_text()
         for key in ("SECRET_KEY", "PAYMENT_WEBHOOK_SECRET"):
-            assigned = [line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key]
+            assigned = [
+                line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key
+            ]
             assert assigned, f"{key} should be present in the template"
             for line in assigned:
                 assert "GENERATE" in line, f"{key} must stay a documented placeholder, got: {line}"
@@ -154,6 +155,9 @@ class TestProductionGuards:
 
         config = _dev_settings(
             ENVIRONMENT="production",
+            # #510: production forbids eager Celery, so a real production config
+            # always sets this false alongside its secrets.
+            CELERY_TASK_ALWAYS_EAGER=False,
             SECRET_KEY="k" * 48,
             IMPERSONATION_SIGNING_KEY="i" * 48,
             PAYMENT_WEBHOOK_SECRET="w" * 48,

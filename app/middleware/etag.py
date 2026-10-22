@@ -66,23 +66,44 @@ class ETagMiddleware:
         body_prefix = bytearray()
         etag: str | None = None
         not_modified = False
+        start_forwarded = False
+        # Only 2xx responses are buffered for the ETag computation. Non-2xx
+        # responses are forwarded untouched: their start message was already
+        # sent, and re-sending it from the body path produced a double
+        # "http.response.start" (invalid ASGI) for every GET 404/4xx.
+        buffer_response = False
 
         async def send_with_etag(message: Message) -> None:
-            nonlocal response_status, response_headers
-            nonlocal etag, not_modified
+            nonlocal response_status, response_headers, buffer_response
+            nonlocal etag, not_modified, start_forwarded
+            # start_forwarded spans ASGI messages (set on http.response.start,
+            # read on http.response.body), so it must be declared nonlocal too:
+            # each send_with_etag invocation gets fresh locals and reading the
+            # bare name on the body message raised UnboundLocalError for every
+            # buffered 2xx response.
 
             if message["type"] == "http.response.start":
                 response_status = message["status"]
                 response_headers = list(message.get("headers", []))
-                if response_status < 200 or response_status >= 300:
+                buffer_response = 200 <= response_status < 300
+                if not buffer_response:
                     await send(message)
                     return
                 if any(name.lower() == b"etag" for name, _ in response_headers):
+                    # Response already has an ETag; pass through as-is.
+                    start_forwarded = True
                     await send(message)
                     return
+                # 2xx without ETag: hold back the start until we have the body.
                 return
 
-            if message["type"] != "http.response.body" or response_status is None:
+            if message["type"] != "http.response.body" or not buffer_response:
+                await send(message)
+                return
+
+            # For pass-through paths (non-2xx, or response already had ETag) just
+            # forward the body directly without computing an ETag.
+            if start_forwarded:
                 await send(message)
                 return
 

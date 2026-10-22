@@ -81,9 +81,7 @@ class TestDevStartupPasses:
 
 class TestBrokerRequirementUnchanged:
     def test_worker_mode_requires_broker_urls(self):
-        config = make_settings(
-            CELERY_TASK_ALWAYS_EAGER=False, CELERY_BROKER_URL="", CELERY_RESULT_BACKEND=""
-        )
+        config = make_settings(CELERY_TASK_ALWAYS_EAGER=False, CELERY_BROKER_URL="", CELERY_RESULT_BACKEND="")
         with pytest.raises(ValueError) as exc:
             validate_critical_settings(config)
         message = str(exc.value)
@@ -91,9 +89,7 @@ class TestBrokerRequirementUnchanged:
         assert "CELERY_RESULT_BACKEND" in message
 
     def test_eager_mode_does_not_require_broker_urls(self):
-        config = make_settings(
-            CELERY_TASK_ALWAYS_EAGER=True, CELERY_BROKER_URL="", CELERY_RESULT_BACKEND=""
-        )
+        config = make_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_BROKER_URL="", CELERY_RESULT_BACKEND="")
         validate_critical_settings(config)
 
 

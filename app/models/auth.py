@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models.enums import Role
 
@@ -40,6 +40,14 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6)
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, value):
+        """Trim surrounding whitespace and lowercase the address (#663)."""
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
 
 class RegisterRequest(LoginRequest):
     model_config = ConfigDict(
@@ -56,6 +64,17 @@ class RegisterRequest(LoginRequest):
     # role is intentionally omitted — public registration always creates
     # an engineer account.  Admin users must be created via the admin-only
     # POST /auth/admin/users endpoint.
+
+    @field_validator("full_name")
+    @classmethod
+    def _sanitize_full_name(cls, value: str) -> str:
+        """Strip surrounding whitespace and reject control characters (#663)."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("full_name must not be empty")
+        if any(not ch.isprintable() for ch in cleaned):
+            raise ValueError("full_name must contain printable characters only")
+        return cleaned
 
 
 class AuthSessionResponse(BaseModel):
@@ -121,3 +140,19 @@ class ProfileUpdateRequest(BaseModel):
 
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
     stellar_wallet: str | None = Field(default=None, max_length=255)
+
+    @field_validator("full_name", "stellar_wallet", mode="before")
+    @classmethod
+    def _strip_whitespace(cls, value):
+        """Trim surrounding whitespace on user-supplied profile fields (#679)."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("full_name")
+    @classmethod
+    def _reject_control_chars(cls, value):
+        """Reject control characters that could corrupt logs or downstream stores (#679)."""
+        if value is not None and any(not ch.isprintable() for ch in value):
+            raise ValueError("full_name must contain printable characters only")
+        return value

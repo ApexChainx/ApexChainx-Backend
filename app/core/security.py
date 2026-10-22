@@ -79,7 +79,7 @@ def _verify_impersonation_token(token: str) -> dict[str, Any] | None:
     scanning of this privileged surface is observable (#271).
     """
     try:
-        secret = (app_settings.SECRET_KEY or "apexchainx-dev-secret")
+        secret = app_settings.SECRET_KEY or "apexchainx-dev-secret"
         payload = jwt.decode(
             token,
             secret,

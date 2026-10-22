@@ -6,10 +6,11 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.config import settings
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
@@ -94,7 +95,7 @@ def list_payments(
     When ``cursor`` is provided, cursor-based pagination is used; otherwise offset-based.
     """
     if date_from and date_to and date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from cannot be after date_to")
+        raise CodedHTTPException(status_code=400, detail="date_from cannot be after date_to")
     repo = PaymentRepository(db)
 
     if cursor is not None:
@@ -139,7 +140,7 @@ def export_payments(
 ):
     fmt = format.lower()
     if fmt not in ("json", "csv"):
-        raise HTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
+        raise CodedHTTPException(status_code=400, detail="Unsupported export format. Use 'json' or 'csv'.")
 
     repo = PaymentRepository(db)
     items, _ = repo.list(
@@ -171,7 +172,7 @@ def payments_ping():
 def get_payment_history(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     repo = PaymentRepository(db)
     if not repo.get(transaction_id):
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     return repo.get_payment_history(transaction_id)
 
 
@@ -186,7 +187,7 @@ def get_payment_reconciliation_history(
     repo = PaymentRepository(db)
     payment = repo.get(transaction_id)
     if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     history = repo.get_reconciliation_history(transaction_id)
 
@@ -202,7 +203,7 @@ def get_payment(transaction_id: str, current_user=Depends(require_engineer), db:
     repo = PaymentRepository(db)
     payment = repo.get(transaction_id)
     if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     return payment
 
 
@@ -217,12 +218,12 @@ def reconcile_payment(
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     try:
         payment = repo.reconcile(transaction_id, payload.status)
     except PaymentTransitionError as exc:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=422,
             detail={
                 "message": str(exc),
@@ -232,7 +233,7 @@ def reconcile_payment(
             },
         )
     if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     # BE-027: Include previous status in audit log for reconciliation history
     audit_log.log(
@@ -251,11 +252,11 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     try:
         payment = repo.retry(transaction_id)
     except PaymentTransitionError as exc:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=422,
             detail={
                 "message": str(exc),
@@ -265,7 +266,7 @@ def retry_payment(transaction_id: str, current_user=Depends(require_engineer), d
             },
         )
     if not payment:
-        raise HTTPException(status_code=409, detail="Max retries reached")
+        raise CodedHTTPException(status_code=409, detail="Max retries reached")
     audit_log.log(
         "payment_retried",
         {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
@@ -368,11 +369,11 @@ def retry_now(
     repo = PaymentRepository(db)
     existing = repo.get(transaction_id)
     if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
     try:
         payment = repo.retry(transaction_id)
     except PaymentTransitionError as exc:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=422,
             detail={
                 "message": str(exc),
@@ -382,7 +383,7 @@ def retry_now(
             },
         )
     if not payment:
-        raise HTTPException(status_code=409, detail="Max retries reached")
+        raise CodedHTTPException(status_code=409, detail="Max retries reached")
     audit_log.log(
         "payment_retried",
         {
@@ -462,7 +463,7 @@ def provider_callback(
             "callback_rejected_missing_nonce",
             {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
         )
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=400,
             detail="Callback nonce is required (X-Callback-Nonce header or 'nonce' body field)",
         )
@@ -475,7 +476,7 @@ def provider_callback(
                 "callback_rejected_missing_signature",
                 {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
             )
-            raise HTTPException(status_code=401, detail="Missing webhook signature")
+            raise CodedHTTPException(status_code=401, detail="Missing webhook signature")
 
         if not _verify_callback_signature(
             payload.transaction_id,
@@ -488,7 +489,7 @@ def provider_callback(
                 "callback_rejected_bad_signature",
                 {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
             )
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+            raise CodedHTTPException(status_code=401, detail="Invalid webhook signature")
 
     if effective_nonce:
         if _is_replay(effective_nonce):
@@ -500,7 +501,7 @@ def provider_callback(
                     "provider_ref": payload.provider_ref,
                 },
             )
-            raise HTTPException(
+            raise CodedHTTPException(
                 status_code=409,
                 detail="Duplicate callback nonce – possible replay attack",
             )
@@ -512,7 +513,7 @@ def provider_callback(
             "callback_rejected_unknown_payment",
             {"transaction_id": payload.transaction_id, "provider_ref": payload.provider_ref},
         )
-        raise HTTPException(status_code=404, detail="Payment not found")
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
 
     if existing.status == payload.status:
         audit_log.log(
@@ -550,7 +551,7 @@ def provider_callback(
                 "error_type": type(exc).__name__,
             },
         )
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise CodedHTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         audit_log.log(
             "payment_dead_letter",
@@ -563,7 +564,7 @@ def provider_callback(
                 "error_type": type(exc).__name__,
             },
         )
-        raise HTTPException(status_code=500, detail="Internal error processing callback")
+        raise CodedHTTPException(status_code=500, detail="Internal error processing callback")
 
     audit_log.log(
         "payment_provider_callback",

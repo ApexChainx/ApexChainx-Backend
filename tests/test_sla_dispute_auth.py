@@ -24,6 +24,9 @@ from app.models.orm.sla import SLAResultORM
 from app.models.sla_dispute import DisputeAuditLog, SLADispute
 from app.services.auth_store import AuthStore
 
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 PASSWORD = "TestPass123!"
 
 

@@ -1,6 +1,7 @@
 """Cursor pagination query params for GET /audit, replacing an
 unbounded full-table response.
 """
+
 from typing import Optional
 
 from pydantic import BaseModel, Field

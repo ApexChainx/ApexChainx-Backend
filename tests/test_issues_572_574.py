@@ -115,6 +115,4 @@ def test_delivery_request_includes_stable_delivery_id(monkeypatch):
     )
 
     assert _attempt_delivery(delivery, webhook)
-    assert client.post.call_args.kwargs["headers"]["X-Webhook-Delivery-ID"] == str(
-        delivery_id
-    )
+    assert client.post.call_args.kwargs["headers"]["X-Webhook-Delivery-ID"] == str(delivery_id)

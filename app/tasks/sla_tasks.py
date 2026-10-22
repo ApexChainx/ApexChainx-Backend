@@ -457,3 +457,21 @@ def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correla
         db.commit()
         db.refresh(job)
         return job
+
+
+@celery_app.task(name="app.tasks.sla_tasks.warm_sla_cache_task")
+def warm_sla_cache_task() -> dict:
+    """Beat task: pre-populate the SLA cache for the busiest devices (#566).
+
+    Runs daily and after a worker boot (see ``worker_ready`` signal hookup in
+    app/tasks/sla_cache_warmup_bootstrap.py) so the first wave of reads after a
+    restart hits warm cache entries instead of stampeding the database.
+    """
+    from app.services.sla_cache_warmup import warm_sla_cache
+
+    db = SessionLocal()
+    try:
+        warmed = warm_sla_cache(db)
+        return {"warmed_entries": len(warmed)}
+    finally:
+        db.close()

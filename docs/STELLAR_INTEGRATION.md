@@ -437,6 +437,65 @@ async def process_outage_resolution(outage_id: str):
 
 ---
 
+## Payment Confirmation Polling
+
+A payment row is written the moment an SLA payout is decided, but the
+settlement only becomes real once the transaction is confirmed on-chain. The
+**block poller** (`app/services/block_poller.py`) is the component that closes
+that gap: it looks at the payments that are still `pending` and asks the
+network about them.
+
+```python
+from app.services.block_poller import BlockPoller
+
+poller = BlockPoller(db, horizon_client=horizon)
+report = poller.poll_once(limit=20)
+# report.checked / report.confirmed / report.failed / report.skipped
+```
+
+### Cursor pagination
+
+The poller walks the payments that are still waiting for their confirmation.
+Walking that backlog with `OFFSET`/`LIMIT` is wrong here: a payment that is
+confirmed while the poller is walking shifts every later row by one, so the
+poller either looks at a payment twice or skips one entirely — and the rows
+that change under it are exactly the rows it is walking.
+
+The poller therefore pages with a cursor built from `(created_at, id)`, the
+same key the payment list endpoint uses:
+
+```python
+page = poller.pending_page(cursor=None, limit=20)
+while page.has_more:
+    page = poller.pending_page(cursor=page.next_cursor, limit=20)
+```
+
+`poll_all()` walks the backlog for you and stops after `max_pages`, so a
+backlog that never shrinks — because the network keeps answering "pending" —
+cannot keep the worker busy forever.
+
+### Identifier hardening
+
+Everything the poller accepts from outside the process is validated against an
+allowlist *before* it reaches the database
+(`app/services/block_poller_security.py`):
+
+| Value | Rule |
+| --- | --- |
+| Transaction hash | exactly 64 lowercase hexadecimal characters |
+| Payment status | one of `pending`, `confirmed`, `failed` |
+| Page size | an integer, clamped into `1..100` |
+
+A value that does not match is rejected with `UnsafeIdentifierError` and never
+reaches a statement. The statements themselves only use bound parameters, so
+even a value that slipped through could not change the shape of the query.
+
+A transaction the network cannot be reached for is counted as *skipped* and
+the reason is reported: one unreachable transaction never aborts the cycle, so
+the remaining payments are still settled.
+
+---
+
 ## Smart Contracts
 
 ### SLA Calculator Contract
@@ -953,6 +1012,55 @@ Both are required when `CONTRACT_EXECUTION_MODE=contract`.
 ## Transaction Confirmation
 
 The backend polls Horizon for transaction confirmation after submission. Confirmation is recorded in the payment record as `confirmed_at`. If confirmation is not received within the polling window, the payment status remains `pending` and a retry is scheduled.
+
+---
+
+## Ledger Polling (BlockPoller)
+
+`app/services/block_poller.py` provides a resumable ledger poller for workers
+that need to react to on-chain activity:
+
+```python
+from app.services.block_poller import BlockPoller, HorizonBlockSource
+
+
+def handle_ledger(block):
+    # Process the ledger at block.height / block.payload.
+    pass
+
+
+with HorizonBlockSource("https://horizon-testnet.stellar.org") as source:
+    poller = BlockPoller(source, handle_ledger, batch_size=50)
+    poller.run()  # call poller.stop() or set a stop event to shut down
+```
+
+`HorizonBlockSource` reads `/ledgers` in ascending order (`order=asc`) and maps
+each record's `paging_token` to `Block.cursor`. `BlockPoller` only advances its
+cursor after the handler returns successfully, so a handler crash re-reads the
+failed ledger on the next cycle instead of silently skipping it. Persist
+`poller.cursor` if the worker must resume across restarts, then pass it back as
+`start_cursor`.
+
+Error handling:
+
+- `BlockFetchError` carries `retryable` and `status_code`. Network errors,
+  HTTP 408/429, and 5xx responses are retried with bounded exponential backoff
+  (`retry_base_delay_seconds`, `retry_max_delay_seconds`, `max_attempts`); other
+  4xx responses and malformed bodies fail immediately.
+- `BlockHandlerError` identifies the ledger that could not be processed and
+  leaves the cursor on the previous successfully processed ledger.
+- `run()` keeps the worker alive after a failed poll, while `health()` exposes
+  `status`, `cursor`, `last_success_at`, `last_error`, and
+  `consecutive_failures` for monitoring/alerting.
+
+Structured logging uses JSON events (`poll_completed`, `fetch_retry`,
+`fetch_failed`, `handler_failed`, `block_processed`) with the cursor, ledger
+height, attempt count, delay, and error type. Raw ledger payloads are never
+logged.
+
+Unit and integration coverage lives in `tests/test_block_poller.py`; the
+integration tests exercise the Horizon query parameters, cursor pagination, and
+HTTP error classification through `httpx.MockTransport` without a live network.
 
 ---
 

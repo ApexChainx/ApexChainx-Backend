@@ -189,7 +189,9 @@ def verify_delivery_signature(
     return verify_signature_v2(secret, payload, signature, timestamp)
 
 
-def sign_payload(secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION, timestamp: str | None = None) -> tuple[str, int, str]:
+def sign_payload(
+    secret: str, payload: str, version: int = CURRENT_SIGNATURE_VERSION, timestamp: str | None = None
+) -> tuple[str, int, str]:
     """Generate signature with version support.
 
     Args:

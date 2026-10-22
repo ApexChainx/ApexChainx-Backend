@@ -1,6 +1,7 @@
 """Atomic single-statement sequence bump for token families, replacing
 a read-modify-write pattern that can lose concurrent increments.
 """
+
 from sqlalchemy import text
 
 

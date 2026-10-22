@@ -24,7 +24,6 @@ from fastapi.testclient import TestClient
 from app.api.v1.endpoints.webhooks import require_admin
 from app.db.session import get_db
 from app.main import app
-from app.models.webhook import Webhook
 
 client = TestClient(app)
 
@@ -38,6 +37,7 @@ def _webhook(name: str = "outage-webhook", is_active: bool = True):
         events=json.dumps(["sla.violation"]),
         max_retries=3,
         secret_version=1,
+        deleted_at=None,  # #518: serializer reports the tombstone timestamp
         last_secret_rotation_at=None,
     )
 
@@ -59,8 +59,24 @@ def _mock_db(rows, total: int):
 
 
 def _paged_rows(items, total: int):
-    """Rows as `add_columns(func.count().over())` returns them."""
-    return [(item, total) for item in items]
+    """Rows as `add_columns(func.count().over())` returns them.
+
+    The endpoint reads the window count as `paged[0].total_count` — real
+    SQLAlchemy Rows support both tuple indexing and attribute access, so the
+    stand-ins must too. Plain tuples would crash the attribute lookup.
+    """
+
+    class _Row:
+        __slots__ = ("_values", "total_count")
+
+        def __init__(self, item, count: int):
+            self._values = (item, count)
+            self.total_count = count
+
+        def __getitem__(self, index):
+            return self._values[index]
+
+    return [_Row(item, total) for item in items]
 
 
 def _override(mock_db):
@@ -180,7 +196,14 @@ class TestQuery:
 
         client.get("/api/v1/webhooks")
 
-        assert query.order_by.call_args[0] == (Webhook.created_at.desc(), Webhook.id)
+        # ORDER BY (created_at desc, id) must be part of the paged statement.
+        # SQLAlchemy compiles each UnaryExpression freshly, so compare the
+        # generated SQL text rather than expression object identity.
+        order_by_args = query.order_by.call_args[0]
+        assert len(order_by_args) == 2
+        # str() renders the compiled column expression: table + column + DESC.
+        assert "created_at" in str(order_by_args[0]) and "DESC" in str(order_by_args[0])
+        assert "id" in str(order_by_args[1])
 
     def test_total_comes_from_the_page_statement(self, admin_override):
         """The #296 single-statement pattern: no second COUNT(*) per request."""
@@ -205,18 +228,22 @@ class TestQuery:
 
         client.get("/api/v1/webhooks?is_active=false")
 
-        query.filter.assert_called_once()
+        # Two filters: the #518 tombstone exclusion (deleted_at IS NULL) is
+        # applied by default, then the requested is_active predicate.
+        assert query.filter.call_count == 2
 
     def test_name_filter_is_applied(self, admin_override):
         query = _install([], 0)
 
         client.get("/api/v1/webhooks?name=outage")
 
-        query.filter.assert_called_once()
+        # Tombstone exclusion (#518) + the name predicate.
+        assert query.filter.call_count == 2
 
     def test_both_filters_combine(self, admin_override):
         query = _install([], 0)
 
         client.get("/api/v1/webhooks?is_active=true&name=outage")
 
-        assert query.filter.call_count == 2
+        # Tombstone exclusion (#518) + is_active + name.
+        assert query.filter.call_count == 3

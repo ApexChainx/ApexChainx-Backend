@@ -1,6 +1,7 @@
 """Fail-closed token revocation check: a Redis outage now rejects the
 request instead of silently treating it as 'not revoked'.
 """
+
 from typing import Callable
 
 

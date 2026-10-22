@@ -1,6 +1,7 @@
 """Full-length session token identifiers, replacing an 8-hex-char
 truncation whose ~32 bits of space risks birthday collisions at scale.
 """
+
 import hashlib
 import secrets
 

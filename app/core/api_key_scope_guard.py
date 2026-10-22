@@ -1,6 +1,7 @@
 """Enforces an API key's declared scope against the route's required
 scope, instead of only authenticating the key.
 """
+
 from fastapi import Depends, HTTPException, status
 
 

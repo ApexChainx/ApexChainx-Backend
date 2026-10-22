@@ -1,6 +1,7 @@
 """Computes SLA snapshot checksums over deterministic content only,
 excluding volatile fields like created_at/generated_at.
 """
+
 import hashlib
 import json
 from typing import Any, Dict

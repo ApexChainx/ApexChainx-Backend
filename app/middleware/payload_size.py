@@ -38,6 +38,14 @@ class PayloadSizeMiddleware:
     def __init__(self, app):
         self.app = app
 
+    def __getattr__(self, name):
+        # main.py rebinds ``app = PayloadSizeMiddleware(app)`` so uvicorn serves
+        # the guarded ASGI callable. Delegate everything the raw ASGI wrapper
+        # does not define (FastAPI's ``dependency_overrides``, ``openapi()`,
+        # routes, ...) to the wrapped application so importers of
+        # ``app.main.app`` keep a fully functional FastAPI surface.
+        return getattr(self.app, name)
+
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)

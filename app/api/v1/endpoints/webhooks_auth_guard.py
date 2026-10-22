@@ -2,6 +2,7 @@
 guarantee doesn't rely solely on the router-level dependency surviving
 a future refactor.
 """
+
 from fastapi import Depends
 
 

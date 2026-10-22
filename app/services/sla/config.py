@@ -158,7 +158,9 @@ def get_config_with_hash(severity: str) -> SLAPolicyContent:
     )
 
 
-def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest, db: Session | None = None) -> SLASeverityConfig:
+def update_config_for_severity(
+    severity: str, payload: SLAConfigUpdateRequest, db: Session | None = None
+) -> SLASeverityConfig:
     """Update config for a severity without an expected token (#273).
 
     Delegates to publish_config_for_severity with no token check, so a
@@ -251,8 +253,7 @@ def publish_config_for_severity(
         except IntegrityError as exc:
             db.rollback()
             raise ConcurrencyError(
-                f"Config for '{severity}' was modified by another request. "
-                "Re-fetch the current config and retry."
+                f"Config for '{severity}' was modified by another request. " "Re-fetch the current config and retry."
             ) from exc
 
     # Commit succeeded (or no DB) — refresh the in-process cache so the

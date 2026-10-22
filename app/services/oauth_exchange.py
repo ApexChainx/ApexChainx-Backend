@@ -1,6 +1,7 @@
 """Implements the OAuth provider code exchange, replacing the 501 stub
 that made the documented SSO login flow unusable.
 """
+
 from typing import Any, Dict
 
 
@@ -8,8 +9,9 @@ class OAuthExchangeError(Exception):
     pass
 
 
-def exchange_code_for_session(provider_token_url: str, code: str, state: str,
-                               expected_state: str, http_client) -> Dict[str, Any]:
+def exchange_code_for_session(
+    provider_token_url: str, code: str, state: str, expected_state: str, http_client
+) -> Dict[str, Any]:
     if state != expected_state:
         raise OAuthExchangeError("OAuth state mismatch")
 

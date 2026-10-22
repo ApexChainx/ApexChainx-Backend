@@ -31,7 +31,7 @@ def parse_api_version(value: str) -> tuple[int, int, int] | None:
         return None
     numbers: list[int] = []
     for part in parts:
-        # isdecimal (not isdigit) so superscripts such as "\u00b2" are rejected
+        # isdecimal (not isdigit) so superscripts such as "²" are rejected
         # instead of blowing up int() on an attacker-controlled header.
         if not part.isdecimal():
             return None
@@ -82,6 +82,20 @@ class Settings(BaseSettings):
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
     PAYMENT_WEBHOOK_SECRET: str = ""
+    # Horizon endpoint used by the Stellar block poller. Empty falls back to
+    # the public endpoint for STELLAR_NETWORK.
+    STELLAR_HORIZON_URL: str = ""
+    # BlockPoller (#722-#726): tails Horizon ledgers and confirms pending
+    # payment rows whose transaction hash closed successfully.
+    BLOCK_POLLER_ENABLED: bool = False
+    BLOCK_POLLER_INTERVAL_SECONDS: int = 15
+    BLOCK_POLLER_BATCH_SIZE: int = 20
+    BLOCK_POLLER_DB_BATCH_SIZE: int = 500
+    BLOCK_POLLER_CACHE_TTL_SECONDS: int = 300
+    BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS: float = 10.0
+    BLOCK_POLLER_CURSOR_KEY: str = "block_poller:cursor"
+    BLOCK_POLLER_LEDGER_CACHE_PREFIX: str = "block_poller:ledger"
+    BLOCK_POLLER_LAST_POLL_KEY: str = "block_poller:last_poll"
     WALLET_CACHE_TTL_SECONDS: int = 60  # how long wallet data is considered fresh
     # SLA cache TTL in seconds
     SLA_CACHE_TTL_SECONDS: int = 60
@@ -93,6 +107,21 @@ class Settings(BaseSettings):
     PAYMENT_ASSET_CODE: str = "USDC"
     PAYMENT_FROM_ADDRESS: str = "SYSTEM_POOL"
     PAYMENT_TO_ADDRESS: str = "OUTAGE_SETTLEMENT"
+    # TxIndexer (#713): the chain-ingest loop fetches one page of payments per
+    # pass and retries transient Horizon failures with exponential backoff.
+    # The delay before retry N is BATCH-independent: min(base * 2**(N-1), max)
+    # with +/- TX_INDEXER_BACKOFF_JITTER_RATIO jitter on top.
+    TX_INDEXER_BATCH_SIZE: int = 50  # payments fetched per Horizon page
+    TX_INDEXER_MAX_ATTEMPTS: int = 4  # total attempts per page fetch (first try included)
+    TX_INDEXER_BACKOFF_BASE_SECONDS: float = 0.5  # delay before the first retry
+    TX_INDEXER_BACKOFF_MAX_SECONDS: float = 8.0  # ceiling for any single backoff
+    TX_INDEXER_BACKOFF_JITTER_RATIO: float = 0.5  # +/- fraction applied to each delay
+    TX_INDEXER_TIMEOUT_SECONDS: float = 10.0  # Horizon HTTP timeout
+    # #714: the ingest worker publishes a heartbeat to Redis; the health probe
+    # (served by the API process) reads it back. Above this lag the probe
+    # reports "degraded" because the stream is no longer keeping up.
+    TX_INDEXER_HEALTH_MAX_LAG_SECONDS: int = 120
+    TX_INDEXER_STATE_TTL_SECONDS: int = 7 * 24 * 3600  # heartbeat key expiry
     # Trusted-proxy settings (#205)
     # Number of trusted reverse-proxy hops in front of this app.
     # Set to 0 when running without a proxy (uses direct connection IP).
@@ -146,7 +175,11 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
     MAX_WEBHOOK_MAX_RETRIES: int = 10  # Max delivery retry attempts a webhook may be configured for (#552)
-    
+    # #517: cap on webhooks a single admin account may register (0 disables).
+    MAX_WEBHOOKS_PER_ACCOUNT: int = 50
+    # #517: warn (don't reject) when total event subscriptions exceed this.
+    WEBHOOK_FANOUT_WARN_THRESHOLD: int = 200
+
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
     WEBHOOK_URL_ALLOWLIST: list[str] = []
@@ -178,6 +211,21 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_CONCURRENT_DISPATCHES: int = 10
     WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK: int = 5
 
+    # Event listener fan-out policy (#740, #741).
+    # How long a resolved subscriber list is considered fresh. The webhook rows
+    # themselves are always re-read from the database, so this only bounds how
+    # long a registration change takes to be noticed.
+    EVENT_LISTENER_CACHE_TTL_SECONDS: int = 15
+    # How many events a single subscriber may receive per window. The number
+    # of emissions is not under the subscriber's control (one event per
+    # affected device), so without a budget one subscriber can amplify the
+    # whole fan-out. The default is deliberately generous -- an incident that
+    # affects a hundred devices emits a hundred events to the same subscriber
+    # -- and only exists to stop a runaway fan-out.
+    EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER: int = 600
+    # Length of the subscriber event budget window, in seconds.
+    EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
     # Fix #576: hard cap on how many completed Idempotency-Key records are
@@ -189,6 +237,10 @@ class Settings(BaseSettings):
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
+    # Upper bound for a webhook's per-row secret_grace_hours (#582): the column
+    # is admin-settable, so it needs a ceiling or an operator typo (or an
+    # admin session gone rogue) could pin an outgoing secret forever.
+    MAX_WEBHOOK_SECRET_GRACE_HOURS: int = 24 * 7
     # Fernet key (32 url-safe base64-encoded bytes) used to encrypt webhook
     # signing secrets at rest (#266). Required in non-local environments; when
     # unset (local/test) a key is derived from SECRET_KEY so secrets are still
@@ -198,6 +250,9 @@ class Settings(BaseSettings):
     # OAuth configuration (#10)
     OAUTH_REDIRECT_URI_ALLOWLIST: list[str] = ["http://localhost:3000/oauth/callback"]
     OAUTH_STATE_TTL_SECONDS: int = 600
+    # #568: batch size for the periodic sweep of expired OAuth connect-state
+    # rows (Redis SCAN COUNT hint per iteration of the pruning task).
+    OAUTH_STATE_PRUNE_BATCH_SIZE: int = 100
 
     # Outage event timeline retention (#329)
     # Days to keep outage timeline events before the scheduled cleanup removes them.
@@ -215,6 +270,27 @@ class Settings(BaseSettings):
     # current behaviour; requests without the header are served as "latest".
     API_VERSION_MIN_SUPPORTED: str = "1.0.0"
     API_VERSION_MAX_SUPPORTED: str = "1.0.0"
+
+    # Block poller settings (#725, #727, #728, #729)
+    # Poll interval between successful block fetches.
+    BLOCK_POLLER_POLL_INTERVAL_SECONDS: float = 5.0
+    # Number of retries after the initial fetch attempt.
+    BLOCK_POLLER_MAX_RETRIES: int = 3
+    # Exponential backoff base delay and hard cap, in seconds.
+    BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS: float = 1.0
+    BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS: float = 30.0
+    # Fraction of the computed delay that may be randomised (0.0 - 1.0).
+    BLOCK_POLLER_RETRY_JITTER_RATIO: float = 0.25
+    # Sliding-window rate limit applied to upstream block fetches.
+    BLOCK_POLLER_RATE_LIMIT_REQUESTS: int = 10
+    BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS: float = 1.0
+    # Input sanitization bounds for untrusted block payloads.
+    BLOCK_POLLER_MAX_PAYLOAD_BYTES: int = 5 * 1024 * 1024
+    BLOCK_POLLER_MAX_TRANSACTIONS: int = 1000
+    BLOCK_POLLER_MAX_IDENTIFIER_LENGTH: int = 256
+    BLOCK_POLLER_MAX_STRING_LENGTH: int = 4096
+    BLOCK_POLLER_MAX_COLLECTION_ITEMS: int = 10000
+    BLOCK_POLLER_MAX_DEPTH: int = 8
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid", case_sensitive=False)
 
@@ -244,9 +320,7 @@ def validate_critical_settings(config: Settings) -> None:
         errors.append("VERSION must be a dotted numeric version such as 1.0.0.")
     if None not in (min_version, max_version) and min_version > max_version:
         errors.append("API_VERSION_MIN_SUPPORTED must not be greater than API_VERSION_MAX_SUPPORTED.")
-    if None not in (min_version, max_version, current_version) and not (
-        min_version <= current_version <= max_version
-    ):
+    if None not in (min_version, max_version, current_version) and not (min_version <= current_version <= max_version):
         errors.append("VERSION must fall within [API_VERSION_MIN_SUPPORTED, API_VERSION_MAX_SUPPORTED].")
 
     if not config.API_V1_PREFIX.startswith("/"):
@@ -289,6 +363,30 @@ def validate_critical_settings(config: Settings) -> None:
         if not config.CELERY_RESULT_BACKEND.strip():
             errors.append("CELERY_RESULT_BACKEND must not be empty when CELERY_TASK_ALWAYS_EAGER is false.")
 
+    # BlockPoller (#722-#726): a zero/negative interval would busy-loop, and a
+    # non-positive batch size would make the reconciliation query invalid.
+    if config.BLOCK_POLLER_INTERVAL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_INTERVAL_SECONDS must be > 0.")
+    if config.BLOCK_POLLER_BATCH_SIZE <= 0:
+        errors.append("BLOCK_POLLER_BATCH_SIZE must be > 0.")
+    if config.BLOCK_POLLER_DB_BATCH_SIZE <= 0:
+        errors.append("BLOCK_POLLER_DB_BATCH_SIZE must be > 0.")
+    if config.BLOCK_POLLER_CACHE_TTL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_CACHE_TTL_SECONDS must be > 0.")
+    if config.BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS must be > 0.")
+    if config.STELLAR_HORIZON_URL.strip():
+        parsed_horizon_url = urlparse(config.STELLAR_HORIZON_URL)
+        if parsed_horizon_url.scheme not in {"http", "https"} or not parsed_horizon_url.netloc:
+            errors.append("STELLAR_HORIZON_URL must be an http(s) URL when set.")
+    for key_name, key_value in (
+        ("BLOCK_POLLER_CURSOR_KEY", config.BLOCK_POLLER_CURSOR_KEY),
+        ("BLOCK_POLLER_LEDGER_CACHE_PREFIX", config.BLOCK_POLLER_LEDGER_CACHE_PREFIX),
+        ("BLOCK_POLLER_LAST_POLL_KEY", config.BLOCK_POLLER_LAST_POLL_KEY),
+    ):
+        if not key_value.strip():
+            errors.append(f"{key_name} must not be empty.")
+
     # #510: fail fast, in the same style as the SECRET_KEY guard. A deployment
     # that runs every task in-process while showing a queue topology is the
     # silent failure this catches.
@@ -309,8 +407,32 @@ def validate_critical_settings(config: Settings) -> None:
     if config.TRUSTED_PROXY_COUNT < 0:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
 
+    # #713: a nonsensical backoff profile either spins (base <= 0 with jitter)
+    # or hides a transient outage behind an unbounded pause, so reject it at
+    # boot instead of at the first failed Horizon call.
+    if not 1 <= config.TX_INDEXER_BATCH_SIZE <= 200:
+        errors.append("TX_INDEXER_BATCH_SIZE must be between 1 and 200.")
+    if not 1 <= config.TX_INDEXER_MAX_ATTEMPTS <= 10:
+        errors.append("TX_INDEXER_MAX_ATTEMPTS must be between 1 and 10.")
+    if config.TX_INDEXER_BACKOFF_BASE_SECONDS <= 0:
+        errors.append("TX_INDEXER_BACKOFF_BASE_SECONDS must be > 0.")
+    if config.TX_INDEXER_BACKOFF_MAX_SECONDS < config.TX_INDEXER_BACKOFF_BASE_SECONDS:
+        errors.append("TX_INDEXER_BACKOFF_MAX_SECONDS must be >= TX_INDEXER_BACKOFF_BASE_SECONDS.")
+    if not 0 <= config.TX_INDEXER_BACKOFF_JITTER_RATIO <= 1:
+        errors.append("TX_INDEXER_BACKOFF_JITTER_RATIO must be between 0 and 1.")
+    if config.TX_INDEXER_TIMEOUT_SECONDS <= 0:
+        errors.append("TX_INDEXER_TIMEOUT_SECONDS must be > 0.")
+    if config.TX_INDEXER_HEALTH_MAX_LAG_SECONDS <= 0:
+        errors.append("TX_INDEXER_HEALTH_MAX_LAG_SECONDS must be > 0.")
+    if config.TX_INDEXER_STATE_TTL_SECONDS <= 0:
+        errors.append("TX_INDEXER_STATE_TTL_SECONDS must be > 0.")
+
     if config.ENVIRONMENT not in {"local", "test"}:
-        if not config.SECRET_KEY or config.SECRET_KEY == DEFAULT_SECRET_KEY or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH:
+        if (
+            not config.SECRET_KEY
+            or config.SECRET_KEY == DEFAULT_SECRET_KEY
+            or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH
+        ):
             errors.append(
                 f"SECRET_KEY must be set to a secure, non-default value in non-local environments. "
                 f"Current value is the development default or too short (< {MIN_SECRET_KEY_LENGTH} chars). "
@@ -325,15 +447,11 @@ def validate_critical_settings(config: Settings) -> None:
             )
 
         if not config.PAYMENT_WEBHOOK_SECRET:
-            errors.append(
-                f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
-            )
+            errors.append(f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}.")
 
         encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
         if not encryption_key:
-            errors.append(
-                f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
-            )
+            errors.append(f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}.")
 
     encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
     if encryption_key:
@@ -343,8 +461,7 @@ def validate_critical_settings(config: Settings) -> None:
             Fernet(encryption_key.encode("utf-8"))
         except Exception:
             errors.append(
-                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key "
-                "(32 url-safe base64-encoded bytes)."
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key " "(32 url-safe base64-encoded bytes)."
             )
 
     try:
@@ -367,6 +484,54 @@ def validate_critical_settings(config: Settings) -> None:
 
     if config.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK <= 0:
         errors.append("WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK must be > 0.")
+
+    if config.BLOCK_POLLER_POLL_INTERVAL_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_POLL_INTERVAL_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_RETRIES < 0:
+        errors.append("BLOCK_POLLER_MAX_RETRIES must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS < 0:
+        errors.append("BLOCK_POLLER_RETRY_BASE_DELAY_SECONDS must be >= 0.")
+
+    if config.BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RETRY_MAX_DELAY_SECONDS must be > 0.")
+
+    if not 0 <= config.BLOCK_POLLER_RETRY_JITTER_RATIO <= 1:
+        errors.append("BLOCK_POLLER_RETRY_JITTER_RATIO must be between 0 and 1.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_REQUESTS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_REQUESTS must be > 0.")
+
+    if config.BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("BLOCK_POLLER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_PAYLOAD_BYTES <= 0:
+        errors.append("BLOCK_POLLER_MAX_PAYLOAD_BYTES must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_TRANSACTIONS <= 0:
+        errors.append("BLOCK_POLLER_MAX_TRANSACTIONS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_IDENTIFIER_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_IDENTIFIER_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_STRING_LENGTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_STRING_LENGTH must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_COLLECTION_ITEMS <= 0:
+        errors.append("BLOCK_POLLER_MAX_COLLECTION_ITEMS must be > 0.")
+
+    if config.BLOCK_POLLER_MAX_DEPTH <= 0:
+        errors.append("BLOCK_POLLER_MAX_DEPTH must be > 0.")
+
+    if config.EVENT_LISTENER_CACHE_TTL_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_CACHE_TTL_SECONDS must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER must be > 0.")
+
+    if config.EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS <= 0:
+        errors.append("EVENT_LISTENER_RATE_LIMIT_WINDOW_SECONDS must be > 0.")
 
     if errors:
         raise ValueError("Invalid startup configuration:\n- " + "\n- ".join(errors))

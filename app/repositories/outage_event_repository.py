@@ -41,9 +41,7 @@ class OutageEventRepository:
             ]
             if not old_ids:
                 break
-            self.db.query(OutageEventORM).filter(OutageEventORM.id.in_(old_ids)).delete(
-                synchronize_session=False
-            )
+            self.db.query(OutageEventORM).filter(OutageEventORM.id.in_(old_ids)).delete(synchronize_session=False)
             self.db.commit()
             total_deleted += len(old_ids)
             if len(old_ids) < batch_size:

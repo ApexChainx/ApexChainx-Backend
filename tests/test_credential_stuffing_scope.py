@@ -113,7 +113,9 @@ class TestKeyHygiene:
 
     def test_windows_expire(self, detector):
         _spray(detector, "192.0.2.7", "user@example.com", 3)
-        ttl = detector.redis.expiries["cred_stuffing:account:" + CredentialStuffingDetector._account_hash("user@example.com")]
+        ttl = detector.redis.expiries[
+            "cred_stuffing:account:" + CredentialStuffingDetector._account_hash("user@example.com")
+        ]
         assert ttl >= settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES * 60
 
 

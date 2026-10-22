@@ -1,6 +1,7 @@
 """Incremental chain roots so /audit/verify can confirm linkage in
 near-constant time instead of re-hashing the full log every call.
 """
+
 import hashlib
 from typing import Iterable, Tuple
 

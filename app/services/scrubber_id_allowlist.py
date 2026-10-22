@@ -1,6 +1,7 @@
 """Allowlists the codebase's own long identifier formats so the
 32+ character catch-all redaction doesn't mangle UUIDs and prefixed ids.
 """
+
 import re
 
 KNOWN_ID_PATTERNS = [

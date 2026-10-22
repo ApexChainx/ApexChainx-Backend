@@ -1,6 +1,7 @@
 """Fetches real wallet balances from the configured Stellar network
 instead of deriving fabricated values from boolean flags.
 """
+
 from typing import Any, Dict
 
 

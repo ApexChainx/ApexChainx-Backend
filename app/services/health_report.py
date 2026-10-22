@@ -109,7 +109,9 @@ def _revocation_store_ping(redis_url: str) -> ComponentStatus:
     return status
 
 
-def build_readiness_report(engine: Engine, audit_engine: Engine, redis_url: str, dlq_warn_threshold: int = 1000) -> dict:
+def build_readiness_report(
+    engine: Engine, audit_engine: Engine, redis_url: str, dlq_warn_threshold: int = 1000
+) -> dict:
     """Build a structured readiness report for /health/readiness.
 
     Policy: main database/redis failures are "down"; audit-database and

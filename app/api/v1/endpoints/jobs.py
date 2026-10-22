@@ -3,12 +3,13 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from sqlalchemy import and_, or_
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_admin, require_engineer
 from app.db.session import get_db
 from app.models.job import Job, JobStatus, JobType
@@ -20,6 +21,7 @@ from app.tasks.sla_tasks import compute_sla_for_device, enqueue_bulk_sla_computa
 from app.utils.cache import TTLCache
 from app.utils.correlation_ctx import get_correlation_id
 from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
+from app.utils.job_states import celery_state_to_job_status
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
@@ -144,7 +146,7 @@ def _serialize_job(job: Job) -> JobResponse:
 def _get_job_or_404(db: Session, job_id: UUID) -> Job:
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+        raise CodedHTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     return job
 
 
@@ -166,17 +168,9 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
         return job
 
     task_result: AsyncResult = AsyncResult(job.celery_task_id, app=celery_app)
-    celery_state = task_result.state  # PENDING, STARTED, SUCCESS, FAILURE, REVOKED
-
-    state_map = {
-        "PENDING": JobStatus.PENDING,
-        "STARTED": JobStatus.STARTED,
-        "SUCCESS": JobStatus.SUCCESS,
-        "FAILURE": JobStatus.FAILURE,
-        "REVOKED": JobStatus.REVOKED,
-    }
-
-    new_status = state_map.get(celery_state, job.status)
+    # #571: one closed, unit-tested mapping for every Celery state; unmapped
+    # states keep the stored status instead of passing unknown strings through.
+    new_status = celery_state_to_job_status(task_result.state, fallback=job.status)
     _job_status_cache.set(cache_key, new_status)
     if new_status != job.status:
         job.status = new_status
@@ -243,7 +237,7 @@ def submit_bulk_sla_computation(
     correlation_id = get_correlation_id()
 
     if not payload.device_ids:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="device_ids must not be empty.",
         )
@@ -363,7 +357,7 @@ def cancel_job(job_id: UUID, current_user=Depends(require_admin), db: Session = 
     """
     job = _get_job_or_404(db, job_id)
     if job.status in (JobStatus.SUCCESS, JobStatus.FAILURE, JobStatus.REVOKED):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot cancel a job with status '{job.status}'.",
         )
@@ -437,14 +431,14 @@ def retry_job(
 
     # Validate job is eligible for retry
     if job.status not in (JobStatus.FAILURE, JobStatus.REVOKED):
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot retry job with status '{job.status.value}'. Only FAILED or REVOKED jobs can be retried.",
         )
 
     # Check retry limit
     if job.retry_count >= job.max_retries:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Job has exceeded maximum retry limit ({job.max_retries}). Current retry count: {job.retry_count}",
         )
@@ -528,7 +522,7 @@ def retry_job(
                 message=f"Job retry #{job.retry_count} initiated successfully",
             )
         else:
-            raise HTTPException(
+            raise CodedHTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported job type for retry: {job.job_type.value}",
             )
@@ -556,14 +550,14 @@ def retry_job(
         logger.error(
             "Failed to retry job due to data issue", job_id=str(job.id), error=str(e), correlation_id=correlation_id
         )
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to retry job due to invalid payload: {e!s}",
         )
     except Exception as e:
         db.rollback()
         logger.exception("Unexpected error retrying job", job_id=str(job.id), correlation_id=correlation_id)
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry job: {e!s}",
         )

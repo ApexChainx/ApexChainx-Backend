@@ -1,6 +1,7 @@
 """Full-password fingerprint for credential stuffing detection,
 replacing a 4-character prefix hash that collapses distinct attempts.
 """
+
 import hashlib
 
 

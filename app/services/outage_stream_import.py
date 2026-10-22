@@ -116,9 +116,7 @@ def stream_import_outages(
             # The row's own position in the payload, not the chunk's start index.
             index = start + offset
             if not isinstance(row, dict):
-                failed.append(
-                    _row_error(index, row, TypeError(f"expected a JSON object, got {type(row).__name__}"))
-                )
+                failed.append(_row_error(index, row, TypeError(f"expected a JSON object, got {type(row).__name__}")))
                 continue
             try:
                 payload = OutageCreate(**row)

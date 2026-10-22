@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Claim webhook deliveries and persist auth throttling attempts."""
 from alembic import op
 import sqlalchemy as sa

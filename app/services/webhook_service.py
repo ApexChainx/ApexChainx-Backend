@@ -10,13 +10,17 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from redis import Redis
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+from app.services.event_listener import EventListener
+from app.services.event_listener_cache import EventListenerCache
+from app.services.event_listener_metrics import EventListenerMetrics
+from app.services.event_listener_rate_limit import EventRateLimiter
 from app.services.formatters import canonical_json
-from app.services.metrics import increment_counter
 from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
@@ -26,6 +30,84 @@ from app.utils.correlation_ctx import get_or_generate_correlation_id
 from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
+
+# The listener is shared by every path that emits a domain event: which
+# subscribers hear about an event is the same question no matter who asked.
+# The subscriber cache and the fan-out budget are process-wide for the same
+# reason.
+_event_listener_metrics = EventListenerMetrics()
+_event_listener_cache: EventListenerCache | None = None
+_event_rate_limiter: EventRateLimiter | None = None
+
+
+def _get_event_listener_cache() -> EventListenerCache | None:
+    """Return the shared subscriber cache.
+
+    Returns:
+        The cache, or ``None`` when the Redis-backed cache is switched off
+        (``USE_REDIS_RATE_LIMITER`` is the switch for every Redis-backed
+        helper in the fan-out path) or no broker URL is configured.
+    """
+    global _event_listener_cache
+    if _event_listener_cache is None:
+        broker_url = settings.CELERY_BROKER_URL.strip()
+        if not broker_url or not settings.USE_REDIS_RATE_LIMITER:
+            return None
+        try:
+            _event_listener_cache = EventListenerCache(
+                Redis.from_url(broker_url),
+                ttl=settings.EVENT_LISTENER_CACHE_TTL_SECONDS,
+            )
+        except Exception as exc:  # pragma: no cover - a bad broker URL must not break fan-out
+            logger.warning(
+                "event_listener_cache_unavailable",
+                extra={"event": "event_listener_cache_unavailable", "error": str(exc)},
+            )
+            return None
+    return _event_listener_cache
+
+
+def _get_event_rate_limiter() -> EventRateLimiter | None:
+    """Return the shared fan-out budget.
+
+    The budget is kept in Redis so every worker enforces the same limit; when
+    Redis is not available the limiter falls back to an in-process counter.
+    """
+    global _event_rate_limiter
+    if _event_rate_limiter is None:
+        redis_client = None
+        broker_url = settings.CELERY_BROKER_URL.strip()
+        if broker_url and settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER:
+            redis_client = Redis.from_url(broker_url)
+        _event_rate_limiter = EventRateLimiter(redis_client)
+    return _event_rate_limiter
+
+
+def build_event_listener(db: Session) -> EventListener:
+    """Build the listener used by every path that emits a domain event."""
+    return EventListener(
+        db,
+        metrics=_event_listener_metrics,
+        cache=_get_event_listener_cache(),
+        rate_limiter=_get_event_rate_limiter(),
+    )
+
+
+def invalidate_event_listener_cache(event: WebhookEvent | None = None) -> None:
+    """Drop the cached subscriber list after a registration changed.
+
+    A registration that was just created (or deleted, or re-subscribed to
+    another event) must take effect immediately: a newly registered webhook
+    that misses the next event because of a cached subscriber list would look
+    exactly like a silently broken webhook.
+    """
+    cache = _get_event_listener_cache()
+    if cache is None:
+        return
+    if event is None:
+        cache.invalidate_all()
+    else:
+        cache.invalidate(event.value)
 
 
 class WebhookDispatchLimiter:
@@ -146,9 +228,7 @@ def _build_headers(
         headers["traceparent"] = traceparent
 
     if webhook.secret:
-        sig_hex, _version, signed_timestamp = sign_payload(
-            webhook.secret, payload, signature_version, timestamp
-        )
+        sig_hex, _version, signed_timestamp = sign_payload(webhook.secret, payload, signature_version, timestamp)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
         headers["X-Webhook-Signature-Version"] = str(signature_version)
         # Version 1 ignores the timestamp; make the mismatch impossible to miss.
@@ -157,24 +237,15 @@ def _build_headers(
 
 
 def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
-    # NOTE: full-table scan + per-row json.loads is a known N+1 (issue #294).
-    # The durable fix (JSONB column + SQL containment filter, or a normalized
-    # webhook_events join table) needs a schema migration and is tracked
-    # separately; this only stops corrupt rows from being silently dropped.
-    # #518: `is_active` already excludes soft-deleted webhooks because delete
-    # clears it, but the tombstone filter is stated explicitly so a future
-    # caller that reactivates a row cannot resurrect its deliveries.
-    webhooks = db.query(Webhook).filter(Webhook.is_active).filter(Webhook.deleted_at.is_(None)).all()
-    result = []
-    for webhook in webhooks:
-        try:
-            events = json.loads(webhook.events)
-            if event.value in events:
-                result.append(webhook)
-        except (json.JSONDecodeError, TypeError):
-            logger.error("Webhook %s has invalid events JSON, skipping.", webhook.id)
-            increment_counter("webhook.events_json.corrupt", tags={"webhook_id": str(webhook.id)})
-    return result
+    """Return the active webhooks that are subscribed to ``event``.
+
+    The resolution lives in :class:`app.services.event_listener.EventListener`
+    so that every path which emits an event resolves the subscribers the same
+    way -- with one statement, with the subscription filter pushed into SQL
+    instead of a per-row JSON parse in Python (issue #739), and sharing the
+    same subscriber cache and fan-out budget.
+    """
+    return build_event_listener(db).subscribers(event)
 
 
 def create_delivery(
@@ -280,9 +351,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         db.query(WebhookDelivery)
         .filter(
             WebhookDelivery.id == delivery_id,
-            WebhookDelivery.status.in_(
-                [WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]
-            ),
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]),
         )
         .update(
             {
@@ -377,7 +446,8 @@ def trigger_sla_violation_webhooks(
         - Timestamp is immutable across retries (idempotency support)
         - Future signing changes can use new version without breaking existing consumers
     """
-    webhooks = get_active_webhooks_for_event(db, event)
+    listener = build_event_listener(db)
+    decisions = listener.dispatch_plan(event)
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
@@ -398,7 +468,13 @@ def trigger_sla_violation_webhooks(
     except (ImportError, AttributeError):
         pass
 
-    for webhook in webhooks:
+    for decision in decisions:
+        if not decision.allowed:
+            # The fan-out policy or the event budget refused this subscriber. The listener already
+            # logged and counted it; skipping keeps the rest of the fan-out
+            # going instead of failing the whole event.
+            continue
+        webhook = decision.webhook
         delivery = create_delivery(
             db,
             webhook,
@@ -436,9 +512,7 @@ def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
-            WebhookDelivery.status.in_(
-                [WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]
-            ),
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]),
             WebhookDelivery.next_retry_at <= now,
         )
         .order_by(WebhookDelivery.next_retry_at)

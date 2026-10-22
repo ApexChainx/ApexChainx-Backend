@@ -8,6 +8,11 @@ from unittest.mock import MagicMock, patch
 
 from app.services.metrics import _SLA_LATENCY_BUCKETS, metrics
 
+import pytest
+
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 
 class TestSLALatencyHistogram:
     @patch("app.services.sla_service.record_histogram")
@@ -77,7 +82,7 @@ class TestSLALatencyBuckets:
         buckets = summary.get("histogram_buckets", {}).get("test_latency", {})
         assert buckets[0.01] == 0  # 0.03 > 0.01
         assert buckets[0.05] == 1  # 0.03 <= 0.05
-        assert buckets[0.1] == 2   # 0.03, 0.07 <= 0.1
+        assert buckets[0.1] == 2  # 0.03, 0.07 <= 0.1
 
 
 class TestPrometheusEndpointIncludesHistogram:

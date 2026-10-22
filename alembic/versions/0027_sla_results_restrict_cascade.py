@@ -1,13 +1,14 @@
 # raw-sql-allowed
 """Switch sla_results.outage_id FK from CASCADE to RESTRICT with an orphan check.
 
-Revision ID: 0027_sla_results_restrict_cascade
+Revision ID: 0027_sla_restrict_cascade
 Revises: 0025_merge_branches
 Create Date: 2026-08-26
 """
+
 from alembic import op
 
-revision = "0027_sla_results_restrict_cascade"
+revision = "0027_sla_restrict_cascade"
 down_revision = "0025_merge_branches"
 depends_on = None
 branch_labels = None

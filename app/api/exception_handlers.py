@@ -7,6 +7,14 @@ branching on cosmetic strings.
 The shape is intentionally minimal — the spec allows extension members
 (``correlation_id``, ``errors``) while keeping ``type``, ``title``,
 ``status``, and ``detail`` stable.
+
+Issue #563: ``_problem_response`` now accepts an optional ``request`` argument.
+When supplied it reads ``request.state.correlation_id`` — the ID captured by
+``CorrelationMiddleware`` from the incoming ``X-Correlation-ID`` header (or
+generated for that request) — so 4xx error responses always echo the *same* ID
+that appears in the access log for that request rather than generating a fresh
+one.  4xx log lines also include the correlation ID so they can be correlated
+with the access log entry.
 """
 
 from __future__ import annotations
@@ -45,13 +53,70 @@ class ProblemDetail(BaseModel):
     errors: list[dict[str, Any]] | None = Field(default=None)
 
 
+def _resolve_correlation_id(request: Request | None) -> str:
+    """Return the correlation ID for this request.
+
+    Priority:
+    1. ``request.state.correlation_id`` – set by ``CorrelationMiddleware`` from
+       the incoming ``X-Correlation-ID`` header (or auto-generated once per
+       request).  This is the canonical source and must be echoed so the body
+       and the access-log entry carry the same ID (issue #563).
+    2. The context-variable set by the same middleware (same value, different
+       access path – used when no ``Request`` is available).
+    3. Generate a fresh UUID as a last resort (e.g. startup-time errors that
+       fire before any request is in flight).
+    """
+    if request is not None:
+        cid = getattr(request.state, "correlation_id", None)
+        if cid:
+            return cid
+    return get_or_generate_correlation_id()
+
+
 def _problem_response(
     status: int,
     title: str,
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
+    error_code: str | None = None,
+    request: Request | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    correlation_id = get_or_generate_correlation_id()
+    """Build an RFC 7807 JSON response, echoing the request's correlation ID.
+
+    ``request`` should always be supplied from exception handlers that receive
+    it (all FastAPI/Starlette exception handlers do).  It is kept optional only
+    for call-sites that have not yet been updated or that run outside a request
+    context.
+
+    ``headers`` carries any extra headers attached to the originating
+    ``HTTPException`` (for example ``Retry-After`` on a 429 rate-limit
+    response); they are merged with — but may not override — the correlation
+    ID header from issue #563.
+
+    4xx responses are also logged as WARNING with the correlation ID, status
+    and path in ``extra`` so they correlate with the access-log entry.
+    """
+    correlation_id = _resolve_correlation_id(request)
+    # Merge the caller-supplied headers (e.g. ``Retry-After`` from a 429 or
+    # ``WWW-Authenticate`` from a 401) with the correlation ID header from
+    # issue #563 — the correlation header always wins so the body, header, and
+    # access-log entry carry the same ID.
+    response_headers = {"X-Correlation-ID": correlation_id}
+    if headers:
+        response_headers = {**headers, **response_headers}
+    # Issue #563: log client errors with the correlation ID so the response a
+    # consumer sees can be matched to its access-log entry (and to the ID
+    # echoed in this body) without correlating by timestamp alone.
+    if 400 <= status < 500:
+        log_extra: dict[str, Any] = {"correlation_id": correlation_id, "status": status}
+        if error_code:
+            log_extra["error_code"] = error_code
+        if request is not None:
+            path = getattr(getattr(request, "url", None), "path", None)
+            if isinstance(path, str) and path:
+                log_extra["path"] = path
+        logger.warning("Client error response: %s %s", status, title, extra=log_extra)
     problem = ProblemDetail(
         type="about:blank",
         title=title,
@@ -60,23 +125,32 @@ def _problem_response(
         correlation_id=correlation_id,
         errors=errors,
     )
+    body = problem.model_dump(exclude_none=True)
+    # #569: registered machine-readable codes ride along as an RFC 7807
+    # extension member (see docs/ERROR_CODES.md) when the raiser provides one.
+    if error_code:
+        body["error_code"] = error_code
     return JSONResponse(
         status_code=status,
-        content=problem.model_dump(exclude_none=True),
+        content=body,
         media_type="application/problem+json",
-        headers={"X-Correlation-ID": correlation_id},
+        headers=response_headers,
     )
 
 
-async def http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """Handle all HTTPException instances as RFC 7807 problem responses."""
     if isinstance(exc.detail, str):
         return _problem_response(
             status=exc.status_code,
             title=_default_title(exc.status_code),
             detail=exc.detail,
+            # #569: endpoints may attach a registered code (docs/ERROR_CODES.md)
+            error_code=getattr(exc, "error_code", None),
+            # #563: echo the request's correlation ID and carry any headers
+            # attached to the exception (e.g. ``Retry-After`` on a 429).
+            request=request,
+            headers=exc.headers,
         )
 
     errors: list[dict[str, Any]]
@@ -93,8 +167,9 @@ async def http_exception_handler(
         title=_default_title(exc.status_code),
         detail="Request failed.",
         errors=errors,
+        request=request,
+        headers=exc.headers,
     )
-
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -114,12 +189,13 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         title="Unprocessable Entity",
         detail="Request validation failed.",
         errors=errors,
+        request=request,
     )
 
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Last-resort catch-all for unhandled exceptions (500)."""
-    correlation_id = get_or_generate_correlation_id()
+    correlation_id = _resolve_correlation_id(request)
     # Log the full exception server-side (with traceback + correlation ID) so
     # 500s are never invisible, while keeping the client response sanitized.
     # Control-flow exceptions (e.g. cancellation) are not errors and are skipped.
@@ -132,6 +208,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         status=500,
         title="Internal Server Error",
         detail="An unexpected error occurred.",
+        request=request,
     )
 
 

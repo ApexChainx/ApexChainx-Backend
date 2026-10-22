@@ -2,9 +2,10 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from app.api.coded_errors import CodedHTTPException
 from app.core.security import require_admin
 from app.db.session import get_db
 from app.models.auth import AuthUser
@@ -161,7 +162,7 @@ def revoke_api_key_endpoint(
 ):
     success = revoke_key(db, key_id)
     if not success:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="API key not found",
         )

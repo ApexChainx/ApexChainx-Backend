@@ -121,6 +121,7 @@ class TestSLACalculationError:
 
 class TestAnalyticsSummaryCSV:
     """CSV export must be RFC 4180-compliant (single header, uniform rows)."""
+
     def _make_summary(self, include_trends: bool) -> dict:
         summary = {
             "kpi": {
@@ -158,12 +159,8 @@ class TestAnalyticsSummaryCSV:
 
         assert rows, "CSV should have at least a header row"
         column_counts = {len(row) for row in rows}
-        assert len(column_counts) == 1, (
-            f"Rows have inconsistent column counts: {sorted(column_counts)}"
-        )
-        assert not any(row and row[0].startswith("#") for row in rows), (
-            "Found comment/non-standard line"
-        )
+        assert len(column_counts) == 1, f"Rows have inconsistent column counts: {sorted(column_counts)}"
+        assert not any(row and row[0].startswith("#") for row in rows), "Found comment/non-standard line"
         assert not any(not row for row in rows), "Found blank line"
 
     def test_empty_trends_same_schema(self):
@@ -177,6 +174,4 @@ class TestAnalyticsSummaryCSV:
         assert len({len(row) for row in csv_empty}) == 1
 
         # Both CSVs must expose the exact same schema (header row) — no hardcoded fallback.
-        assert csv_with[0] == csv_empty[0], (
-            "Empty dataset must use the same header as populated dataset"
-        )
+        assert csv_with[0] == csv_empty[0], "Empty dataset must use the same header as populated dataset"

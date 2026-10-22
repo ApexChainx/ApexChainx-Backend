@@ -17,6 +17,9 @@ from app.models.enums import Role
 from app.services.api_key_store import create_api_key
 from app.services.auth_store import AuthStore
 
+# Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
+pytestmark = [pytest.mark.postgres]
+
 PASSWORD = "TestPass123!"
 
 

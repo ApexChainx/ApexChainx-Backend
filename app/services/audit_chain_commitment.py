@@ -1,6 +1,7 @@
 """Per-chunk hash commitments so audit chain verification survives
 retention pruning of older JSONL archive chunks.
 """
+
 import hashlib
 from typing import Iterable
 
