@@ -21,7 +21,16 @@ class SLACache:
     logged at WARNING level.  No exception ever escapes this class.
     """
 
-    def __init__(self, redis: Redis, ttl: int = 60):
+    # Prometheus metric names
+    _GET_TOTAL = "cache_sla_get_total"
+    _SET_TOTAL = "cache_sla_set_total"
+    _INVALIDATE_TOTAL = "cache_sla_invalidate_total"
+    _HIT_TOTAL = "cache_sla_hit_total"
+    _MISS_TOTAL = "cache_sla_miss_total"
+    _ERROR_TOTAL = "cache_sla_error_total"
+    _DURATION_MS = "cache_sla_operation_duration_seconds"
+
+    def __init__(self, redis, ttl: int = 60):
         self._redis = redis
         self._ttl = ttl
         self._cache = CacheLayer(redis, namespace="sla", ttl_seconds=ttl)
@@ -50,6 +59,10 @@ class SLACache:
         cached = self.get(device_id, period)
         if cached is not None:
             return cached
+        metrics.increment_counter(
+            "cache_sla_compute_total",
+            tags={"operation": "compute", "result": "miss_triggered"},
+        )
         result = compute_fn()
         self.set(device_id, period, result)
         return result
@@ -57,8 +70,8 @@ class SLACache:
     def invalidate(self, device_id: str, period: str) -> None:
         self._cache.delete(f"{device_id}:{period}")
 
-    def warm_up(self, entries: Iterable[tuple[str, str, dict]]) -> int:
-        """Pre-populate the cache with precomputed results (#566).
+    def get_stats(self) -> dict:
+        """Return cache operational statistics for monitoring (#1372).
 
         Uses the exact same keys and TTL as the read path, so a value written
         here is indistinguishable from one written by ``set``/``get_or_compute``

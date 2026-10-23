@@ -13,6 +13,8 @@ from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
+from app.services.metrics import metrics, timer
+
 
 class WalletCache:
     """Read-through cache wrapping Redis for wallet lookups.
@@ -21,6 +23,15 @@ class WalletCache:
     the caller falls through to the database and the error is logged.
     No exception ever escapes this class.
     """
+
+    # Prometheus metric names (namespaced under cache_ for clarity)
+    _GET_TOTAL = "cache_wallet_get_total"
+    _SET_TOTAL = "cache_wallet_set_total"
+    _INVALIDATE_TOTAL = "cache_wallet_invalidate_total"
+    _HIT_TOTAL = "cache_wallet_hit_total"
+    _MISS_TOTAL = "cache_wallet_miss_total"
+    _ERROR_TOTAL = "cache_wallet_error_total"
+    _DURATION_MS = "cache_wallet_operation_duration_seconds"
 
     def __init__(self, redis_client, ttl: int = 60):
         self._redis = redis_client

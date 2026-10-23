@@ -14,36 +14,8 @@ from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.sla import SLACalculationResult
 from app.services.audit_log import audit_log
-from app.services.metrics import _SLA_LATENCY_BUCKETS, increment_counter, record_histogram
+from app.services.metrics import increment_counter
 from app.services.sla_cache import SLACache
-
-logger = logging.getLogger(__name__)
-
-
-def _ensure_aware(dt: datetime | None) -> datetime | None:
-    """Return *dt* with UTC attached if it was timezone-naive."""
-    if dt is not None and dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
-    return dt
-
-
-_sla_cache: SLACache | None = None
-
-
-def _get_sla_cache() -> SLACache | None:
-    """Lazily initialise the Redis-backed SLA cache."""
-    global _sla_cache
-    if _sla_cache is not None:
-        return _sla_cache
-    try:
-        from app.core.config import settings as _settings
-
-        _redis = Redis.from_url(_settings.REDIS_URL, decode_responses=True)
-        _sla_cache = SLACache(_redis)
-    except Exception:
-        logger.debug("SLA cache unavailable; skipping cache lookups")
-        return None
-    return _sla_cache
 
 
 class SLAOrchestrator:
