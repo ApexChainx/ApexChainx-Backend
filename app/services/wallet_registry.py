@@ -4,6 +4,16 @@ Delegates durable storage to WalletRepository and wraps reads with an optional
 Redis-backed read-through cache (WalletCache).  The in-memory dicts have been
 removed so that wallet state survives restarts and works across multi-worker
 deployments.
+
+Issue #699 — Distributed tracing:
+    All public service methods are instrumented with the @traced decorator so
+    every wallet operation emits an OpenTelemetry span with relevant attributes.
+    This enables end-to-end visibility through dashboards (Jaeger, Grafana Tempo,
+    AWS X-Ray) without any additional changes at the call sites.
+
+Issue #701 — Pagination:
+    list_wallets() delegates to WalletRepository.list_wallets() and converts
+    ORM rows to Pydantic models so the endpoint layer stays thin.
 """
 
 from __future__ import annotations
@@ -15,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ApexConflictError, ApexWalletAlreadyExistsError
+from app.core.tracing import traced
 from app.models.orm.wallet import WalletORM
 from app.models.wallet import (
     AssetBalance,
@@ -24,6 +35,7 @@ from app.models.wallet import (
     WalletCreateResponse,
     WalletFundingStateResponse,
     WalletLinkRequest,
+    WalletListResponse,
     WalletStatusResponse,
     WalletTrustlineResponse,
 )
@@ -52,6 +64,9 @@ class WalletRegistry:
     Public methods accept a ``db: Session`` parameter so callers (e.g. FastAPI
     route handlers) can inject the request-scoped session.  The ``cache``
     parameter is optional; when provided it acts as a read-through cache.
+
+    Issue #699: every public method is decorated with @traced so all wallet
+    operations are visible as named spans in the distributed trace.
     """
 
     # ------------------------------------------------------------------
@@ -84,6 +99,7 @@ class WalletRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
+    @traced("wallet.create", attributes={"component": "wallet-registry"})
     def create_wallet(
         cls,
         db: Session,
@@ -126,6 +142,7 @@ class WalletRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
+    @traced("wallet.link", attributes={"component": "wallet-registry"})
     def link_wallet(
         cls,
         db: Session,
@@ -243,6 +260,7 @@ class WalletRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
+    @traced("wallet.get", attributes={"component": "wallet-registry"})
     def get_wallet(
         cls,
         db: Session,
@@ -252,6 +270,7 @@ class WalletRegistry:
         return cls._fetch_wallet(db, user_id, cache=cache)
 
     @classmethod
+    @traced("wallet.get_balance", attributes={"component": "wallet-registry"})
     def get_balance(
         cls,
         db: Session,
@@ -283,6 +302,7 @@ class WalletRegistry:
         )
 
     @classmethod
+    @traced("wallet.get_status", attributes={"component": "wallet-registry"})
     def get_status(
         cls,
         db: Session,
@@ -306,6 +326,7 @@ class WalletRegistry:
         )
 
     @classmethod
+    @traced("wallet.get_trustline", attributes={"component": "wallet-registry"})
     def get_trustline(
         cls,
         db: Session,
@@ -326,6 +347,7 @@ class WalletRegistry:
         )
 
     @classmethod
+    @traced("wallet.get_funding_state", attributes={"component": "wallet-registry"})
     def get_funding_state(
         cls,
         db: Session,
@@ -343,4 +365,32 @@ class WalletRegistry:
             funding_error=error,
             cache_status=wallet.cache_status,
             cached_at=wallet.cached_at,
+        )
+
+    # ------------------------------------------------------------------
+    # List (pagination, issue #701)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    @traced("wallet.list", attributes={"component": "wallet-registry"})
+    def list_wallets(
+        cls,
+        db: Session,
+        page: int = 1,
+        page_size: int = 20,
+        include_total: bool = True,
+    ) -> WalletListResponse:
+        """Return a paginated list of wallets (issue #701).
+
+        Delegates to WalletRepository.list_wallets() which uses a
+        COUNT(*) OVER() window function to retrieve total count and
+        items in one query pass.
+        """
+        repo = WalletRepository(db)
+        result = repo.list_wallets(page=page, page_size=page_size, include_total=include_total)
+        return WalletListResponse(
+            items=[_orm_to_pydantic(orm) for orm in result["items"]],
+            total=result["total"],
+            page=result["page"],
+            page_size=result["page_size"],
         )
