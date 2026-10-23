@@ -54,12 +54,45 @@ class WalletRepository:
     # ── Read ──────────────────────────────────────────────────────────────
 
     def get_by_user_id(self, user_id: str) -> Optional[WalletORM]:
-        """Look up a wallet by user_id."""
-        return self.db.query(WalletORM).filter(WalletORM.user_id == user_id).first()
+        """Look up a wallet by user_id. Uses indexed column."""
+        return (
+            self.db.query(WalletORM)
+            .filter(WalletORM.user_id == user_id)
+            .first()
+        )
 
     def get_by_public_key(self, public_key: str) -> Optional[WalletORM]:
-        """Look up a wallet by Stellar public key."""
-        return self.db.query(WalletORM).filter(WalletORM.public_key == public_key).first()
+        """Look up a wallet by Stellar public key. Uses indexed column."""
+        return (
+            self.db.query(WalletORM)
+            .filter(WalletORM.public_key == public_key)
+            .first()
+        )
+
+    def get_by_user_id_or_public_key(
+        self, user_id: str, public_key: str
+    ) -> tuple[Optional[WalletORM], Optional[WalletORM]]:
+        """Fetch wallet by user_id and by public_key in a single round-trip.
+
+        Returns a tuple of (by_user_id, by_public_key). Both may be None.
+        This is more efficient than two separate queries when both lookups
+        are needed (e.g. conflict detection in link_wallet).
+        """
+        from sqlalchemy import or_
+
+        rows = (
+            self.db.query(WalletORM)
+            .filter(
+                or_(
+                    WalletORM.user_id == user_id,
+                    WalletORM.public_key == public_key,
+                )
+            )
+            .all()
+        )
+        by_user_id = next((r for r in rows if r.user_id == user_id), None)
+        by_public_key = next((r for r in rows if r.public_key == public_key), None)
+        return by_user_id, by_public_key
 
     # ── Update ────────────────────────────────────────────────────────────
 

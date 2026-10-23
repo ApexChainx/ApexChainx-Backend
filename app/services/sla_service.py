@@ -9,6 +9,7 @@ from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.services.audit_log import audit_log
 from app.services.metrics import increment_counter
+from app.services.sla_cache import SLACache
 
 
 class SLAOrchestrator:
