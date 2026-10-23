@@ -1,11 +1,15 @@
 """Redis-backed read-through cache for wallet reads (#29).
 
-Exposes Prometheus metrics via the shared metrics registry so operators can
-monitor cache hit rates, latencies, and errors in production.
+Cache failures are logged and treated as misses so a degraded Redis never
+breaks the wallet lookup path.  This mirrors the error-handling contract of
+``AuthCache`` and ``UserCache``: every Redis operation is wrapped in a
+``try/except (RedisError, OSError)`` guard and logged at WARNING level.
 """
 
 import json
 import logging
+
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +17,12 @@ from app.services.metrics import metrics, timer
 
 
 class WalletCache:
-    """Read-through cache wrapping Redis for wallet lookups."""
+    """Read-through cache wrapping Redis for wallet lookups.
+
+    A degraded or unreachable Redis is always treated as a cache miss —
+    the caller falls through to the database and the error is logged.
+    No exception ever escapes this class.
+    """
 
     # Prometheus metric names (namespaced under cache_ for clarity)
     _GET_TOTAL = "cache_wallet_get_total"
@@ -31,97 +40,43 @@ class WalletCache:
     def _key(self, address: str) -> str:
         return f"wallet:{address}"
 
-    def get(self, address: str) -> Optional[dict]:
-        """Return cached wallet data or None on miss / error.
+    def get(self, address: str) -> dict | None:
+        """Return the cached wallet dict for *address*, or ``None`` on a miss.
 
-        Records cache_hit_total / cache_miss_total and cache operation
-        duration histograms for Prometheus scraping.
+        Returns ``None`` on Redis errors or corrupt JSON — both are logged.
         """
-        import json
-
-        tags = {"operation": "get", "result": "unknown"}
-        with timer(self._DURATION_MS, tags):
-            try:
-                raw = self._redis.get(self._key(address))
-                if raw:
-                    metrics.increment_counter(self._HIT_TOTAL, tags={"operation": "get", "result": "hit"})
-                    metrics.increment_counter(self._GET_TOTAL, tags={"operation": "get", "result": "hit"})
-                    return json.loads(raw)
-                metrics.increment_counter(self._MISS_TOTAL, tags={"operation": "get", "result": "miss"})
-                metrics.increment_counter(self._GET_TOTAL, tags={"operation": "get", "result": "miss"})
-                return None
-            except Exception:
-                metrics.increment_counter(self._ERROR_TOTAL, tags={"operation": "get", "error": "redis_error"})
-                metrics.increment_counter(self._GET_TOTAL, tags={"operation": "get", "result": "error"})
-                return None
+        try:
+            raw = self._redis.get(self._key(address))
+        except (RedisError, OSError) as exc:
+            logger.warning("Wallet cache read failed for %s: %s", address, exc)
+            return None
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning(
+                "Corrupt JSON in wallet cache for key %s, treating as miss", address
+            )
+            return None
 
     def set(self, address: str, data: dict) -> None:
-        """Store wallet data in the cache."""
-        import json
+        """Write *data* into the cache under *address*.
 
-        tags = {"operation": "set"}
-        with timer(self._DURATION_MS, tags):
-            try:
-                self._redis.setex(self._key(address), self._ttl, json.dumps(data))
-                metrics.increment_counter(self._SET_TOTAL, tags=tags)
-            except Exception:
-                metrics.increment_counter(
-                    self._ERROR_TOTAL,
-                    tags={"operation": "set", "error": "redis_error"},
-                )
+        Logs and swallows Redis errors so a write failure never breaks the
+        request path.
+        """
+        try:
+            self._redis.setex(self._key(address), self._ttl, json.dumps(data))
+        except (RedisError, OSError) as exc:
+            logger.warning("Wallet cache write failed for %s: %s", address, exc)
 
     def invalidate(self, address: str) -> None:
-        """Remove a wallet entry from the cache."""
-        tags = {"operation": "invalidate"}
-        with timer(self._DURATION_MS, tags):
-            try:
-                self._redis.delete(self._key(address))
-                metrics.increment_counter(self._INVALIDATE_TOTAL, tags=tags)
-            except Exception:
-                metrics.increment_counter(
-                    self._ERROR_TOTAL,
-                    tags={"operation": "invalidate", "error": "redis_error"},
-                )
+        """Remove the cached entry for *address*.
 
-    def warmup(
-        self, rows: list[tuple[str, dict]], *, ttl_override: Optional[int] = None
-    ) -> int:
-        """Pre-populate the cache with wallet data (bulk warm).
-
-        Returns the number of entries successfully cached.
-        Used for cache warming after deployments or cache flushes (#1415).
+        Logs and swallows Redis errors.
         """
-        import json
-
-        ttl = ttl_override if ttl_override is not None else self._ttl
-        populated = 0
-        for address, data in rows:
-            try:
-                self._redis.setex(
-                    self._key(address),
-                    ttl,
-                    json.dumps(data),
-                )
-                populated += 1
-                metrics.increment_counter(
-                    "cache_wallet_warmup_total",
-                    tags={"operation": "warmup", "result": "ok"},
-                )
-            except Exception:
-                metrics.increment_counter(
-                    "cache_wallet_warmup_total",
-                    tags={"operation": "warmup", "result": "error"},
-                )
-        return populated
-
-    def get_stats(self) -> dict:
-        """Return cache operational statistics for monitoring (#1372).
-
-        Returns a dict with:
-        - ttl: configured TTL in seconds
-        - class: "WalletCache"
-        """
-        return {
-            "ttl": self._ttl,
-            "class": "WalletCache",
-        }
+        try:
+            self._redis.delete(self._key(address))
+        except (RedisError, OSError) as exc:
+            logger.warning("Wallet cache invalidate failed for %s: %s", address, exc)

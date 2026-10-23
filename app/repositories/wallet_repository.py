@@ -3,15 +3,62 @@
 Provides durable wallet identity with uniqueness enforcement:
 - user_id is unique → concurrent register → 409
 - public_key is unique → prevents double-linking
+
+Issue #700 — SQL injection hardening:
+    Input validation rejects control characters and known SQLi probe tokens
+    before any value reaches SQLAlchemy.  Note: SQLAlchemy already uses
+    parameterised queries, so this is defence-in-depth that also catches
+    obviously malicious inputs early and returns a clear 422.
+
+Issue #701 — Pagination:
+    list_wallets() exposes an offset-based paginated view of all wallets
+    using COUNT(*) OVER() so the total is computed in a single DB pass,
+    matching the pattern used in OutageRepository.list().
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.models.orm.wallet import WalletORM
+
+# ── Input validation helpers (#700) ───────────────────────────────────────────
+
+# Printable ASCII plus hyphen/underscore/dot/@ – all legitimate user_id and
+# public_key characters.  Anything else (null bytes, control chars, etc.)
+# is rejected immediately.
+_SAFE_INPUT_RE = re.compile(r"^[\x20-\x7E]+$")
+
+# Short blocklist of tokens that appear in virtually every SQLi probe.  This is
+# defence-in-depth only; SQLAlchemy parameterisation is the primary protection.
+_SQLI_PATTERNS = re.compile(
+    r"""(\b(union|select|insert|update|delete|drop|alter|exec|execute|
+             declare|cast|convert|xp_cmdshell|waitfor|sleep)\b
+        |--|;|/\*|\*/|'\s*or\s*'|'\s*and\s*')""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _validate_input(value: str, field_name: str) -> None:
+    """Raise ValueError if *value* contains dangerous characters or SQLi tokens.
+
+    This runs before values are handed to SQLAlchemy so that obviously
+    malicious inputs are surfaced early with a clear error message.
+    """
+    if not value:
+        raise ValueError(f"{field_name} must not be empty")
+    if not _SAFE_INPUT_RE.match(value):
+        raise ValueError(
+            f"{field_name} contains invalid characters. "
+            "Only printable ASCII characters are allowed."
+        )
+    if _SQLI_PATTERNS.search(value):
+        raise ValueError(
+            f"{field_name} contains disallowed SQL keywords or characters."
+        )
 
 
 class WalletRepository:
@@ -34,6 +81,9 @@ class WalletRepository:
         trustline_ready: bool = False,
     ) -> WalletORM:
         """Persist a new wallet.  Raises ValueError on duplicate user_id or public_key."""
+        _validate_input(user_id, "user_id")
+        _validate_input(public_key, "public_key")
+
         now = datetime.now(UTC)
         wallet = WalletORM(
             user_id=user_id,
@@ -52,46 +102,61 @@ class WalletRepository:
 
     # ── Read ──────────────────────────────────────────────────────────────
 
-    def get_by_user_id(self, user_id: str) -> Optional[WalletORM]:
-        """Look up a wallet by user_id. Uses indexed column."""
-        return (
-            self.db.query(WalletORM)
-            .filter(WalletORM.user_id == user_id)
-            .first()
-        )
+    def get_by_user_id(self, user_id: str) -> WalletORM | None:
+        """Look up a wallet by user_id."""
+        _validate_input(user_id, "user_id")
+        return self.db.query(WalletORM).filter(WalletORM.user_id == user_id).first()
 
-    def get_by_public_key(self, public_key: str) -> Optional[WalletORM]:
-        """Look up a wallet by Stellar public key. Uses indexed column."""
-        return (
-            self.db.query(WalletORM)
-            .filter(WalletORM.public_key == public_key)
-            .first()
-        )
+    def get_by_public_key(self, public_key: str) -> WalletORM | None:
+        """Look up a wallet by Stellar public key."""
+        _validate_input(public_key, "public_key")
+        return self.db.query(WalletORM).filter(WalletORM.public_key == public_key).first()
 
-    def get_by_user_id_or_public_key(
-        self, user_id: str, public_key: str
-    ) -> tuple[Optional[WalletORM], Optional[WalletORM]]:
-        """Fetch wallet by user_id and by public_key in a single round-trip.
+    def list_wallets(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        include_total: bool = True,
+    ) -> dict:
+        """Return a paginated slice of wallets (issue #701).
 
-        Returns a tuple of (by_user_id, by_public_key). Both may be None.
-        This is more efficient than two separate queries when both lookups
-        are needed (e.g. conflict detection in link_wallet).
+        Uses COUNT(*) OVER() so the total count is computed in the same query
+        pass as the page items — avoids a second round-trip to the DB,
+        matching the pattern used by OutageRepository.list().
+
+        Returns:
+            {
+                "items":     list[WalletORM],
+                "total":     int | None,   # None when include_total=False
+                "page":      int,
+                "page_size": int,
+            }
         """
-        from sqlalchemy import or_
+        from sqlalchemy import func
 
-        rows = (
-            self.db.query(WalletORM)
-            .filter(
-                or_(
-                    WalletORM.user_id == user_id,
-                    WalletORM.public_key == public_key,
-                )
+        query = self.db.query(WalletORM).order_by(WalletORM.created_at.desc(), WalletORM.id.asc())
+
+        offset = (page - 1) * page_size
+
+        if include_total:
+            rows = (
+                query.add_columns(func.count().over())
+                .offset(offset)
+                .limit(page_size)
+                .all()
             )
-            .all()
-        )
-        by_user_id = next((r for r in rows if r.user_id == user_id), None)
-        by_public_key = next((r for r in rows if r.public_key == public_key), None)
-        return by_user_id, by_public_key
+            total = rows[0][1] if rows else 0
+            items = [row[0] for row in rows]
+        else:
+            total = None
+            items = query.offset(offset).limit(page_size).all()
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
 
     # ── Update ────────────────────────────────────────────────────────────
 

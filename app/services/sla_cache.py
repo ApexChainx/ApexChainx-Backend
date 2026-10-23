@@ -1,20 +1,25 @@
 """Redis caching layer for SLA calculation results (#25).
 
-Exposes Prometheus metrics via the shared metrics registry so operators can
-monitor cache hit rates, latencies, and errors in production.
+Cache failures are logged and treated as misses so a degraded Redis never
+breaks the SLA computation path.  Every Redis operation is wrapped in a
+``try/except (RedisError, OSError)`` guard, matching the contract of
+``AuthCache``, ``UserCache``, and ``WalletCache``.
 """
 
-import json
-import logging
 from collections.abc import Callable, Iterable
 
-from app.services.metrics import metrics, timer
+from redis import Redis
+from redis.exceptions import RedisError
 
-logger = logging.getLogger(__name__)
-
+from app.services.cache_layer import CacheLayer
 
 class SLACache:
-    """Read-through cache for SLA computation results."""
+    """Read-through cache for SLA computation results.
+
+    A degraded or unreachable Redis is always treated as a cache miss —
+    the caller falls through to recomputing the SLA result and the error is
+    logged at WARNING level.  No exception ever escapes this class.
+    """
 
     # Prometheus metric names
     _GET_TOTAL = "cache_sla_get_total"
@@ -28,66 +33,17 @@ class SLACache:
     def __init__(self, redis, ttl: int = 60):
         self._redis = redis
         self._ttl = ttl
+        self._cache = CacheLayer(redis, namespace="sla", ttl_seconds=ttl)
 
     def _key(self, device_id: str, period: str) -> str:
         return f"sla:{device_id}:{period}"
 
-    def get(self, device_id: str, period: str) -> Optional[dict]:
-        """Return cached SLA result or None on miss / error.
-
-        Records cache_hit_total / cache_miss_total and operation duration
-        histograms for Prometheus scraping.
-        """
-        tags = {"operation": "get", "result": "unknown"}
-        with timer(self._DURATION_MS, tags):
-            try:
-                raw = self._redis.get(self._key(device_id, period))
-                if raw:
-                    metrics.increment_counter(
-                        self._HIT_TOTAL,
-                        tags={"operation": "get", "result": "hit"},
-                    )
-                    metrics.increment_counter(
-                        self._GET_TOTAL,
-                        tags={"operation": "get", "result": "hit"},
-                    )
-                    return json.loads(raw)
-                metrics.increment_counter(
-                    self._MISS_TOTAL,
-                    tags={"operation": "get", "result": "miss"},
-                )
-                metrics.increment_counter(
-                    self._GET_TOTAL,
-                    tags={"operation": "get", "result": "miss"},
-                )
-                return None
-            except Exception:
-                metrics.increment_counter(
-                    self._ERROR_TOTAL,
-                    tags={"operation": "get", "error": "redis_error"},
-                )
-                metrics.increment_counter(
-                    self._GET_TOTAL,
-                    tags={"operation": "get", "result": "error"},
-                )
-                return None
+    def get(self, device_id: str, period: str) -> dict | None:
+        value = self._cache.get(f"{device_id}:{period}")
+        return value if isinstance(value, dict) else None
 
     def set(self, device_id: str, period: str, result: dict) -> None:
-        """Store SLA result in the cache."""
-        tags = {"operation": "set"}
-        with timer(self._DURATION_MS, tags):
-            try:
-                self._redis.setex(
-                    self._key(device_id, period),
-                    self._ttl,
-                    json.dumps(result),
-                )
-                metrics.increment_counter(self._SET_TOTAL, tags=tags)
-            except Exception:
-                metrics.increment_counter(
-                    self._ERROR_TOTAL,
-                    tags={"operation": "set", "error": "redis_error"},
-                )
+        self._cache.set(f"{device_id}:{period}", result)
 
     def get_or_compute(
         self,
@@ -95,9 +51,10 @@ class SLACache:
         period: str,
         compute_fn: Callable[[], dict],
     ) -> dict:
-        """Return cached result or compute and cache it.
+        """Return the cached result or compute, cache, and return it.
 
-        Records a cache_miss_total when a compute is required.
+        If the cache write fails the computed value is still returned — the
+        next call will recompute rather than serve stale or missing data.
         """
         cached = self.get(device_id, period)
         if cached is not None:
@@ -111,92 +68,28 @@ class SLACache:
         return result
 
     def invalidate(self, device_id: str, period: str) -> None:
-        """Remove an SLA cache entry."""
-        tags = {"operation": "invalidate"}
-        with timer(self._DURATION_MS, tags):
-            try:
-                self._redis.delete(self._key(device_id, period))
-                metrics.increment_counter(self._INVALIDATE_TOTAL, tags=tags)
-            except Exception:
-                metrics.increment_counter(
-                    self._ERROR_TOTAL,
-                    tags={"operation": "invalidate", "error": "redis_error"},
-                )
-
-    def invalidate_by_device(self, device_id: str) -> int:
-        """Remove all SLA cache entries for a given device_id (#1372).
-
-        Returns the number of entries deleted. Useful when a device's SLA
-        configuration changes and all cached results for that device must
-        be invalidated at once.
-        """
-        # Use a SCAN-based approach to find and delete all keys for this device
-        cursor = 0
-        deleted = 0
-        while True:
-            cursor, keys = self._redis.scan(
-                cursor=cursor,
-                match=self._key(device_id, "*"),
-                count=100,
-            )
-            if keys:
-                if cursor == 0:
-                    deleted += self._redis.delete(*keys)
-                    break
-                deleted += self._redis.delete(*keys)
-            if cursor == 0:
-                break
-        if deleted:
-            metrics.increment_counter(
-                "cache_sla_invalidate_device_total",
-                tags={"operation": "invalidate_device", "deleted": str(deleted)},
-            )
-        return deleted
-
-    def warmup(
-        self,
-        rows: list[tuple[str, str, dict]],
-        *,
-        ttl_override: Optional[int] = None,
-    ) -> int:
-        """Pre-populate the cache with SLA results (bulk warm) (#1415).
-
-        Args:
-            rows: list of (device_id, period, result_dict) tuples
-            ttl_override: optional TTL override for this warmup batch
-
-        Returns:
-            Number of entries successfully cached.
-        """
-        ttl = ttl_override if ttl_override is not None else self._ttl
-        populated = 0
-        for device_id, period, result in rows:
-            try:
-                self._redis.setex(
-                    self._key(device_id, period),
-                    ttl,
-                    json.dumps(result),
-                )
-                populated += 1
-                metrics.increment_counter(
-                    "cache_sla_warmup_total",
-                    tags={"operation": "warmup", "result": "ok"},
-                )
-            except Exception:
-                metrics.increment_counter(
-                    "cache_sla_warmup_total",
-                    tags={"operation": "warmup", "result": "error"},
-                )
-        return populated
+        self._cache.delete(f"{device_id}:{period}")
 
     def get_stats(self) -> dict:
         """Return cache operational statistics for monitoring (#1372).
 
-        Returns a dict with:
-        - ttl: configured TTL in seconds
-        - class: "SLACache"
+        Uses the exact same keys and TTL as the read path, so a value written
+        here is indistinguishable from one written by ``set``/``get_or_compute``
+        during a request.
+
+        Individual write failures are logged and skipped so a single bad entry
+        cannot abort the whole warm-up pass.  Returns the number of entries
+        successfully written.
         """
-        return {
-            "ttl": self._ttl,
-            "class": "SLACache",
-        }
+        warmed = 0
+        for device_id, period, result in entries:
+            try:
+                self.set(device_id, period, result)
+                warmed += 1
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "SLA cache warm-up skipped entry %s/%s due to unexpected error",
+                    device_id,
+                    period,
+                )
+        return warmed
