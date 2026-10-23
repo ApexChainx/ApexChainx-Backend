@@ -1,13 +1,10 @@
 """Redis caching layer for SLA calculation results (#25)."""
 
-import json
-import logging
 from collections.abc import Callable, Iterable
 
 from redis import Redis
 
-logger = logging.getLogger(__name__)
-
+from app.services.cache_layer import CacheLayer
 
 class SLACache:
     """Read-through cache for SLA computation results."""
@@ -15,26 +12,17 @@ class SLACache:
     def __init__(self, redis: Redis, ttl: int = 60):
         self._redis = redis
         self._ttl = ttl
+        self._cache = CacheLayer(redis, namespace="sla", ttl_seconds=ttl)
 
     def _key(self, device_id: str, period: str) -> str:
         return f"sla:{device_id}:{period}"
 
     def get(self, device_id: str, period: str) -> dict | None:
-        raw = self._redis.get(self._key(device_id, period))
-        if raw:
-            try:
-                return json.loads(raw)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                logger.warning("Corrupt JSON in SLA cache for key %s:%s, treating as miss", device_id, period)
-                return None
-        return None
+        value = self._cache.get(f"{device_id}:{period}")
+        return value if isinstance(value, dict) else None
 
     def set(self, device_id: str, period: str, result: dict) -> None:
-        self._redis.setex(
-            self._key(device_id, period),
-            self._ttl,
-            json.dumps(result),
-        )
+        self._cache.set(f"{device_id}:{period}", result)
 
     def get_or_compute(
         self,
@@ -51,7 +39,7 @@ class SLACache:
         return result
 
     def invalidate(self, device_id: str, period: str) -> None:
-        self._redis.delete(self._key(device_id, period))
+        self._cache.delete(f"{device_id}:{period}")
 
     def warm_up(self, entries: Iterable[tuple[str, str, dict]]) -> int:
         """Pre-populate the cache with precomputed results (#566).
