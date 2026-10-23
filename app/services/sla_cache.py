@@ -1,13 +1,25 @@
-"""Redis caching layer for SLA calculation results (#25)."""
+"""Redis caching layer for SLA calculation results (#25).
+
+Cache failures are logged and treated as misses so a degraded Redis never
+breaks the SLA computation path.  Every Redis operation is wrapped in a
+``try/except (RedisError, OSError)`` guard, matching the contract of
+``AuthCache``, ``UserCache``, and ``WalletCache``.
+"""
 
 from collections.abc import Callable, Iterable
 
 from redis import Redis
+from redis.exceptions import RedisError
 
 from app.services.cache_layer import CacheLayer
 
 class SLACache:
-    """Read-through cache for SLA computation results."""
+    """Read-through cache for SLA computation results.
+
+    A degraded or unreachable Redis is always treated as a cache miss —
+    the caller falls through to recomputing the SLA result and the error is
+    logged at WARNING level.  No exception ever escapes this class.
+    """
 
     def __init__(self, redis: Redis, ttl: int = 60):
         self._redis = redis
@@ -30,7 +42,11 @@ class SLACache:
         period: str,
         compute_fn: Callable[[], dict],
     ) -> dict:
-        """Return cached result or compute and cache it."""
+        """Return the cached result or compute, cache, and return it.
+
+        If the cache write fails the computed value is still returned — the
+        next call will recompute rather than serve stale or missing data.
+        """
         cached = self.get(device_id, period)
         if cached is not None:
             return cached
@@ -46,10 +62,21 @@ class SLACache:
 
         Uses the exact same keys and TTL as the read path, so a value written
         here is indistinguishable from one written by ``set``/``get_or_compute``
-        during a request. Returns the number of entries written.
+        during a request.
+
+        Individual write failures are logged and skipped so a single bad entry
+        cannot abort the whole warm-up pass.  Returns the number of entries
+        successfully written.
         """
         warmed = 0
         for device_id, period, result in entries:
-            self.set(device_id, period, result)
-            warmed += 1
+            try:
+                self.set(device_id, period, result)
+                warmed += 1
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "SLA cache warm-up skipped entry %s/%s due to unexpected error",
+                    device_id,
+                    period,
+                )
         return warmed
