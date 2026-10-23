@@ -6,15 +6,12 @@ breaks the SLA computation path.  Every Redis operation is wrapped in a
 ``AuthCache``, ``UserCache``, and ``WalletCache``.
 """
 
-import json
-import logging
 from collections.abc import Callable, Iterable
 
 from redis import Redis
 from redis.exceptions import RedisError
 
-logger = logging.getLogger(__name__)
-
+from app.services.cache_layer import CacheLayer
 
 class SLACache:
     """Read-through cache for SLA computation results.
@@ -27,46 +24,17 @@ class SLACache:
     def __init__(self, redis: Redis, ttl: int = 60):
         self._redis = redis
         self._ttl = ttl
+        self._cache = CacheLayer(redis, namespace="sla", ttl_seconds=ttl)
 
     def _key(self, device_id: str, period: str) -> str:
         return f"sla:{device_id}:{period}"
 
     def get(self, device_id: str, period: str) -> dict | None:
-        """Return the cached SLA result, or ``None`` on a miss.
-
-        Returns ``None`` on Redis errors or corrupt JSON — both are logged.
-        """
-        try:
-            raw = self._redis.get(self._key(device_id, period))
-        except (RedisError, OSError) as exc:
-            logger.warning("SLA cache read failed for %s/%s: %s", device_id, period, exc)
-            return None
-        if not raw:
-            return None
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            logger.warning(
-                "Corrupt JSON in SLA cache for key %s:%s, treating as miss",
-                device_id,
-                period,
-            )
-            return None
+        value = self._cache.get(f"{device_id}:{period}")
+        return value if isinstance(value, dict) else None
 
     def set(self, device_id: str, period: str, result: dict) -> None:
-        """Write *result* into the cache for *device_id* / *period*.
-
-        Logs and swallows Redis errors so a write failure never breaks the
-        request path.
-        """
-        try:
-            self._redis.setex(
-                self._key(device_id, period),
-                self._ttl,
-                json.dumps(result),
-            )
-        except (RedisError, OSError) as exc:
-            logger.warning("SLA cache write failed for %s/%s: %s", device_id, period, exc)
+        self._cache.set(f"{device_id}:{period}", result)
 
     def get_or_compute(
         self,
@@ -87,16 +55,7 @@ class SLACache:
         return result
 
     def invalidate(self, device_id: str, period: str) -> None:
-        """Remove the cached entry for *device_id* / *period*.
-
-        Logs and swallows Redis errors.
-        """
-        try:
-            self._redis.delete(self._key(device_id, period))
-        except (RedisError, OSError) as exc:
-            logger.warning(
-                "SLA cache invalidate failed for %s/%s: %s", device_id, period, exc
-            )
+        self._cache.delete(f"{device_id}:{period}")
 
     def warm_up(self, entries: Iterable[tuple[str, str, dict]]) -> int:
         """Pre-populate the cache with precomputed results (#566).
