@@ -8,14 +8,14 @@ deployments.
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
-from typing import Optional
+from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.exceptions import ApexConflictError
+from app.core.exceptions import ApexConflictError, ApexWalletAlreadyExistsError
+from app.models.orm.wallet import WalletORM
 from app.models.wallet import (
     AssetBalance,
     Wallet,
@@ -27,7 +27,6 @@ from app.models.wallet import (
     WalletStatusResponse,
     WalletTrustlineResponse,
 )
-from app.models.orm.wallet import WalletORM
 from app.repositories.wallet_repository import WalletRepository
 from app.services.wallet_cache import WalletCache
 
@@ -67,6 +66,19 @@ class WalletRegistry:
     def _build_public_key() -> str:
         return f"G{uuid4().hex.upper()}"
 
+    @staticmethod
+    def _already_registered(existing: WalletORM) -> ApexWalletAlreadyExistsError:
+        """Build the 409 raised when the user already has a wallet (issue #531)."""
+        return ApexWalletAlreadyExistsError(
+            detail=(
+                f"Wallet {existing.id} already registered for user '{existing.user_id}' "
+                f"at address '{existing.public_key}'."
+            ),
+            wallet_id=existing.id,
+            user_id=existing.user_id,
+            public_key=existing.public_key,
+        )
+
     # ------------------------------------------------------------------
     # Create
     # ------------------------------------------------------------------
@@ -76,24 +88,33 @@ class WalletRegistry:
         cls,
         db: Session,
         payload: WalletCreateRequest,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletCreateResponse:
         repo = WalletRepository(db)
 
         existing = repo.get_by_user_id(payload.user_id)
         if existing:
-            wallet = _orm_to_pydantic(existing)
-            return WalletCreateResponse(
-                **wallet.model_dump(),
-                message="Wallet already exists for this user.",
-            )
+            # Address registration is retried by clients, so a second create is
+            # a conflict to report, not a second wallet to create (issue #531).
+            raise cls._already_registered(existing)
 
         public_key = cls._build_public_key()
-        orm = repo.create(user_id=payload.user_id, public_key=public_key)
+        try:
+            orm = repo.create(user_id=payload.user_id, public_key=public_key)
+        except IntegrityError as exc:
+            # The pre-check above cannot see a row committed by a concurrent
+            # request, so the unique constraint is the real arbiter. Roll the
+            # failed transaction back to leave the session usable, re-read the
+            # row the winner inserted, and report the same 409.
+            db.rollback()
+            winner = repo.get_by_user_id(payload.user_id)
+            if winner is None:
+                raise
+            raise cls._already_registered(winner) from exc
 
         wallet = _orm_to_pydantic(orm)
         if cache:
-            cache.set(public_key, wallet.model_dump(mode="json"))
+            cache.set(f"addr:{public_key}", wallet.model_dump(mode="json"))
 
         return WalletCreateResponse(
             **wallet.model_dump(),
@@ -109,7 +130,7 @@ class WalletRegistry:
         cls,
         db: Session,
         payload: WalletLinkRequest,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet:
         """Link a wallet to a user with comprehensive conflict detection (BE-032).
 
@@ -153,7 +174,7 @@ class WalletRegistry:
             )
             wallet = _orm_to_pydantic(orm)
             if cache:
-                cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+                cache.set(f"addr:{wallet.public_key}", wallet.model_dump(mode="json"))
             return wallet
 
         # Check 4: No conflicts - create new link
@@ -165,7 +186,7 @@ class WalletRegistry:
         )
         wallet = _orm_to_pydantic(orm)
         if cache:
-            cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+            cache.set(f"addr:{wallet.public_key}", wallet.model_dump(mode="json"))
         return wallet
 
     # ------------------------------------------------------------------
@@ -177,19 +198,24 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch from cache or DB, update cache on miss."""
+        cache_key = f"user:{user_id}"
+        if cache:
+            cached = cache.get(cache_key)
+            if cached:
+                return Wallet(**cached)
+
         repo = WalletRepository(db)
         orm = repo.get_by_user_id(user_id)
         if orm is None:
             return None
 
         wallet = _orm_to_pydantic(orm)
-        # Touch the cache timestamp in DB to simulate freshness tracking
         repo.touch_cache(orm)
         if cache:
-            cache.set(wallet.public_key, wallet.model_dump(mode="json"))
+            cache.set(cache_key, wallet.model_dump(mode="json"))
         return wallet
 
     @classmethod
@@ -197,11 +223,12 @@ class WalletRegistry:
         cls,
         db: Session,
         address: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet | None:
         """Internal helper: fetch by public key from cache or DB."""
+        cache_key = f"addr:{address}"
         if cache:
-            cached = cache.get(address)
+            cached = cache.get(cache_key)
             if cached:
                 return Wallet(**cached)
 
@@ -212,7 +239,7 @@ class WalletRegistry:
 
         wallet = _orm_to_pydantic(orm)
         if cache:
-            cache.set(address, wallet.model_dump(mode="json"))
+            cache.set(cache_key, wallet.model_dump(mode="json"))
         return wallet
 
     # ------------------------------------------------------------------
@@ -224,7 +251,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> Wallet | None:
         return cls._fetch_wallet(db, user_id, cache=cache)
 
@@ -233,7 +260,7 @@ class WalletRegistry:
         cls,
         db: Session,
         address: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletBalanceResponse | None:
         wallet = cls._fetch_by_address(db, address, cache=cache)
         if not wallet:
@@ -264,7 +291,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletStatusResponse | None:
         wallet = cls.get_wallet(db, user_id, cache=cache)
         if not wallet:
@@ -287,7 +314,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletTrustlineResponse | None:
         wallet = cls.get_wallet(db, user_id, cache=cache)
         if not wallet:
@@ -307,7 +334,7 @@ class WalletRegistry:
         cls,
         db: Session,
         user_id: str,
-        cache: Optional[WalletCache] = None,
+        cache: WalletCache | None = None,
     ) -> WalletFundingStateResponse | None:
         wallet = cls.get_wallet(db, user_id, cache=cache)
         if not wallet:

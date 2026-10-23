@@ -1,6 +1,5 @@
 # raw-sql-allowed
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0011_payment_deduplication"
 down_revision = "0010_wallet_persistence"

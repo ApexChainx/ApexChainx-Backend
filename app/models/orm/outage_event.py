@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text
 
@@ -17,4 +17,4 @@ class OutageEventORM(Base):
     schema_version = Column(
         String(10), nullable=False, default=CURRENT_SCHEMA_VERSION, server_default=CURRENT_SCHEMA_VERSION
     )
-    occurred_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    occurred_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))

@@ -6,16 +6,17 @@ Create Date: 2026-03-25
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "0003"
-down_revision: Union[str, None] = "0002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 job_status_enum = sa.Enum(
@@ -54,13 +55,6 @@ dispute_status_enum = sa.Enum(
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    job_status_enum.create(bind, checkfirst=True)
-    job_type_enum.create(bind, checkfirst=True)
-    webhook_event_enum.create(bind, checkfirst=True)
-    webhook_delivery_status_enum.create(bind, checkfirst=True)
-    dispute_status_enum.create(bind, checkfirst=True)
-
     op.create_table(
         "jobs",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),

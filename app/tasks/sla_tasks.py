@@ -1,20 +1,27 @@
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from celery import Task
+from celery.result import AsyncResult
 
-from app.tasks.celery_app import celery_app
+from app.core.exceptions import ApexTransientError
+from app.core.lock import advisory_lock
 from app.db.session import SessionLocal
 from app.models.job import Job, JobStatus, JobType
 from app.models.webhook import WebhookEvent
 from app.services.audit_log import audit_log
+from app.tasks.celery_app import celery_app
 from app.utils.correlation_ctx import set_correlation_id
 from app.utils.logging import get_structured_logger
 
 logger = logging.getLogger(__name__)
 task_logger = get_structured_logger("sla_tasks")
+
+# Celery states that mean "hasn't finished yet" (#575).
+_INFLIGHT_CELERY_STATES = {"PENDING", "STARTED", "RETRY"}
 
 
 class DatabaseTask(Task):
@@ -26,23 +33,23 @@ class DatabaseTask(Task):
     def get_db(self):
         return SessionLocal()
 
-    def _get_job(self, db, celery_task_id: str) -> Optional[Job]:
+    def _get_job(self, db, celery_task_id: str) -> Job | None:
         return db.query(Job).filter(Job.celery_task_id == celery_task_id).first()
 
     def _mark_started(self, db, celery_task_id: str):
         job = self._get_job(db, celery_task_id)
         if job:
             job.status = JobStatus.STARTED
-            job.started_at = datetime.now(timezone.utc)
+            job.started_at = datetime.now(UTC)
             db.commit()
 
     def _mark_success(self, db, celery_task_id: str, result: Any):
         job = self._get_job(db, celery_task_id)
         if job:
             job.status = JobStatus.SUCCESS
-            job.result = json.dumps(result)
+            job.result = result
             job.progress = 100.0
-            job.finished_at = datetime.now(timezone.utc)
+            job.finished_at = datetime.now(UTC)
             db.commit()
 
     def _mark_failure(self, db, celery_task_id: str, error: str):
@@ -50,10 +57,10 @@ class DatabaseTask(Task):
         if job:
             job.status = JobStatus.FAILURE
             job.error = error
-            job.finished_at = datetime.now(timezone.utc)
+            job.finished_at = datetime.now(UTC)
             db.commit()
 
-    def _update_progress(self, db, celery_task_id: str, progress: float, details: Optional[Dict[str, Any]] = None):
+    def _update_progress(self, db, celery_task_id: str, progress: float, details: dict[str, Any] | None = None):
         job = self._get_job(db, celery_task_id)
         if job:
             job.progress = min(progress, 99.0)
@@ -105,8 +112,8 @@ class DatabaseTask(Task):
     default_retry_delay=30,
 )
 def compute_sla_for_device(
-    self: DatabaseTask, device_id: str, period: str, correlation_id: Optional[str] = None
-) -> Dict[str, Any]:
+    self: DatabaseTask, device_id: str, period: str, correlation_id: str | None = None
+) -> dict[str, Any]:
     """
     Compute SLA metrics for a single device over a given period.
     Triggers SLA violation webhooks if thresholds are breached.
@@ -177,8 +184,14 @@ def compute_sla_for_device(
 
         self._mark_success(db, self.request.id, result)
         logger.info("SLA computation complete for device=%s", device_id)
+
+        # (#275) compute_device_sla already emits the initiated/succeeded
+        # settlement audit events; emitting them again here duplicated every
+        # computation's audit trail. Single emit point stays in the service.
         return result
 
+    except ApexTransientError:
+        raise  # let Celery handle retry of transient errors
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("SLA computation failed for device=%s: %s", device_id, error_msg)
@@ -188,7 +201,7 @@ def compute_sla_for_device(
             self._log_retry(db, self.request.id, self.request.retries + 1, error_msg)
 
         self._mark_failure(db, self.request.id, error_msg)
-        raise self.retry(exc=exc)
+        raise self.retry(exc=ApexTransientError(detail=f"SLA computation failed for device {device_id}: {error_msg}"))
     finally:
         db.close()
 
@@ -200,7 +213,7 @@ def compute_sla_for_device(
     max_retries=2,
     default_retry_delay=60,
 )
-def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> Dict[str, Any]:
+def compute_bulk_sla(self: DatabaseTask, device_ids: list[str], period: str) -> dict[str, Any]:
     """
     Compute SLA for multiple devices. Dispatches individual tasks per device
     and tracks overall progress.
@@ -243,6 +256,11 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> 
 
                 processed_count += 1
 
+            except ApexTransientError as device_exc:
+                logger.warning("SLA transient error for device=%s: %s", device_id, device_exc)
+                results.append({"device_id": device_id, "error": str(device_exc)})
+                self._add_item_error(db, self.request.id, device_id, str(device_exc))
+                error_count += 1
             except Exception as device_exc:
                 logger.warning("SLA failed for device=%s: %s", device_id, device_exc)
                 results.append({"device_id": device_id, "error": str(device_exc)})
@@ -295,6 +313,8 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> 
         logger.info("Bulk SLA computation complete. Violations: %d/%d, Errors: %d", len(violations), total, error_count)
         return summary
 
+    except ApexTransientError:
+        raise  # let Celery handle retry
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("Bulk SLA computation failed: %s", error_msg)
@@ -304,9 +324,60 @@ def compute_bulk_sla(self: DatabaseTask, device_ids: List[str], period: str) -> 
             self._log_retry(db, self.request.id, self.request.retries + 1, error_msg)
 
         self._mark_failure(db, self.request.id, error_msg)
-        raise self.retry(exc=exc)
+        raise self.retry(exc=ApexTransientError(detail=f"Bulk SLA computation failed: {error_msg}"))
     finally:
         db.close()
+
+
+def _find_inflight_sla_job(db, job_type: JobType, matches: Callable[[dict[str, Any]], bool]) -> Job | None:
+    """Return an already-enqueued Job of this type that hasn't finished yet, or None.
+
+    Two admins triggering a recompute for the same SLA at nearly the same time
+    — or a beat tick racing a manual run — must not enqueue two Celery tasks
+    for it: that doubles compute and can race on the unique sla_result_id
+    (#575). ``matches`` decides whether a candidate Job's payload is "the same
+    request" (e.g. same device_id + period).
+
+    The Job.status column is checked first as a cheap filter, then confirmed
+    against Celery's own state for that task. This second check matters: if
+    the DB row's status never got updated to a terminal value (for example,
+    under CELERY_TASK_ALWAYS_EAGER the task finishes before the Job row even
+    exists to be updated), we don't want a permanently-stale "in flight" row
+    to block every future recompute for that SLA.
+    """
+    candidates = (
+        db.query(Job)
+        .filter(Job.job_type == job_type, Job.status.in_((JobStatus.PENDING, JobStatus.STARTED)))
+        .order_by(Job.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    for job in candidates:
+        payload = _coerce_job_payload(job.payload)
+        if not matches(payload):
+            continue
+        state = AsyncResult(job.celery_task_id, app=celery_app).state
+        if state in _INFLIGHT_CELERY_STATES:
+            return job
+    return None
+
+
+def _coerce_job_payload(value: Any) -> dict[str, Any]:
+    """Normalize a Job.payload value to a dict for comparison.
+
+    Mirrors the defensive handling in app.api.v1.endpoints.jobs._parse_job_json:
+    the payload column has held plain JSON text for some rows in the past, so
+    a value can come back as a JSON string as well as a native dict.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return value
 
 
 def enqueue_sla_computation(
@@ -314,11 +385,15 @@ def enqueue_sla_computation(
     device_id: str,
     period: str,
     job_type: JobType = JobType.SLA_COMPUTATION,
-    correlation_id: Optional[str] = None,
+    correlation_id: str | None = None,
 ) -> Job:
     """
     Enqueue an SLA computation task and create a Job record for tracking.
     Returns the Job before the Celery task ID is known — updated after dispatch.
+
+    Deduped per (device_id, period): if a job for the same pair is still in
+    flight, that existing Job is returned instead of enqueueing a second
+    Celery task (#575).
     """
     from app.models.job import Job  # local import avoids circular deps
 
@@ -326,35 +401,77 @@ def enqueue_sla_computation(
     if correlation_id:
         payload["correlation_id"] = correlation_id
 
-    task_result = compute_sla_for_device.apply_async(kwargs=payload)
+    with advisory_lock(db, f"sla-enqueue:{job_type.value}:{device_id}:{period}"):
+        existing = _find_inflight_sla_job(
+            db, job_type, lambda p: p.get("device_id") == device_id and p.get("period") == period
+        )
+        if existing:
+            return existing
 
-    job = Job(
-        celery_task_id=task_result.id,
-        job_type=job_type,
-        payload=json.dumps(payload),
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+        task_result = compute_sla_for_device.apply_async(kwargs=payload)
+
+        job = Job(
+            celery_task_id=task_result.id,
+            job_type=job_type,
+            payload=payload,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job
 
 
-def enqueue_bulk_sla_computation(db, device_ids: List[str], period: str, correlation_id: Optional[str] = None) -> Job:
-    """Enqueue a bulk SLA computation task and return the tracking Job."""
+def enqueue_bulk_sla_computation(db, device_ids: list[str], period: str, correlation_id: str | None = None) -> Job:
+    """Enqueue a bulk SLA computation task and return the tracking Job.
+
+    Deduped per (sorted device_ids, period): a bulk recompute already in
+    flight for the same set of devices is returned instead of enqueueing a
+    duplicate (#575).
+    """
     from app.models.job import Job, JobType
 
     payload = {"device_ids": device_ids, "period": period}
     if correlation_id:
         payload["correlation_id"] = correlation_id
 
-    task_result = compute_bulk_sla.apply_async(kwargs=payload)
+    sorted_ids = sorted(device_ids)
+    dedup_key = ",".join(sorted_ids)
 
-    job = Job(
-        celery_task_id=task_result.id,
-        job_type=JobType.BULK_SLA_COMPUTATION,
-        payload=json.dumps(payload),
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
+    with advisory_lock(db, f"sla-enqueue:{JobType.BULK_SLA_COMPUTATION.value}:{dedup_key}:{period}"):
+        existing = _find_inflight_sla_job(
+            db,
+            JobType.BULK_SLA_COMPUTATION,
+            lambda p: sorted(p.get("device_ids") or []) == sorted_ids and p.get("period") == period,
+        )
+        if existing:
+            return existing
+
+        task_result = compute_bulk_sla.apply_async(kwargs=payload)
+
+        job = Job(
+            celery_task_id=task_result.id,
+            job_type=JobType.BULK_SLA_COMPUTATION,
+            payload=payload,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job
+
+
+@celery_app.task(name="app.tasks.sla_tasks.warm_sla_cache_task")
+def warm_sla_cache_task() -> dict:
+    """Beat task: pre-populate the SLA cache for the busiest devices (#566).
+
+    Runs daily and after a worker boot (see ``worker_ready`` signal hookup in
+    app/tasks/sla_cache_warmup_bootstrap.py) so the first wave of reads after a
+    restart hits warm cache entries instead of stampeding the database.
+    """
+    from app.services.sla_cache_warmup import warm_sla_cache
+
+    db = SessionLocal()
+    try:
+        warmed = warm_sla_cache(db)
+        return {"warmed_entries": len(warmed)}
+    finally:
+        db.close()

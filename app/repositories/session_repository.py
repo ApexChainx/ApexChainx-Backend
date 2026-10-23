@@ -1,6 +1,7 @@
-from datetime import datetime
-from typing import Optional
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
+
 from app.models.orm.session import SessionORM
 
 
@@ -30,10 +31,10 @@ class SessionRepository:
         self.db.refresh(session)
         return session
 
-    def get_session(self, access_token: str) -> Optional[SessionORM]:
+    def get_session(self, access_token: str) -> SessionORM | None:
         return self.db.query(SessionORM).filter(SessionORM.access_token == access_token).first()
 
-    def get_session_by_refresh_token(self, refresh_token: str) -> Optional[SessionORM]:
+    def get_session_by_refresh_token(self, refresh_token: str) -> SessionORM | None:
         return self.db.query(SessionORM).filter(SessionORM.refresh_token == refresh_token).first()
 
     def delete_session(self, access_token: str) -> None:
@@ -56,10 +57,28 @@ class SessionRepository:
         return self.db.query(SessionORM).filter(SessionORM.email == email).order_by(SessionORM.created_at.desc()).all()
 
     def delete_sessions_by_email(self, email: str) -> int:
-        """Delete all sessions for a given email. Returns count of deleted sessions."""
-        sessions = self.list_sessions_by_email(email)
-        count = len(sessions)
-        for session in sessions:
-            self.db.delete(session)
+        """Delete all sessions for a given email in a single statement (#675).
+
+        The previous implementation loaded every row and issued one DELETE per
+        session. A bulk ``DELETE`` collapses that into one round-trip and never
+        materialises the ORM objects.
+        """
+        deleted = self.db.query(SessionORM).filter(SessionORM.email == email).delete(synchronize_session=False)
         self.db.commit()
-        return count
+        return deleted
+
+    def delete_expired_sessions(self, batch_size: int = 1000) -> int:
+        """Delete expired sessions in batches. Returns total count deleted."""
+        now = datetime.now(UTC)
+        total_deleted = 0
+        while True:
+            expired = self.db.query(SessionORM).filter(SessionORM.expires_at < now).limit(batch_size).all()
+            if not expired:
+                break
+            for session in expired:
+                self.db.delete(session)
+            self.db.commit()
+            total_deleted += len(expired)
+            if len(expired) < batch_size:
+                break
+        return total_deleted

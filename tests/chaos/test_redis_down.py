@@ -59,6 +59,7 @@ class TestRedisDownChaos:
         self._add_timeout_toxic()
         try:
             import fakeredis
+
             test_redis = fakeredis.FakeRedis()
             test_redis.set("rate_limit:test", "1")
             val = test_redis.get("rate_limit:test")
@@ -70,6 +71,7 @@ class TestRedisDownChaos:
         self._add_latency_toxic(5000)
         try:
             import fakeredis
+
             fake_redis = fakeredis.FakeRedis()
             fake_redis.set("test_key", "cached_value")
             val = fake_redis.get("test_key")
@@ -83,6 +85,7 @@ class TestRedisDownChaos:
             from fastapi.testclient import TestClient
 
             from app.main import app
+
             client = TestClient(app)
             resp = client.get("/health/readiness")
             assert resp.status_code in (200, 503)
@@ -95,6 +98,7 @@ class TestRedisDownChaos:
             from fastapi.testclient import TestClient
 
             from app.main import app
+
             client = TestClient(app)
             start = time.time()
             resp = client.get("/health/liveness")

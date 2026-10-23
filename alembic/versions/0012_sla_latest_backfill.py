@@ -8,9 +8,9 @@ Revision ID: 0012_sla_latest_backfill
 Revises: 0011_sla_latest_uniqueness
 Create Date: 2026-04-28
 """
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0012_sla_latest_backfill"
 down_revision = "0011_sla_latest_uniqueness"

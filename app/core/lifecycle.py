@@ -1,8 +1,8 @@
 """Graceful shutdown handler on SIGTERM/SIGINT for issue #31."""
 
 import asyncio
-import signal
 import logging
+import signal
 
 logger = logging.getLogger(__name__)
 

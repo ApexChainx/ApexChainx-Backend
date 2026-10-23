@@ -14,13 +14,16 @@ branch_labels = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_audit_logs_login_failure_created_at
-        ON audit_logs (created_at DESC)
-        WHERE event_type = 'login_failure'
-        """
-    )
+    # CREATE INDEX CONCURRENTLY cannot run inside a transaction block, so run
+    # it inside an autocommit block instead.
+    with op.get_context().autocommit_block():
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_audit_logs_login_failure_created_at
+            ON audit_logs (created_at DESC)
+            WHERE event_type = 'login_failure'
+            """
+        )
 
 
 def downgrade() -> None:

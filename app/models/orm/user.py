@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from sqlalchemy import Column, DateTime, Integer, String
+
 from app.db.base import Base
 
 
@@ -12,7 +14,7 @@ class UserORM(Base):
     full_name = Column(String(255), nullable=True)
     role = Column(String(50), default="engineer")
     stellar_wallet = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     # Auth rate limiting fields
     failed_login_attempts = Column(Integer, default=0)
     locked_until = Column(DateTime(timezone=True), nullable=True)

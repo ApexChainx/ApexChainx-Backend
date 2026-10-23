@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, String, Integer, ForeignKey
+from datetime import UTC, datetime
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+
 from app.db.base import Base
 
 
@@ -12,4 +14,4 @@ class SessionORM(Base):
     family_id = Column(String(64), ForeignKey("token_families.family_id"), nullable=False, index=True)
     sequence = Column(Integer, nullable=False, default=0)
     expires_at = Column(DateTime(timezone=True), nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))

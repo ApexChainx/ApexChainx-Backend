@@ -31,7 +31,7 @@ VALID_OP_CODES: frozenset[str] = frozenset(
 )
 
 MEMO_MAX_BYTES = 28
-MEMO_PATTERN = re.compile(r"^([A-Z]{2,3}):([A-Za-z0-9_-]{1,16}):v([a-f0-9]{8})$")
+MEMO_PATTERN = re.compile(r"^([A-Za-z]{2,3}):([A-Za-z0-9_-]{1,16}):v([a-f0-9]{8})$")
 
 
 class TxMemo(BaseModel):

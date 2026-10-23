@@ -5,9 +5,12 @@ monitor cache hit rates, latencies, and errors in production.
 """
 
 import json
-from typing import Callable, Optional
+import logging
+from collections.abc import Callable, Iterable
 
 from app.services.metrics import metrics, timer
+
+logger = logging.getLogger(__name__)
 
 
 class SLACache:

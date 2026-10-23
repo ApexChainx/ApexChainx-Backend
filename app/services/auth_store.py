@@ -1,25 +1,61 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+import logging
+
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
+
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.db_retry import run_with_db_retry
+from app.core.security import get_password_hash, hash_token, validate_password_policy, verify_password
+from app.db.session import SessionLocal
 from app.models.auth import AuthSessionResponse, AuthUser, LoginRequest, RegisterRequest
-from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
+from app.models.enums import Role
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
-from app.core.security import get_password_hash, verify_password, validate_password_policy, hash_token
+from app.repositories.user_repository import UserRepository, user_orm_to_pydantic
 from app.services.audit_log import audit_log
-from app.db.session import SessionLocal
-from app.core.config import settings
+from app.services.auth_cache import AuthCache
+from app.services.user_cache import UserCache
+
+if TYPE_CHECKING:
+    from app.services.user_cache import UserCache
 
 TOKEN_TTL_SECONDS = 3600
+
+logger = logging.getLogger(__name__)
 
 
 class AuthStore:
     @staticmethod
     def _now() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _is_expired(expires_at: datetime, now: datetime | None = None) -> bool:
+        current = now or datetime.now(UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        else:
+            current = current.astimezone(UTC)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        else:
+            expires_at = expires_at.astimezone(UTC)
+        return current > expires_at
+
+    @staticmethod
+    def _is_locked(user) -> bool:
+        """Evaluate the account lock in Python from an already-loaded row (#659)."""
+        if user.locked_until is None:
+            return False
+        locked_until = user.locked_until
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=UTC)
+        return locked_until > datetime.now(UTC)
 
     @classmethod
     def register(cls, payload: RegisterRequest, db: Session = None) -> AuthUser:
@@ -47,7 +83,7 @@ class AuthStore:
             email=payload.email,
             hashed_password=hashed_password,
             full_name=payload.full_name,
-            role=payload.role,
+            role=Role.engineer,
         )
 
         audit_log.log_event(
@@ -55,7 +91,42 @@ class AuthStore:
             "registration",
             email=payload.email,
             actor_id=user_id,
-            details={"user_id": user_id, "role": payload.role},
+            details={"user_id": user_id, "role": Role.engineer},
+        )
+
+        return user_orm_to_pydantic(orm_user)
+
+    @classmethod
+    def admin_create_user(
+        cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session
+    ) -> AuthUser:
+        """Admin-only user creation with audit logging of the approving admin."""
+        user_repo = UserRepository(db)
+        if user_repo.get_by_email(email):
+            raise ValueError("User already exists")
+
+        if not validate_password_policy(password):
+            raise ValueError(
+                "Password does not meet policy requirements (min 8 chars, " "uppercase, lowercase, digit, special char)"
+            )
+
+        hashed_password = get_password_hash(password)
+        user_id = f"user_{uuid4().hex[:8]}"
+
+        orm_user = user_repo.create(
+            user_id=user_id,
+            email=email,
+            hashed_password=hashed_password,
+            full_name=full_name,
+            role=role,
+        )
+
+        audit_log.log_event(
+            db,
+            "admin_user_created",
+            email=actor_email,
+            actor_id=actor_id,
+            details={"created_user_id": user_id, "created_email": email, "role": role},
         )
 
         return user_orm_to_pydantic(orm_user)
@@ -72,12 +143,16 @@ class AuthStore:
         user_repo = UserRepository(db)
         session_repo = SessionRepository(db)
 
+        # Fetch the account once and evaluate the lock in Python. The previous
+        # code issued a separate ``is_account_locked`` query and then fetched the
+        # same row again, doubling DB round-trips on every login (#659).
+        stored_user = user_repo.get_by_email(payload.email)
+
         # Check if account is locked
-        if user_repo.is_account_locked(payload.email):
+        if stored_user is not None and cls._is_locked(stored_user):
             audit_log.log_event(db, "login_failed_locked", email=payload.email, details={"reason": "account_locked"})
             raise ValueError("Account is temporarily locked due to too many failed login attempts")
 
-        stored_user = user_repo.get_by_email(payload.email)
         if not stored_user or not verify_password(payload.password, stored_user.hashed_password):
             # Increment failed attempts
             user_repo.increment_failed_attempts(payload.email)
@@ -129,7 +204,7 @@ class AuthStore:
             expires_at=expires_at,
         )
 
-        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.user_id)
+        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.id)
 
         return AuthSessionResponse(
             access_token=access_token,
@@ -139,37 +214,60 @@ class AuthStore:
         )
 
     @classmethod
-    def get_user_for_token(cls, token: str, db: Session = None) -> AuthUser | None:
+    def get_user_for_token(cls, token: str, db: Session = None, cache: AuthCache | None = None) -> AuthUser | None:
         if db is None:
             with SessionLocal() as db:
-                return cls._get_user_for_token_with_db(token, db)
-        return cls._get_user_for_token_with_db(token, db)
+                return cls._get_user_for_token_with_db(token, db, cache=cache)
+        return cls._get_user_for_token_with_db(token, db, cache=cache)
 
     @classmethod
-    def _get_user_for_token_with_db(cls, token: str, db: Session) -> AuthUser | None:
+    def _get_user_for_token_with_db(cls, token: str, db: Session, cache: AuthCache | None = None) -> AuthUser | None:
         session_repo = SessionRepository(db)
         user_repo = UserRepository(db)
+        token_family_repo = TokenFamilyRepository(db)
 
         hashed_token = hash_token(token)
-        session = session_repo.get_session(hashed_token)
+        # Wrap the session lookup in the shared transient-error retry policy (#665).
+        session = run_with_db_retry(session_repo.get_session, hashed_token)
         if not session:
             return None
 
-        # Check if expired
-        # session.expires_at might be offset-naive or aware depending on how it was stored.
-        # SQLAlchemy DateTime usually returns naive. We need to compare carefully.
-        now = datetime.now(timezone.utc)
-        expires_at = session.expires_at
-        if expires_at.tzinfo is not None:
-            now = datetime.now(UTC).replace(tzinfo=None)  # Keep it naive for comparison if needed
-            expires_at = expires_at.replace(tzinfo=None)
-
-        if now > expires_at:
+        if cls._is_expired(session.expires_at):
             session_repo.delete_session(hashed_token)
             return None
 
+        # Gate on the token family, not just the session row (#535). A session can
+        # outlive its family: logout-all deletes the family, and reuse detection
+        # compromises it, while a token issued concurrently (or before the
+        # delete committed) is still presented with a live session row. Without
+        # this check the access path accepted those tokens even though refresh
+        # rejected them. Legacy sessions with no family keep their old behaviour
+        # and are migrated on their next refresh.
+        if session.family_id and token_family_repo.is_revoked(session.family_id):
+            session_repo.delete_session(hashed_token)
+            audit_log.log_event(
+                db,
+                "access_token_rejected",
+                email=session.email,
+                details={"family_id": session.family_id, "reason": "family_revoked"},
+            )
+            return None
+
+        if cache is not None:
+            cached = cache.get_user(session.email)
+            if cached is not None:
+                try:
+                    return AuthUser.model_validate(cached)
+                except ValueError:
+                    logger.warning("Ignoring malformed auth cache entry for %s", session.email)
+
         stored_user = user_repo.get_by_email(session.email)
-        return user_orm_to_pydantic(stored_user) if stored_user else None
+        if not stored_user:
+            return None
+        user = user_orm_to_pydantic(stored_user)
+        if cache is not None:
+            cache.set_user(session.email, user.model_dump(mode="json"))
+        return user
 
     @classmethod
     def refresh(cls, refresh_token: str, db: Session = None) -> AuthSessionResponse:
@@ -294,12 +392,22 @@ class AuthStore:
             audit_log.log_event(db, "logout", email=email)
 
     @classmethod
-    def get_user_sessions(cls, email: str, db: Session = None) -> list:
+    def get_user_sessions(cls, email: str, db: Session = None, cache: UserCache | None = None) -> list:
         """Get all active sessions for a user (without token material)."""
+        if cache is not None:
+            cached = cache.get_sessions(email)
+            if cached is not None:
+                return cached
+
         if db is None:
             with SessionLocal() as db:
-                return cls._get_user_sessions_with_db(email, db)
-        return cls._get_user_sessions_with_db(email, db)
+                sessions = cls._get_user_sessions_with_db(email, db)
+        else:
+            sessions = cls._get_user_sessions_with_db(email, db)
+
+        if cache is not None:
+            cache.set_sessions(email, sessions)
+        return sessions
 
     @classmethod
     def _get_user_sessions_with_db(cls, email: str, db: Session) -> list:
@@ -308,13 +416,8 @@ class AuthStore:
 
         # Return session info without sensitive token material
         session_list = []
-        now = datetime.now(timezone.utc)
         for session in sessions:
-            expires_at = session.expires_at
-            if expires_at.tzinfo is not None:
-                expires_at = expires_at.replace(tzinfo=None)
-
-            is_expired = now > expires_at
+            is_expired = cls._is_expired(session.expires_at)
             session_list.append(
                 {
                     "access_token_preview": session.access_token[:12] + "..." if session.access_token else None,

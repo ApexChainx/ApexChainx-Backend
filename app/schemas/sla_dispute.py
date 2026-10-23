@@ -1,17 +1,16 @@
 from datetime import datetime
-from typing import Optional
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.sla_dispute import DisputeStatus
 
 
 class DisputeFlagRequest(BaseModel):
-    flagged_by: str = Field(..., description="Identifier of the operator flagging the dispute")
     dispute_reason: str = Field(..., min_length=10, description="Reason for disputing the SLA calculation")
 
 
 class DisputeResolveRequest(BaseModel):
-    resolved_by: str = Field(..., description="Identifier of the operator resolving the dispute")
     resolution_notes: str = Field(..., min_length=10, description="Notes explaining the resolution decision")
     status: DisputeStatus = Field(..., description="Resolution outcome: resolved or rejected")
     apply_proposed: bool = Field(
@@ -20,36 +19,53 @@ class DisputeResolveRequest(BaseModel):
 
 
 class DisputeResponse(BaseModel):
-    id: str
+    id: UUID
     sla_result_id: int
-    baseline_sla_result_id: Optional[int] = None
-    proposed_sla_result_id: Optional[int] = None
+    baseline_sla_result_id: int | None = None
+    proposed_sla_result_id: int | None = None
     flagged_by: str
     dispute_reason: str
     flagged_at: datetime
     status: DisputeStatus
-    resolved_by: Optional[str] = None
-    resolution_notes: Optional[str] = None
-    resolved_at: Optional[datetime] = None
+    resolved_by: str | None = None
+    resolution_notes: str | None = None
+    resolved_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
+class PaginatedDisputeList(BaseModel):
+    """Envelope for `GET /sla/disputes` (#580).
+
+    The endpoint used to answer with a bare array materialized from
+    ``query.all()`` — every dispute in one response, with no way to page or to
+    tell "end of list" from "this page happens to be short". The items array
+    is still present, under `items`, alongside the metadata needed to page
+    correctly (same shape as the webhook list envelope, #554).
+    """
+
+    items: list[DisputeResponse]
+    total: int
+    page: int
+    page_size: int
+    returned: int
+    has_more: bool
+
+
 class DisputeAuditLogResponse(BaseModel):
-    id: str
-    dispute_id: str
+    id: UUID
+    dispute_id: UUID
     action: str
     actor: str
-    notes: Optional[str] = None
+    notes: str | None = None
     recorded_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class CreateProposedSLARequest(BaseModel):
-    created_by: str
     severity: str
     mttr_minutes: int
     policy_version: str = "1.0"
     threshold_source: str = "config"
-    notes: Optional[str] = None
+    notes: str | None = None

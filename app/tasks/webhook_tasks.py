@@ -1,10 +1,11 @@
 import logging
-from typing import Any, Dict
+from typing import Any
 from uuid import UUID
 
-from app.tasks.celery_app import celery_app
+from app.core.exceptions import ApexTransientError
 from app.db.session import SessionLocal
 from app.services.audit_log import audit_log
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
     max_retries=5,
     default_retry_delay=30,
 )
-def dispatch_webhook_delivery(self, delivery_id: str) -> Dict[str, Any]:
+def dispatch_webhook_delivery(self, delivery_id: str) -> dict[str, Any]:
     """Deliver a single WebhookDelivery record asynchronously."""
     db = SessionLocal()
     try:
@@ -24,6 +25,8 @@ def dispatch_webhook_delivery(self, delivery_id: str) -> Dict[str, Any]:
         dispatch_delivery(db, UUID(delivery_id))
         logger.info("Webhook delivery %s dispatched.", delivery_id)
         return {"delivery_id": delivery_id, "dispatched": True}
+    except ApexTransientError:
+        raise  # re-raise transient errors so Celery retries them
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("Failed to dispatch webhook delivery %s: %s", delivery_id, error_msg)
@@ -36,7 +39,7 @@ def dispatch_webhook_delivery(self, delivery_id: str) -> Dict[str, Any]:
                 details={"delivery_id": delivery_id, "retry_count": self.request.retries + 1, "error": error_msg},
             )
 
-        raise self.retry(exc=exc)
+        raise self.retry(exc=ApexTransientError(detail=f"Webhook delivery {delivery_id} failed: {error_msg}"))
     finally:
         db.close()
 
@@ -44,7 +47,7 @@ def dispatch_webhook_delivery(self, delivery_id: str) -> Dict[str, Any]:
 @celery_app.task(
     name="app.tasks.webhook_tasks.retry_pending_webhook_deliveries",
 )
-def retry_pending_webhook_deliveries() -> Dict[str, Any]:
+def retry_pending_webhook_deliveries() -> dict[str, Any]:
     """
     Periodic beat task: finds all due RETRYING deliveries and re-dispatches them.
     Registered in celery_app.conf.beat_schedule to run every 60 seconds.
@@ -66,7 +69,7 @@ def retry_pending_webhook_deliveries() -> Dict[str, Any]:
     max_retries=3,
     default_retry_delay=15,
 )
-def trigger_sla_violation_async(self, sla_data: Dict[str, Any], event: str = "sla.violation") -> Dict[str, Any]:
+def trigger_sla_violation_async(self, sla_data: dict[str, Any], event: str = "sla.violation") -> dict[str, Any]:
     """
     Async task wrapper around webhook_service.trigger_sla_violation_webhooks.
     Called from SLA computation tasks to avoid blocking.
@@ -79,6 +82,8 @@ def trigger_sla_violation_async(self, sla_data: Dict[str, Any], event: str = "sl
         deliveries = trigger_sla_violation_webhooks(db, sla_data=sla_data, event=WebhookEvent(event))
         logger.info("Triggered %d webhook deliveries for event=%s.", len(deliveries), event)
         return {"triggered": len(deliveries), "event": event}
+    except ApexTransientError:
+        raise  # re-raise transient errors so Celery retries them
     except Exception as exc:
         error_msg = str(exc)
         logger.exception("trigger_sla_violation_async failed: %s", error_msg)
@@ -96,6 +101,6 @@ def trigger_sla_violation_async(self, sla_data: Dict[str, Any], event: str = "sl
                 },
             )
 
-        raise self.retry(exc=exc)
+        raise self.retry(exc=ApexTransientError(detail=f"SLA violation webhook failed: {error_msg}"))
     finally:
         db.close()

@@ -3,6 +3,6 @@
 
 def test_schemathesis_import():
     """Verify schemathesis is importable and ready for contract tests."""
-    import schemathesis  # noqa: F401
+    import schemathesis
 
     assert schemathesis.__version__ is not None

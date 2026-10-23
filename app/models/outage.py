@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -11,26 +10,26 @@ class Location(BaseModel):
 
 class SLAStatus(BaseModel):
     status: str  # "in_progress", "met", "violated"
-    mttr_minutes: Optional[int] = None
+    mttr_minutes: int | None = None
     threshold_minutes: int
-    time_remaining_minutes: Optional[int] = None
+    time_remaining_minutes: int | None = None
 
 
 class Outage(BaseModel):
     id: str = Field(..., description="Unique outage ID")
     site_name: str
-    site_id: Optional[str] = None
+    site_id: str | None = None
     severity: str  # critical, high, medium, low
     status: str  # active, resolved, investigating
     detected_at: datetime
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
     description: str
-    affected_services: List[str]
-    affected_subscribers: Optional[int] = None
-    assigned_to: Optional[str] = None
-    created_by: Optional[str] = None
-    location: Optional[Location] = None
-    sla_status: Optional[SLAStatus] = None
+    affected_services: list[str]
+    affected_subscribers: int | None = None
+    assigned_to: str | None = None
+    created_by: str | None = None
+    location: Location | None = None
+    sla_status: SLAStatus | None = None
 
     @field_validator("detected_at")
     @classmethod
@@ -38,8 +37,8 @@ class Outage(BaseModel):
         if v.tzinfo is None:
             raise ValidationError("detected_at must be timezone-aware")
         # Normalize to UTC
-        if v.tzinfo != timezone.utc:
-            v = v.astimezone(timezone.utc)
+        if v.tzinfo != UTC:
+            v = v.astimezone(UTC)
         return v
 
     @field_validator("resolved_at")
@@ -50,8 +49,8 @@ class Outage(BaseModel):
         if v.tzinfo is None:
             raise ValidationError("resolved_at must be timezone-aware")
         # Normalize to UTC
-        if v.tzinfo != timezone.utc:
-            v = v.astimezone(timezone.utc)
+        if v.tzinfo != UTC:
+            v = v.astimezone(UTC)
         return v
 
 
@@ -84,7 +83,7 @@ class PaginatedOutages(BaseModel):
         }
     )
 
-    items: List[Outage]
+    items: list[Outage]
     total: int
     page: int
     page_size: int

@@ -1,7 +1,9 @@
 import hashlib
 import time
+
 from fastapi import Request
 
+from app.core.exceptions import ApexException
 from app.utils.correlation_ctx import get_or_generate_correlation_id, set_correlation_id
 from app.utils.logging import get_structured_logger
 
@@ -14,6 +16,7 @@ def _hash_value(value: str | None) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
+# Add per-user API rate limits using Redis sliding-window counter
 class CorrelationMiddleware:
     """ASGI-native middleware to add correlation IDs to requests and enable request tracing.
 
@@ -47,6 +50,7 @@ class CorrelationMiddleware:
         user_id_hash: str | None = None
 
         async def send_wrapper(message):
+            nonlocal route_template, user_id_hash
             if message["type"] == "http.response.start":
                 headers = dict(message.get("headers", []))
                 headers[b"x-correlation-id"] = correlation_id.encode()
@@ -64,8 +68,8 @@ class CorrelationMiddleware:
                         uid = str(getattr(request.state.user, "id", ""))
                         if uid:
                             user_id_hash = _hash_value(uid)
-                except Exception:
-                    pass
+                except (AttributeError, TypeError, ValueError):
+                    pass  # user object may not have expected shape; non-critical for logging
 
                 duration_ms = (time.time() - start_time) * 1000
 
@@ -84,6 +88,8 @@ class CorrelationMiddleware:
 
         try:
             await self.app(scope, receive, send_wrapper)
+        except ApexException:
+            raise  # already typed; let FastAPI exception handlers process it
         except Exception as exc:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(

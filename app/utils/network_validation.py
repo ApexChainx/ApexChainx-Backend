@@ -1,6 +1,5 @@
 import ipaddress
 import socket
-from typing import List
 from urllib.parse import urlparse
 
 from app.core.config import settings
@@ -15,7 +14,7 @@ CLOUD_METADATA_ADDRESSES = {
 }
 
 
-def _resolve_host(hostname: str, max_results: int = 5) -> List[str]:
+def _resolve_host(hostname: str, max_results: int = 5) -> list[str]:
     if not hostname:
         raise NetworkValidationError("Webhook URL must include a hostname.")
 
@@ -24,7 +23,7 @@ def _resolve_host(hostname: str, max_results: int = 5) -> List[str]:
     except socket.gaierror as exc:
         raise NetworkValidationError(f"Could not resolve hostname: {hostname}") from exc
 
-    ips: List[str] = []
+    ips: list[str] = []
     for result in addr_info:
         sockaddr = result[4]
         ip = sockaddr[0]
@@ -57,8 +56,18 @@ def _validate_ip_address(ip_str: str) -> None:
         raise NetworkValidationError("Private network addresses are not allowed.")
 
 
-def validate_webhook_url(url: str) -> List[str]:
+def validate_webhook_url(url: str) -> list[str]:
     parsed = urlparse(url)
+
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise NetworkValidationError("Webhook URL contains an invalid port.") from exc
+
+    if port is not None and port not in {80, 443}:
+        raise NetworkValidationError("Webhook URL must use port 80 or 443.")
+    if parsed.fragment:
+        raise NetworkValidationError("Webhook URL must not contain a fragment.")
 
     if parsed.scheme not in {"http", "https"}:
         raise NetworkValidationError("Webhook URL must use http or https.")
@@ -83,7 +92,7 @@ def validate_webhook_url(url: str) -> List[str]:
     return resolved_ips
 
 
-def validate_webhook_url_and_rewrite(url: str, webhook_id: str | None = None) -> List[str]:
+def validate_webhook_url_and_rewrite(url: str, webhook_id: str | None = None) -> list[str]:
     if settings.WEBHOOK_URL_VALIDATOR_BYPASS and settings.ENVIRONMENT == "local":
         return _resolve_host(urlparse(url).hostname or "")
     return validate_webhook_url(url)

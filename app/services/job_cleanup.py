@@ -4,12 +4,58 @@ BE-042: Provides job retention and cleanup policies to prevent unbounded growth
 of job records and maintain database performance.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
+from app.core.db_retry import run_with_db_retry
 from app.models.job import Job, JobStatus
+from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus
+
+# BE-298: Terminal (non-in-flight) delivery statuses eligible for retention cleanup.
+WEBHOOK_DELIVERY_TERMINAL_STATUSES = (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.FAILED)
+WEBHOOK_DELIVERY_RETENTION_DAYS = 30
+WEBHOOK_DEAD_LETTER_RETENTION_DAYS = 90
+
+
+def cleanup_old_webhook_deliveries(
+    db: Session,
+    retention_days: int = WEBHOOK_DELIVERY_RETENTION_DAYS,
+    dead_letter_retention_days: int = WEBHOOK_DEAD_LETTER_RETENTION_DAYS,
+    batch_size: int = 1000,
+) -> int:
+    """Batch-delete terminal webhook_deliveries rows older than the retention window.
+
+    Mirrors JobCleanupService's batched-delete pattern. PENDING, RETRYING, and
+    BREAKER_OPEN (in-flight) deliveries are never touched; DEAD_LETTER rows get
+    their own (longer) retention period.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    dead_letter_cutoff = datetime.now(UTC) - timedelta(days=dead_letter_retention_days)
+    total_deleted = 0
+
+    for statuses, cutoff_date in (
+        (WEBHOOK_DELIVERY_TERMINAL_STATUSES, cutoff),
+        ((WebhookDeliveryStatus.DEAD_LETTER,), dead_letter_cutoff),
+    ):
+        while True:
+            ids = (
+                db.query(WebhookDelivery.id)
+                .filter(WebhookDelivery.status.in_(statuses), WebhookDelivery.created_at < cutoff_date)
+                .limit(batch_size)
+                .all()
+            )
+            ids = [row[0] for row in ids]
+            if not ids:
+                break
+            db.execute(delete(WebhookDelivery).where(WebhookDelivery.id.in_(ids)))
+            db.commit()
+            total_deleted += len(ids)
+            if len(ids) < batch_size:
+                break
+
+    return total_deleted
 
 
 class JobCleanupService:
@@ -24,8 +70,8 @@ class JobCleanupService:
 
     def cleanup_old_jobs(
         self,
-        successful_retention_days: Optional[int] = None,
-        failed_retention_days: Optional[int] = None,
+        successful_retention_days: int | None = None,
+        failed_retention_days: int | None = None,
         dry_run: bool = False,
         batch_size: int = 1000,
     ) -> dict:
@@ -43,8 +89,8 @@ class JobCleanupService:
         successful_retention_days = successful_retention_days or self.SUCCESSFUL_JOB_RETENTION_DAYS
         failed_retention_days = failed_retention_days or self.FAILED_JOB_RETENTION_DAYS
 
-        cutoff_success = datetime.now(timezone.utc) - timedelta(days=successful_retention_days)
-        cutoff_failed = datetime.now(timezone.utc) - timedelta(days=failed_retention_days)
+        cutoff_success = datetime.now(UTC) - timedelta(days=successful_retention_days)
+        cutoff_failed = datetime.now(UTC) - timedelta(days=failed_retention_days)
 
         total_deleted = 0
         stats = {
@@ -124,12 +170,9 @@ class JobCleanupService:
             if not job_ids:
                 break
 
-            # Delete the batch
-            delete_stmt = delete(Job).where(Job.id.in_(job_ids))
-            self.db.execute(delete_stmt)
-            self.db.commit()
-
-            total_deleted += len(job_ids)
+            # Delete the batch (idempotent — re-running deletes the same ids is
+            # a no-op), retrying transient DB failures at the batch boundary.
+            total_deleted += run_with_db_retry(self._delete_job_batch, job_ids)
 
             # If we got fewer than batch_size, we're done
             if len(job_ids) < batch_size:
@@ -137,9 +180,16 @@ class JobCleanupService:
 
         return total_deleted
 
+    def _delete_job_batch(self, job_ids) -> int:
+        """Delete one batch of job ids. Idempotent; returns the batch size."""
+        self.db.rollback()  # clear any aborted transaction from a prior attempt
+        self.db.execute(delete(Job).where(Job.id.in_(job_ids)))
+        self.db.commit()
+        return len(job_ids)
+
     def get_retention_stats(self) -> dict:
         """Get current job retention statistics without deleting anything."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Count jobs by status and age
         stats = {

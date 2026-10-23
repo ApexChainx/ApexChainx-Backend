@@ -4,7 +4,10 @@ Exposes Prometheus metrics via the shared metrics registry so operators can
 monitor cache hit rates, latencies, and errors in production.
 """
 
-from typing import Optional
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.services.metrics import metrics, timer
 

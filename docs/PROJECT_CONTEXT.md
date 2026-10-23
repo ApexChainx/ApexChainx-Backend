@@ -34,9 +34,16 @@ The default `STELLAR_NETWORK=testnet` setting ensures no real assets are moved d
 |---------|------------|-----------|
 | `STELLAR_NETWORK` | `testnet` | `mainnet` |
 | `CONTRACT_EXECUTION_MODE` | `local` | `contract` |
-| `CELERY_TASK_ALWAYS_EAGER` | `true` | `false` |
+| `CELERY_TASK_ALWAYS_EAGER` | `true` (opt-in, local/test only) | `false` (enforced at startup) |
 | Redis / Celery worker | optional | required |
 | PostgreSQL | local instance | managed instance |
+
+`CELERY_TASK_ALWAYS_EAGER` defaults to `false` and is rejected at startup
+whenever `ENVIRONMENT` is not `local` or `test`. Eager mode runs every task
+inline in the request worker: retries, backoff, the webhook circuit breaker and
+dead-letter handling all become inert while the deployment still advertises a
+queue topology. Opt into it deliberately for local work, and never in staging or
+production.
 
 ---
 

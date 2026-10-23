@@ -1,0 +1,29 @@
+# GitHub CODEOWNERS for ApexChainx Backend
+# Syntax: https://docs.github.com/en/repositories/managing-repository-files-and-file-settings/about-codeowners
+
+# Default owners for everything in the repository
+*                   @Superray23/backend-core
+
+# Infrastructure, CI/CD, Containerization, and Configuration
+/.github/           @Superray23/devops-team
+/Dockerfile         @Superray23/devops-team
+/docker-compose.yml @Superray23/devops-team
+/pyproject.toml     @Superray23/backend-core
+
+# API, Router & Middleware
+/app/api/           @Superray23/api-team
+/app/middleware/    @Superray23/api-team
+
+# Database, ORM Models, & Alembic Migrations
+/alembic/           @Superray23/database-team
+/app/db/            @Superray23/database-team
+/app/models/        @Superray23/database-team
+
+# Core Domain Logic & Business Services
+/app/core/          @Superray23/backend-core
+/app/services/      @Superray23/backend-core
+/app/tasks/         @Superray23/backend-core
+
+# Documentation
+/docs/              @Superray23/docs-team
+/*.md               @Superray23/docs-team

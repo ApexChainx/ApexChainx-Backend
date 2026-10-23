@@ -9,31 +9,32 @@ import io
 import json
 import tarfile
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.orm.user import UserORM
 from app.models.orm.audit_log import AuditLogORM
-from app.repositories.user_repository import UserRepository
+from app.models.orm.user import UserORM
 from app.repositories.session_repository import SessionRepository
 from app.repositories.token_family_repository import TokenFamilyRepository
 from app.services.audit_log import audit_log
 
 
-def _serialize_datetime(dt: Optional[datetime]) -> Optional[str]:
+def _serialize_datetime(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     return dt.isoformat()
 
 
-def export_user_data(db: Session, user: UserORM) -> dict[str, Any]:
+def export_user_data(db: Session, user: UserORM) -> bytes:
     """Collect all personal data associated with a user.
 
-    Returns a dict that can be serialised into a tarball for download.
-    The export is designed to complete in < 30 s for up to 1 000 audit events.
+    Returns the raw bytes of a gzip tarball containing a user_data.json
+    and a _metadata.json file.
     """
+    _METADATA_THRESHOLD = 10 * 1024 * 1024  # 10 MB
+
     user_data = {
         "id": user.id,
         "email": user.email,
@@ -43,16 +44,14 @@ def export_user_data(db: Session, user: UserORM) -> dict[str, Any]:
         "created_at": _serialize_datetime(user.created_at),
     }
 
-    # Collect audit log entries (limit to most recent 1 000 for performance)
+    # Collect ALL audit log entries (no limit)
     audit_entries = (
         db.query(AuditLogORM)
-        .filter(
-            (AuditLogORM.email == user.email) | (AuditLogORM.actor_id == user.id)
-        )
+        .filter((AuditLogORM.email == user.email) | (AuditLogORM.actor_id == user.id))
         .order_by(AuditLogORM.created_at.desc())
-        .limit(1000)
         .all()
     )
+    total_audit_log_entries = len(audit_entries)
     audit_logs = [
         {
             "event_type": entry.event_type,
@@ -64,19 +63,28 @@ def export_user_data(db: Session, user: UserORM) -> dict[str, Any]:
     ]
 
     export_payload = {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "user": user_data,
         "audit_logs": audit_logs,
         "audit_log_count": len(audit_logs),
     }
 
-    # Build an in-memory tarball containing the JSON export
+    # Build an in-memory tarball containing the JSON export and metadata
     tar_buffer = io.BytesIO()
     with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
         json_bytes = json.dumps(export_payload, indent=2, default=str).encode("utf-8")
         info = tarfile.TarInfo(name="user_data.json")
         info.size = len(json_bytes)
         tar.addfile(info, io.BytesIO(json_bytes))
+
+        metadata = {
+            "total_audit_log_entries": total_audit_log_entries,
+            "truncated": len(json_bytes) > _METADATA_THRESHOLD,
+        }
+        meta_bytes = json.dumps(metadata, indent=2).encode("utf-8")
+        meta_info = tarfile.TarInfo(name="_metadata.json")
+        meta_info.size = len(meta_bytes)
+        tar.addfile(meta_info, io.BytesIO(meta_bytes))
 
     audit_log.log_event(
         db,
@@ -86,13 +94,7 @@ def export_user_data(db: Session, user: UserORM) -> dict[str, Any]:
         details={"export_size_bytes": tar_buffer.tell()},
     )
 
-    return {
-        "job_id": str(uuid.uuid4()),
-        "exported_at": export_payload["exported_at"],
-        "size_bytes": tar_buffer.tell(),
-        "tarball_base64": tar_buffer.getvalue(),
-        "entry_count": len(audit_logs),
-    }
+    return tar_buffer.getvalue()
 
 
 def erase_user_data(db: Session, user: UserORM) -> dict[str, Any]:
@@ -116,9 +118,9 @@ def erase_user_data(db: Session, user: UserORM) -> dict[str, Any]:
     # Pseudonymise personal fields
     user.email = f"erased-{user.id}@deleted.local"
     user.full_name = f"Erased User {user.id[:8]}"
-    user.hashed_password = ""
+    user.hashed_password = ""  # nosec B105 - erasing credential, not a hardcoded password
     user.stellar_wallet = None
-    user.locked_until = datetime.now(timezone.utc)
+    user.locked_until = datetime.now(UTC)
     db.commit()
 
     audit_log.log_event(

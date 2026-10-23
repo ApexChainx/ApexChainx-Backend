@@ -1,58 +1,68 @@
-from datetime import datetime, timezone
+import asyncio
+from datetime import UTC, datetime
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from redis import ConnectionError, Redis, TimeoutError
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
-from starlette.middleware.cors import CORSMiddleware, SAFELISTED_HEADERS, ALL_METHODS
+from sqlalchemy.exc import IntegrityError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import ALL_METHODS, SAFELISTED_HEADERS, CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.api.exception_handlers import (
+    general_exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+)
 from app.api.v1.router import api_router
 from app.core.config import settings, validate_critical_settings
 from app.core.exceptions import (
     ApexException,
     ApexNotFoundError,
     ApexTransientError,
+    integrity_error_handler,
+    pydantic_validation_handler,
 )
-from app.core.logging_config import configure_logging
 from app.core.lifecycle import install_signal_handlers
-from app.core.exceptions import integrity_error_handler, pydantic_validation_handler
-from app.db.session import engine
-from app.services.health_report import build_readiness_report
+from app.core.logging_config import configure_logging
+from app.core.tracing import init_tracing, instrument_app
+from app.db.session import audit_engine, engine
+from app.middleware.api_version import ApiVersionMiddleware
 from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
-from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
-from app.middleware.api_version import ApiVersionMiddleware
-
+from app.middleware.payload_size import PayloadSizeMiddleware
+from app.services.health_report import build_readiness_report
+from app.utils.correlation_ctx import get_or_generate_correlation_id
 
 configure_logging()
 validate_critical_settings(settings)
 install_signal_handlers()
+init_tracing()
 
 
-async def check_database() -> bool:
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-            conn.commit()
-        return True
-    except ConnectionError:
-        return False
+# #710: tag descriptions feed the generated Swagger UI grouping. Without them
+# the indexer routes appear as a bare "indexer" section with no explanation of
+# what the component does or where its write path lives.
+OPENAPI_TAGS = [
+    {
+        "name": "indexer",
+        "description": (
+            "Read access to the transactions TxIndexer has ingested from Stellar Horizon. "
+            "The ingest task writes into the same payment ledger the /payments routes read."
+        ),
+    },
+]
 
-
-async def check_celery() -> bool:
-    try:
-        r = Redis.from_url(settings.CELERY_BROKER_URL)
-        r.ping()
-        return True
-    except (ConnectionError, TimeoutError):
-        return False
-
-
-app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, description="ApexChainx Backend API")
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description="ApexChainx Backend API",
+    openapi_tags=OPENAPI_TAGS,
+)
 
 app.add_exception_handler(IntegrityError, integrity_error_handler)
 app.add_exception_handler(ValidationError, pydantic_validation_handler)
@@ -62,19 +72,21 @@ app.add_middleware(ContentTypeMiddleware)
 # Add correlation middleware first (before CORS to ensure it runs on all requests)
 app.add_middleware(CorrelationMiddleware)
 
-# Add payload size middleware (after correlation, before CORS)
-app.add_middleware(PayloadSizeMiddleware)
-
-# Add idempotency middleware (after payload size)
+# Add idempotency middleware (after correlation)
 app.add_middleware(IdempotencyMiddleware)
 
 
 class _DynamicCORSMiddleware(CORSMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
+        self._origins_cache = list(settings.ALLOWED_ORIGINS)
+
+    def refresh_origins(self) -> None:
+        """Re-read allowed origins from settings."""
+        self._origins_cache = list(settings.ALLOWED_ORIGINS)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        allow_origins = settings.ALLOWED_ORIGINS
+        allow_origins = self._origins_cache
         allow_methods = settings.CORS_ALLOWED_METHODS
         allow_headers = settings.CORS_ALLOWED_HEADERS
         expose_headers = settings.CORS_EXPOSE_HEADERS
@@ -135,57 +147,116 @@ app.add_middleware(SecurityHeadersMiddleware)
 # API version and commit headers on every response
 app.add_middleware(ApiVersionMiddleware)
 
+# ETag middleware: computes ETag for GET/HEAD responses and honours If-None-Match
+app.add_middleware(ETagMiddleware, exclude_path_prefixes=settings.ETAG_EXCLUDE_PATH_PREFIXES)
+
 
 @app.exception_handler(ApexException)
 async def apex_exception_handler(request: Request, exc: ApexException) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
+    # Conflict subclasses carry the fields that collide; surfacing them is what
+    # lets a client act on the 409 instead of just logging it.
+    fields = getattr(exc, "fields", None)
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "error_code": exc.error_code,
+            "type": f"https://developer.apexchainx.io/errors/{exc.status_code}",
+            "title": getattr(exc, "error_code", "Domain Error"),
+            "status": exc.status_code,
             "detail": exc.detail,
-            **(exc.extra or {}),
+            "correlation_id": correlation_id,
+            "error_code": getattr(exc, "error_code", "domain_error"),
+            **(getattr(exc, "extra", None) or {}),
+            **({"fields": fields} if fields else {}),
         },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 @app.exception_handler(ApexNotFoundError)
 async def apex_not_found_handler(request: Request, exc: ApexNotFoundError) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
         status_code=404,
-        content={"error_code": "not_found", "detail": exc.detail},
+        content={
+            "type": "https://developer.apexchainx.io/errors/404",
+            "title": "Not Found",
+            "status": 404,
+            "detail": exc.detail,
+            "correlation_id": correlation_id,
+            "error_code": "not_found",
+        },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 @app.exception_handler(ApexTransientError)
 async def apex_transient_error_handler(request: Request, exc: ApexTransientError) -> JSONResponse:
+    correlation_id = get_or_generate_correlation_id()
     return JSONResponse(
-        status_code=500,
+        status_code=exc.status_code,
         content={
-            "error_code": "transient_error",
+            "type": f"https://developer.apexchainx.io/errors/{exc.status_code}",
+            "title": "Service Unavailable",
+            "status": exc.status_code,
             "detail": exc.detail,
+            "correlation_id": correlation_id,
+            "error_code": "transient_error",
             "retryable": True,
         },
+        media_type="application/problem+json",
+        headers={"X-Correlation-ID": correlation_id},
     )
 
 
 # Health checks
 @app.get("/health/liveness")
 def liveness():
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
 
 @app.get("/health/readiness")
 async def readiness():
-    report = build_readiness_report(engine, settings.CELERY_BROKER_URL)
-    report["timestamp"] = datetime.now(timezone.utc).isoformat()
-    return report
+    # Run the (blocking) probe work on a worker thread so a slow DB/Redis never
+    # stalls the event loop.
+    report = await asyncio.to_thread(build_readiness_report, engine, audit_engine, settings.CELERY_BROKER_URL)
+    report["timestamp"] = datetime.now(UTC).isoformat()
+
+    # Map report status to HTTP status code
+    if report["status"] == "down":
+        return JSONResponse(status_code=503, content=report)
+    elif report["status"] == "warn":
+        # For warn status, return 200 to keep instance in load balancer rotation
+        # but indicate degraded performance in the response body
+        return JSONResponse(status_code=200, content=report)
+    else:  # status == "ok"
+        return JSONResponse(status_code=200, content=report)
 
 
-# Legacy health check (now liveness)
-@app.get("/health")
+# Legacy health check – deprecated, redirects to /health/liveness
+@app.get("/health", include_in_schema=False)
 def health_check():
-    return {"status": "ok"}
+    return RedirectResponse(
+        url="/health/liveness",
+        status_code=308,
+        headers={"Deprecation": "true"},
+    )
+
+
+# Register RFC 7807 exception handlers
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
 
 # API routes
 app.include_router(api_router, prefix="/api/v1")
+
+# Apply OpenTelemetry auto-instrumentation (after all routes registered)
+instrument_app(app)
+
+# Wrap the FastAPI ASGI app with the payload size guard so it runs outside
+# the BaseHTTPMiddleware stack and can short-circuit large request bodies.
+app = PayloadSizeMiddleware(app)

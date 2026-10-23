@@ -7,3 +7,9 @@ apexchainx.json
 .DS_Store
 
 venv
+*.egg-info/
+.mypy_cache/
+.coverage
+htmlcov/
+# Local compose override used to expose postgres/redis to the host test run.
+docker-compose.override.yml

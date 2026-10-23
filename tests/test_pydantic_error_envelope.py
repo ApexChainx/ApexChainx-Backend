@@ -1,8 +1,7 @@
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
-from app.main import app
 from app.core.exceptions import _build_rfc7807
+from app.main import app
 
 
 def test_rfc7807_structure():
@@ -24,17 +23,20 @@ def test_rfc7807_structure():
 def test_validation_handler_on_bad_request():
     client = TestClient(app)
     response = client.post(
-        "/api/v1/outages/",
-        json={"site_name": "test"},
+        "/api/v1/auth/register",
+        json={"email": "bad-email", "password": "123"},
     )
 
     assert response.status_code == 422
     body = response.json()
 
-    if "title" in body:
-        assert body["title"] == "Validation Error"
-        assert body["status"] == 422
-        assert "errors" in body
-        assert "type" in body
-    else:
-        pass
+    assert body["type"] == "about:blank"
+    assert body["title"] == "Unprocessable Entity"
+    assert body["status"] == 422
+    assert body["detail"] == "Request validation failed."
+    assert "correlation_id" in body
+
+    assert body["errors"]
+    assert all("pointer" in error for error in body["errors"])
+    assert all("type" in error for error in body["errors"])
+    assert all("message" in error for error in body["errors"])

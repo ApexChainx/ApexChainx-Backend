@@ -1,25 +1,148 @@
 import json
 import logging
-import os
 import random
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from threading import Lock, Semaphore
+from typing import Any
 from uuid import UUID
 
 import httpx
+from redis import Redis
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.tracing import get_current_traceparent, traced
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
+from app.services.event_listener import EventListener
+from app.services.event_listener_cache import EventListenerCache
+from app.services.event_listener_metrics import EventListenerMetrics
+from app.services.event_listener_rate_limit import EventRateLimiter
+from app.services.formatters import canonical_json
+from app.services.webhook_breaker import breaker
 from app.services.webhook_signing import (
     CURRENT_SIGNATURE_VERSION,
     sign_payload,
 )
-from app.services.webhook_breaker import breaker
-from app.core.config import settings
-from app.utils.correlation import get_or_generate_correlation_id
-from app.utils.network_validation import validate_webhook_url
+from app.utils.correlation_ctx import get_or_generate_correlation_id
+from app.utils.network_validation import NetworkValidationError, validate_webhook_url
 
 logger = logging.getLogger(__name__)
+
+# The listener is shared by every path that emits a domain event: which
+# subscribers hear about an event is the same question no matter who asked.
+# The subscriber cache and the fan-out budget are process-wide for the same
+# reason.
+_event_listener_metrics = EventListenerMetrics()
+_event_listener_cache: EventListenerCache | None = None
+_event_rate_limiter: EventRateLimiter | None = None
+
+
+def _get_event_listener_cache() -> EventListenerCache | None:
+    """Return the shared subscriber cache.
+
+    Returns:
+        The cache, or ``None`` when the Redis-backed cache is switched off
+        (``USE_REDIS_RATE_LIMITER`` is the switch for every Redis-backed
+        helper in the fan-out path) or no broker URL is configured.
+    """
+    global _event_listener_cache
+    if _event_listener_cache is None:
+        broker_url = settings.CELERY_BROKER_URL.strip()
+        if not broker_url or not settings.USE_REDIS_RATE_LIMITER:
+            return None
+        try:
+            _event_listener_cache = EventListenerCache(
+                Redis.from_url(broker_url),
+                ttl=settings.EVENT_LISTENER_CACHE_TTL_SECONDS,
+            )
+        except Exception as exc:  # pragma: no cover - a bad broker URL must not break fan-out
+            logger.warning(
+                "event_listener_cache_unavailable",
+                extra={"event": "event_listener_cache_unavailable", "error": str(exc)},
+            )
+            return None
+    return _event_listener_cache
+
+
+def _get_event_rate_limiter() -> EventRateLimiter | None:
+    """Return the shared fan-out budget.
+
+    The budget is kept in Redis so every worker enforces the same limit; when
+    Redis is not available the limiter falls back to an in-process counter.
+    """
+    global _event_rate_limiter
+    if _event_rate_limiter is None:
+        redis_client = None
+        broker_url = settings.CELERY_BROKER_URL.strip()
+        if broker_url and settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER:
+            redis_client = Redis.from_url(broker_url)
+        _event_rate_limiter = EventRateLimiter(redis_client)
+    return _event_rate_limiter
+
+
+def build_event_listener(db: Session) -> EventListener:
+    """Build the listener used by every path that emits a domain event."""
+    return EventListener(
+        db,
+        metrics=_event_listener_metrics,
+        cache=_get_event_listener_cache(),
+        rate_limiter=_get_event_rate_limiter(),
+    )
+
+
+def invalidate_event_listener_cache(event: WebhookEvent | None = None) -> None:
+    """Drop the cached subscriber list after a registration changed.
+
+    A registration that was just created (or deleted, or re-subscribed to
+    another event) must take effect immediately: a newly registered webhook
+    that misses the next event because of a cached subscriber list would look
+    exactly like a silently broken webhook.
+    """
+    cache = _get_event_listener_cache()
+    if cache is None:
+        return
+    if event is None:
+        cache.invalidate_all()
+    else:
+        cache.invalidate(event.value)
+
+
+class WebhookDispatchLimiter:
+    """Limit concurrent webhook delivery attempts globally and per webhook."""
+
+    def __init__(self, global_limit: int = 10, per_webhook_limit: int = 5) -> None:
+        self._global_semaphore = Semaphore(max(1, global_limit))
+        self._per_webhook_limit = max(1, per_webhook_limit)
+        self._per_webhook_semaphores: dict[str, Semaphore] = {}
+        self._lock = Lock()
+
+    def _get_per_webhook_semaphore(self, webhook_id: str) -> Semaphore:
+        with self._lock:
+            semaphore = self._per_webhook_semaphores.get(webhook_id)
+            if semaphore is None:
+                semaphore = Semaphore(self._per_webhook_limit)
+                self._per_webhook_semaphores[webhook_id] = semaphore
+            return semaphore
+
+    @contextmanager
+    def acquire(self, webhook_id: str) -> Iterator[None]:
+        self._global_semaphore.acquire()
+        try:
+            semaphore = self._get_per_webhook_semaphore(webhook_id)
+            semaphore.acquire()
+            yield
+        finally:
+            semaphore.release()
+            self._global_semaphore.release()
+
+
+dispatch_limiter = WebhookDispatchLimiter(
+    global_limit=settings.WEBHOOK_MAX_CONCURRENT_DISPATCHES,
+    per_webhook_limit=settings.WEBHOOK_MAX_CONCURRENT_DISPATCHES_PER_WEBHOOK,
+)
 
 
 def _get_retry_delays() -> list[int]:
@@ -33,12 +156,30 @@ def _apply_jitter(delay: float) -> float:
     if mode == "none":
         return delay
     if mode == "equal":
-        return delay * random.uniform(0.5, 1.5)
+        return delay * random.uniform(0.5, 1.5)  # nosec B311 - retry jitter, not security
     # "full" (default): random in [0, nominal*2], floor 1s
-    return max(1.0, random.uniform(0, delay * 2))
+    return max(1.0, random.uniform(0, delay * 2))  # nosec B311 - retry jitter, not security
 
 
 WEBHOOK_SCHEMA_VERSION = "1"
+# BE-299: cap on due deliveries processed per retry sweep, so a large backlog
+# (e.g. after an outage burst) can't block the worker for an unbounded run.
+WEBHOOK_RETRY_BATCH_SIZE = 100
+
+# Response bodies are receiver-controlled; cap and scrub before persisting (#301).
+RESPONSE_BODY_STORAGE_LIMIT = 500
+_SCRUB_PATTERNS = [
+    re.compile(r"S[A-Za-z0-9]{55}"),  # Stellar secret key
+    re.compile(r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+"),
+]
+
+
+def _scrub_response_body(body: str) -> str:
+    """Redact likely-sensitive patterns and bound the stored size (#301)."""
+    scrubbed = body
+    for pattern in _SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed[:RESPONSE_BODY_STORAGE_LIMIT]
 
 
 def _build_headers(
@@ -46,7 +187,7 @@ def _build_headers(
     payload: str,
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Build webhook delivery headers with explicit signature versioning (BE-087).
 
     Args:
@@ -62,42 +203,56 @@ def _build_headers(
         - X-Webhook-Timestamp: ISO-formatted UTC timestamp
         - X-Webhook-Signature: signature (if secret configured)
         - X-Webhook-Signature-Version: signature version (if secret configured)
+        - traceparent: W3C trace context for distributed tracing (from OTel)
     """
     corr_id = get_or_generate_correlation_id()
-    trace_id = corr_id.replace("-", "")[:32].ljust(32, "0")
-    span_id = os.urandom(8).hex()
+
+    # The timestamp is part of the version 2 signed input, so the value signed and
+    # the value sent in the header must be the same string (#538). Each attempt
+    # re-stamps it: a retry is a fresh delivery of the same event, and re-using the
+    # original stamp would push it outside a receiver's skew window.
+    timestamp = datetime.now(UTC).isoformat()
 
     headers = {
         "Content-Type": "application/json",
         "X-Webhook-Event": event.value,
-        "X-Webhook-Timestamp": datetime.now(timezone.utc).isoformat(),
-        "traceparent": f"00-{trace_id}-{span_id}-01",
+        "X-Webhook-Timestamp": timestamp,
+        "X-Correlation-ID": corr_id,
     }
+
+    # Inject OTel trace context (traceparent) only when a real span is active
+    # (#300): a correlation ID is not a trace ID, and fabricating one here
+    # produced fake sampled root traces with no real parent linkage.
+    traceparent = get_current_traceparent()
+    if traceparent:
+        headers["traceparent"] = traceparent
+
     if webhook.secret:
-        sig_hex, _ = sign_payload(webhook.secret, payload, signature_version)
+        sig_hex, _version, signed_timestamp = sign_payload(webhook.secret, payload, signature_version, timestamp)
         headers["X-Webhook-Signature"] = f"sha256={sig_hex}"
         headers["X-Webhook-Signature-Version"] = str(signature_version)
+        # Version 1 ignores the timestamp; make the mismatch impossible to miss.
+        headers["X-Webhook-Timestamp"] = signed_timestamp or timestamp
     return headers
 
 
-def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> List[Webhook]:
-    webhooks = db.query(Webhook).filter(Webhook.is_active).all()
-    result = []
-    for webhook in webhooks:
-        try:
-            events = json.loads(webhook.events)
-            if event.value in events:
-                result.append(webhook)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Webhook %s has invalid events JSON, skipping.", webhook.id)
-    return result
+def get_active_webhooks_for_event(db: Session, event: WebhookEvent) -> list[Webhook]:
+    """Return the active webhooks that are subscribed to ``event``.
+
+    The resolution lives in :class:`app.services.event_listener.EventListener`
+    so that every path which emits an event resolves the subscribers the same
+    way -- with one statement, with the subscription filter pushed into SQL
+    instead of a per-row JSON parse in Python (issue #739), and sharing the
+    same subscriber cache and fan-out budget.
+    """
+    return build_event_listener(db).subscribers(event)
 
 
 def create_delivery(
     db: Session,
     webhook: Webhook,
     event: WebhookEvent,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     signature_version: int = CURRENT_SIGNATURE_VERSION,
 ) -> WebhookDelivery:
     """Create a webhook delivery record with explicit signature version (BE-087).
@@ -115,7 +270,7 @@ def create_delivery(
     delivery = WebhookDelivery(
         webhook_id=webhook.id,
         event=event,
-        payload=json.dumps(payload),
+        payload=canonical_json(payload),
         status=WebhookDeliveryStatus.PENDING,
         signature_version=signature_version,
     )
@@ -133,9 +288,29 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         delivery.event,
         delivery.signature_version,
     )
+    headers["X-Webhook-Delivery-ID"] = str(delivery.id)
 
     # Re-validate the webhook URL before every delivery attempt to mitigate DNS rebinding.
-    validate_webhook_url(webhook.url)
+    current_ips = validate_webhook_url(webhook.url)
+
+    # Pin delivery to the addresses approved at registration (issue #295): if the
+    # webhook was registered with a resolved_ips snapshot and delivery-time
+    # resolution no longer overlaps it at all, fail closed rather than silently
+    # following the new (possibly rebound) address. Redirect-target validation
+    # and a configurable warn/allow policy are follow-ups, tracked in #295.
+    if webhook.resolved_ips:
+        try:
+            approved_ips = set(json.loads(webhook.resolved_ips))
+        except (json.JSONDecodeError, TypeError):
+            approved_ips = set()
+        if approved_ips and not (approved_ips & set(current_ips)):
+            logger.error(
+                "Webhook %s delivery blocked: resolved IPs %s do not match approved %s (possible DNS rebinding).",
+                webhook.id,
+                current_ips,
+                approved_ips,
+            )
+            raise NetworkValidationError("Webhook host resolution no longer matches the approved address.")
 
     # Check circuit breaker before attempting
     if not breaker.allow_request(webhook.url):
@@ -148,7 +323,7 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook.url, content=payload_str, headers=headers)
         delivery.response_status_code = response.status_code
-        delivery.response_body = response.text[:4000]
+        delivery.response_body = _scrub_response_body(response.text)
 
         if response.is_success:
             breaker.on_success(webhook.url)
@@ -170,37 +345,42 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
         return False
 
 
+@traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
+    claimed = (
+        db.query(WebhookDelivery)
+        .filter(
+            WebhookDelivery.id == delivery_id,
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.PENDING, WebhookDeliveryStatus.RETRYING]),
+        )
+        .update(
+            {
+                WebhookDelivery.status: WebhookDeliveryStatus.SENDING,
+                WebhookDelivery.attempt_count: WebhookDelivery.attempt_count + 1,
+                WebhookDelivery.updated_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        return
+
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if not delivery:
         logger.error("WebhookDelivery %s not found.", delivery_id)
         return
 
-    webhook = delivery.webhook
-
-    # If breaker is open, mark as breaker_open without consuming retry budget
-    if not breaker.allow_request(webhook.url):
-        delivery.status = WebhookDeliveryStatus.BREAKER_OPEN
-        delivery.error_message = "Circuit breaker open, delivery deferred"
-        delivery.next_retry_at = None
-        delivery.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        logger.warning(
-            "Webhook delivery %s deferred for webhook %s: circuit breaker open.",
-            delivery.id, webhook.id,
-        )
+    if delivery.status in (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.DEAD_LETTER):
+        logger.info("WebhookDelivery %s already in terminal state %s, skipping.", delivery_id, delivery.status)
         return
 
-    delivery.attempt_count += 1
-    delivery.status = WebhookDeliveryStatus.RETRYING if delivery.attempt_count > 1 else WebhookDeliveryStatus.PENDING
-    delivery.updated_at = datetime.now(timezone.utc)
-    db.commit()
-
+    webhook = delivery.webhook
     success = _attempt_delivery(delivery, webhook)
 
     if success:
         delivery.status = WebhookDeliveryStatus.SUCCESS
-        delivery.delivered_at = datetime.now(timezone.utc)
+        delivery.delivered_at = datetime.now(UTC)
         delivery.next_retry_at = None
         logger.info(
             "Webhook delivery %s succeeded on attempt %d for webhook %s.",
@@ -219,7 +399,9 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             base_delay = retry_delays[retry_index]
             raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
             delay = _apply_jitter(raw_delay)
-            delivery.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
+            delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
+            delivery.next_retry_at = datetime.now(UTC) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(
                 "Webhook delivery %s failed (attempt %d). Retrying in %ds.",
@@ -229,7 +411,7 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
             )
         else:
             delivery.status = WebhookDeliveryStatus.DEAD_LETTER
-            delivery.dead_lettered_at = datetime.now(timezone.utc)
+            delivery.dead_lettered_at = datetime.now(UTC)
             delivery.next_retry_at = None
             logger.error(
                 "Webhook delivery %s permanently failed after %d attempts. Marked as dead-letter.",
@@ -237,16 +419,17 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
                 delivery.attempt_count,
             )
 
-    delivery.updated_at = datetime.now(timezone.utc)
+    delivery.updated_at = datetime.now(UTC)
     db.commit()
 
 
+@traced("webhook.trigger_sla_violation")
 def trigger_sla_violation_webhooks(
     db: Session,
-    sla_data: Dict[str, Any],
+    sla_data: dict[str, Any],
     event: WebhookEvent = WebhookEvent.SLA_VIOLATION,
     signature_version: int = CURRENT_SIGNATURE_VERSION,
-) -> List[WebhookDelivery]:
+) -> list[WebhookDelivery]:
     """Trigger webhook deliveries for an event with explicit signature versioning (BE-087).
 
     Args:
@@ -263,11 +446,12 @@ def trigger_sla_violation_webhooks(
         - Timestamp is immutable across retries (idempotency support)
         - Future signing changes can use new version without breaking existing consumers
     """
-    webhooks = get_active_webhooks_for_event(db, event)
+    listener = build_event_listener(db)
+    decisions = listener.dispatch_plan(event)
     deliveries = []
 
     # Timestamp is captured once and reused across all retries (idempotency support)
-    event_timestamp = datetime.now(timezone.utc).isoformat()
+    event_timestamp = datetime.now(UTC).isoformat()
 
     payload = {
         "schema_version": WEBHOOK_SCHEMA_VERSION,
@@ -276,7 +460,21 @@ def trigger_sla_violation_webhooks(
         "data": sla_data,
     }
 
-    for webhook in webhooks:
+    celery_available = False
+    try:
+        from app.tasks.celery_app import celery_app as _celery
+
+        celery_available = not _celery.conf.task_always_eager
+    except (ImportError, AttributeError):
+        pass
+
+    for decision in decisions:
+        if not decision.allowed:
+            # The fan-out policy or the event budget refused this subscriber. The listener already
+            # logged and counted it; skipping keeps the rest of the fan-out
+            # going instead of failing the whole event.
+            continue
+        webhook = decision.webhook
         delivery = create_delivery(
             db,
             webhook,
@@ -292,20 +490,33 @@ def trigger_sla_violation_webhooks(
             event.value,
             signature_version,
         )
-        # Dispatch immediately (in production, offload to a background task/queue)
-        dispatch_delivery(db, delivery.id)
+
+        if celery_available:
+            from app.tasks.webhook_tasks import dispatch_webhook_delivery
+
+            dispatch_webhook_delivery.delay(str(delivery.id))
+            logger.info("Enqueued webhook delivery %s via Celery.", delivery.id)
+        else:
+            dispatch_delivery(db, delivery.id)
 
     return deliveries
 
 
-def retry_pending_deliveries(db: Session) -> int:
-    now = datetime.now(timezone.utc)
+def retry_pending_deliveries(db: Session, batch_size: int = WEBHOOK_RETRY_BATCH_SIZE) -> int:
+    """Dispatch due retries, capped at `batch_size` per sweep (#299).
+
+    Oldest-due deliveries are processed first; any remainder is picked up by
+    the next scheduled sweep rather than blocking this run.
+    """
+    now = datetime.now(UTC)
     due_deliveries = (
         db.query(WebhookDelivery)
         .filter(
-            WebhookDelivery.status == WebhookDeliveryStatus.RETRYING,
+            WebhookDelivery.status.in_([WebhookDeliveryStatus.RETRYING, WebhookDeliveryStatus.BREAKER_OPEN]),
             WebhookDelivery.next_retry_at <= now,
         )
+        .order_by(WebhookDelivery.next_retry_at)
+        .limit(batch_size)
         .all()
     )
 
@@ -317,9 +528,7 @@ def retry_pending_deliveries(db: Session) -> int:
     return count
 
 
-def get_dead_letter_deliveries(
-    db: Session, webhook_id: Optional[UUID] = None, limit: int = 100
-) -> List[WebhookDelivery]:
+def get_dead_letter_deliveries(db: Session, webhook_id: UUID | None = None, limit: int = 100) -> list[WebhookDelivery]:
     """Get dead-lettered deliveries for auditing and remediation."""
     query = (
         db.query(WebhookDelivery)
@@ -353,7 +562,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
     delivery.response_status_code = None
     delivery.response_body = None
     delivery.delivered_at = None
-    delivery.updated_at = datetime.now(timezone.utc)
+    delivery.updated_at = datetime.now(UTC)
 
     db.commit()
 
@@ -364,7 +573,7 @@ def replay_dead_letter_delivery(db: Session, delivery_id: UUID) -> bool:
 
 
 def replay_deliveries_by_event_context(
-    db: Session, event: WebhookEvent, device_id: Optional[str] = None, outage_id: Optional[str] = None, limit: int = 50
+    db: Session, event: WebhookEvent, device_id: str | None = None, outage_id: str | None = None, limit: int = 50
 ) -> int:
     """Replay deliveries by event and context (device or outage)."""
     # Get dead-lettered deliveries matching the criteria
@@ -384,9 +593,7 @@ def replay_deliveries_by_event_context(
                 payload = json.loads(delivery.payload)
                 data = payload.get("data", {})
 
-                if device_id and data.get("device_id") == device_id:
-                    matching_deliveries.append(delivery)
-                elif outage_id and data.get("outage_id") == outage_id:
+                if device_id and data.get("device_id") == device_id or outage_id and data.get("outage_id") == outage_id:
                     matching_deliveries.append(delivery)
             except (json.JSONDecodeError, TypeError):
                 continue

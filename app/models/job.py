@@ -1,8 +1,10 @@
-import uuid
-from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum as SAEnum, Float, JSON
-from sqlalchemy.dialects.postgresql import UUID
 import enum
+import uuid
+from datetime import UTC, datetime
+
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.db.base_class import Base
 
@@ -28,8 +30,8 @@ class Job(Base):
     celery_task_id = Column(String(255), unique=True, nullable=False, index=True)
     job_type = Column(SAEnum(JobType), nullable=False)
     status = Column(SAEnum(JobStatus), default=JobStatus.PENDING, nullable=False)
-    payload = Column(Text, nullable=True)  # JSON-encoded input params
-    result = Column(Text, nullable=True)  # JSON-encoded result
+    payload = Column(JSONB, nullable=True)  # JSON input params
+    result = Column(JSONB, nullable=True)  # JSON result
     error = Column(Text, nullable=True)
     progress = Column(Float, default=0.0)  # 0.0 – 100.0
     progress_details = Column(JSON, nullable=True)  # Structured progress information
@@ -41,5 +43,5 @@ class Job(Base):
     last_retried_at = Column(DateTime, nullable=True)  # When the job was last retried
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
