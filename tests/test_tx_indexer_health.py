@@ -13,12 +13,12 @@ from typing import Any
 import pytest
 from redis.exceptions import RedisError
 
+from app.services.tx_indexer import FetchedPage, TxIndexer
 from app.services.tx_indexer_health import (
     IndexerState,
     TxIndexerStateStore,
     build_indexer_health,
 )
-from app.services.tx_indexer import FetchedPage, TxIndexer
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 

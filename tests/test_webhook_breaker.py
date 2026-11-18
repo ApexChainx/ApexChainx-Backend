@@ -1,6 +1,14 @@
 import time
 
+import pytest
+
+import app.services.webhook_breaker as webhook_breaker
 from app.services.webhook_breaker import CircuitBreaker
+
+
+@pytest.fixture(autouse=True)
+def disable_shared_breaker_state(monkeypatch):
+    monkeypatch.setattr(webhook_breaker, "_redis_client", None)
 
 
 class TestCircuitBreaker:

@@ -20,5 +20,5 @@ def _warm_sla_cache_on_boot(**_kwargs) -> None:
 
         warm_sla_cache_task.delay()
         logger.info("SLA cache warm-up dispatched on worker boot")
-    except Exception:  # noqa: BLE001 - warm-up must never block worker startup
+    except Exception:
         logger.exception("SLA cache warm-up dispatch failed on worker boot")

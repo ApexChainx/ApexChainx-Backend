@@ -49,7 +49,7 @@ class CacheLayer:
 
     @staticmethod
     def _validate_component(value: str, label: str) -> str:
-        if not isinstance(value, str) or not _SAFE_KEY.fullmatch(value):
+        if not isinstance(value, str) or ".." in value or not _SAFE_KEY.fullmatch(value):
             raise ValueError(f"invalid cache {label}")
         return value
 
@@ -64,7 +64,7 @@ class CacheLayer:
                 result = callback()
                 self._failures = 0
                 return result
-            except (RedisError, OSError) as exc:
+            except (RedisError, OSError):
                 self._failures += 1
                 logger.warning(
                     "cache_layer_operation_failed",

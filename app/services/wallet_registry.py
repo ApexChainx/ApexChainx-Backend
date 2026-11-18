@@ -162,9 +162,7 @@ class WalletRegistry:
         """
         repo = WalletRepository(db)
 
-        existing_by_user, existing_by_address = repo.get_by_user_id_or_public_key(
-            payload.user_id, payload.public_key
-        )
+        existing_by_user, existing_by_address = repo.get_by_user_id_or_public_key(payload.user_id, payload.public_key)
 
         # Check 1: User already linked to different address
         if existing_by_user and existing_by_user.public_key != payload.public_key:

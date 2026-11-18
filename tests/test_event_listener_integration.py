@@ -20,21 +20,9 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
-
-
-@compiles(JSONB, "sqlite")
-def _compile_jsonb_on_sqlite(type_, **kw):
-    """Render the PostgreSQL JSONB column as plain JSON on SQLite.
-
-    SQLite has no JSONB. The column only holds the list of previous signing
-    secrets, and plain JSON is enough for the test.
-    """
-    return "JSON"
 
 
 @pytest.fixture

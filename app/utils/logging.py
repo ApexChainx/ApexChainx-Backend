@@ -55,7 +55,7 @@ class StructuredLogger:
     def exception(self, message: str, **kwargs):
         """Log an exception with traceback."""
         kwargs["exception"] = True
-        self.logger.error(self._format_message("ERROR", message, **kwargs), exc_info=True)
+        self.logger.error(self._format_message("ERROR", message, **kwargs))
 
 
 def get_structured_logger(name: str) -> StructuredLogger:

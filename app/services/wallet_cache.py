@@ -13,8 +13,6 @@ from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
-from app.services.metrics import metrics, timer
-
 
 class WalletCache:
     """Read-through cache wrapping Redis for wallet lookups.
@@ -55,9 +53,7 @@ class WalletCache:
         try:
             return json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            logger.warning(
-                "Corrupt JSON in wallet cache for key %s, treating as miss", address
-            )
+            logger.warning("Corrupt JSON in wallet cache for key %s, treating as miss", address)
             return None
 
     def set(self, address: str, data: dict) -> None:

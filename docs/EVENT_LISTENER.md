@@ -35,9 +35,7 @@ Invalid configuration (`max_attempts < 1`, negative delays) raises
 ```python
 from app.services.event_listener import EventListener, RetryPolicy
 
-listener = EventListener(
-    retry_policy=RetryPolicy(max_attempts=4, base_delay=0.1, max_delay=2.0)
-)
+listener = EventListener(retry_policy=RetryPolicy(max_attempts=4, base_delay=0.1, max_delay=2.0))
 listener.subscribe("outage.created", notify_on_call)
 listener.process_event({"topic": "outage.created", "payload": {"severity": "high"}})
 ```

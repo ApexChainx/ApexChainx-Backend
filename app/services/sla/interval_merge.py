@@ -3,12 +3,11 @@ duplicate/overlapping periods aren't double-counted in SLA windows.
 """
 
 from datetime import datetime
-from typing import List, Tuple
 
-Interval = Tuple[datetime, datetime]
+Interval = tuple[datetime, datetime]
 
 
-def merge_intervals(intervals: List[Interval]) -> List[Interval]:
+def merge_intervals(intervals: list[Interval]) -> list[Interval]:
     if not intervals:
         return []
     ordered = sorted(intervals, key=lambda interval: interval[0])

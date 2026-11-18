@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
-from app.middleware.etag import ETagMiddleware, MAX_ETAG_BODY_BYTES
+from app.middleware.etag import MAX_ETAG_BODY_BYTES, ETagMiddleware
 
 
 def create_app() -> FastAPI:
@@ -77,7 +77,7 @@ def test_streaming_response_is_not_consumed_by_etag_middleware():
     scope: Scope = {"type": "http", "method": "GET", "headers": [], "path": "/stream"}
     middleware = ETagMiddleware(downstream)
 
-    asyncio.run(middleware(scope, lambda: {}, send))
+    asyncio.run(middleware(scope, dict, send))
 
     assert first_chunk_sent.is_set()
     assert [event.get("body") for event in events if event["type"] == "http.response.body"] == [b"first", b"second"]

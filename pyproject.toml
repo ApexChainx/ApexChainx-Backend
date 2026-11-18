@@ -17,7 +17,7 @@ dependencies = [
     "fastapi==0.115.6",
     "uvicorn[standard]==0.34.0",
     "redis==5.2.1",
-    "sqlalchemy==2.1.4",
+    "sqlalchemy==2.0.36",
     "psycopg2-binary>=2.9.10",
     "alembic==1.14.0",
     "pydantic-settings==2.16.0",
@@ -32,20 +32,20 @@ dependencies = [
     # instead of silently truncating, so every hash/verify call fails.
     "bcrypt>=4.0,<5",
     "gunicorn==23.0.0",
-    "opentelemetry-api==1.29.0",
+    "opentelemetry-api==1.45.1",
     "opentelemetry-sdk==1.45.1",
     "opentelemetry-exporter-otlp-proto-grpc==1.45.1",
     "opentelemetry-instrumentation-fastapi==0.66b1",
     "opentelemetry-instrumentation-sqlalchemy==0.66b1",
-    "opentelemetry-instrumentation-httpx==0.50b0",
-    "opentelemetry-instrumentation-redis==0.50b0",
+    "opentelemetry-instrumentation-httpx==0.66b1",
+    "opentelemetry-instrumentation-redis==0.66b1",
     "cryptography>=42.0.0",
     "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest==8.3.4",
+    "pytest==8.4.2",
     "pytest-cov==6.0.0",
     "pytest-benchmark==5.1.0",
     "pytest-alembic>=0.11.0",

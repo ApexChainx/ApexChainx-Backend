@@ -6,8 +6,8 @@ Both classes share the same error-handling contract:
 - Successful round-trips store/return the original data faithfully.
 """
 
-import json
 import logging
+from datetime import UTC
 
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -124,7 +124,7 @@ class TestAuthCacheCorruptData:
         redis.store["auth:user:alice@example.com"] = b"not-json"
         with caplog.at_level(logging.WARNING, logger="app.services.auth_cache"):
             AuthCache(redis).get_user("alice@example.com")
-        assert any("Corrupt JSON" in r.message for r in caplog.records)
+        assert any("Corrupt JSON" in r.getMessage() for r in caplog.records)
 
     def test_invalid_unicode_is_a_miss(self):
         redis = FakeRedis()
@@ -148,17 +148,17 @@ class TestAuthCacheRedisFailure:
     def test_get_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.auth_cache"):
             AuthCache(BrokenRedis()).get_user("alice@example.com")
-        assert any("read failed" in r.message for r in caplog.records)
+        assert any("read failed" in r.getMessage() for r in caplog.records)
 
     def test_set_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.auth_cache"):
             AuthCache(BrokenRedis()).set_user("alice@example.com", USER)
-        assert any("write failed" in r.message for r in caplog.records)
+        assert any("write failed" in r.getMessage() for r in caplog.records)
 
     def test_invalidate_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.auth_cache"):
             AuthCache(BrokenRedis()).invalidate_user("alice@example.com")
-        assert any("invalidate failed" in r.message for r in caplog.records)
+        assert any("invalidate failed" in r.getMessage() for r in caplog.records)
 
     def test_repeated_failures_never_accumulate_exceptions(self):
         cache = AuthCache(BrokenRedis())
@@ -218,9 +218,9 @@ class TestUserCacheRoundTrip:
 
     def test_datetime_values_are_serialised_as_strings(self):
         """set_sessions uses default=str so datetime objects must not crash."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        sessions_with_dt = [{"session_id": "s1", "created_at": datetime(2026, 10, 1, tzinfo=timezone.utc)}]
+        sessions_with_dt = [{"session_id": "s1", "created_at": datetime(2026, 10, 1, tzinfo=UTC)}]
         cache = UserCache(FakeRedis())
         cache.set_sessions("alice@example.com", sessions_with_dt)
         result = cache.get_sessions("alice@example.com")
@@ -239,7 +239,7 @@ class TestUserCacheCorruptData:
         redis.store["user:sessions:alice@example.com"] = b"not-json"
         with caplog.at_level(logging.WARNING, logger="app.services.user_cache"):
             UserCache(redis).get_sessions("alice@example.com")
-        assert any("Corrupt JSON" in r.message for r in caplog.records)
+        assert any("Corrupt JSON" in r.getMessage() for r in caplog.records)
 
     def test_invalid_unicode_is_a_miss(self):
         redis = FakeRedis()
@@ -263,14 +263,14 @@ class TestUserCacheRedisFailure:
     def test_get_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.user_cache"):
             UserCache(BrokenRedis()).get_sessions("alice@example.com")
-        assert any("read failed" in r.message for r in caplog.records)
+        assert any("read failed" in r.getMessage() for r in caplog.records)
 
     def test_set_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.user_cache"):
             UserCache(BrokenRedis()).set_sessions("alice@example.com", SESSIONS)
-        assert any("write failed" in r.message for r in caplog.records)
+        assert any("write failed" in r.getMessage() for r in caplog.records)
 
     def test_invalidate_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.user_cache"):
             UserCache(BrokenRedis()).invalidate("alice@example.com")
-        assert any("invalidate failed" in r.message for r in caplog.records)
+        assert any("invalidate failed" in r.getMessage() for r in caplog.records)

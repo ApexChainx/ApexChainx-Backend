@@ -83,10 +83,11 @@ new public API endpoints.
 ```python
 @dataclass(frozen=True)
 class TxIndexerConfig:
-    cursor_name: str                    # e.g. "stellar:testnet:payments"
-    batch_size: int = 100               # Horizon page limit, validated 1..200
+    cursor_name: str  # e.g. "stellar:testnet:payments"
+    batch_size: int = 100  # Horizon page limit, validated 1..200
     max_attempts: int = 5
     start_ledger: int = 0
+
 
 @dataclass(frozen=True)
 class BatchResult:
@@ -98,9 +99,9 @@ class BatchResult:
     cursor_after: str | None
     duration_ms: int
 
+
 class TxIndexer:
-    def __init__(self, db: Session, horizon_client, config: TxIndexerConfig,
-                 logger=None, metrics=None) -> None: ...
+    def __init__(self, db: Session, horizon_client, config: TxIndexerConfig, logger=None, metrics=None) -> None: ...
 
     def run_once(self) -> BatchResult:
         """Fetch one Horizon page, map + persist it, advance the cursor atomically."""
@@ -149,15 +150,17 @@ the Horizon client and injects it, keeping the service unit-testable without net
 Task wiring follows `app/tasks/sla_tasks.py`:
 
 ```python
-@celery_app.task(bind=True, base=DatabaseTask,
-                 name="app.tasks.tx_indexer_tasks.run_tx_indexer_batch")
+@celery_app.task(bind=True, base=DatabaseTask, name="app.tasks.tx_indexer_tasks.run_tx_indexer_batch")
 def run_tx_indexer_batch(self):
     if not settings.TX_INDEXER_ENABLED:
         return {"skipped": "disabled"}
     set_correlation_id(f"tx-indexer-{uuid4()}")
     with SessionLocal() as db:
-        with advisory_lock(db, f"tx_indexer:{settings.TX_INDEXER_CURSOR_NAME}",
-                           timeout_seconds=settings.TX_INDEXER_LOCK_TIMEOUT_SECONDS):
+        with advisory_lock(
+            db,
+            f"tx_indexer:{settings.TX_INDEXER_CURSOR_NAME}",
+            timeout_seconds=settings.TX_INDEXER_LOCK_TIMEOUT_SECONDS,
+        ):
             return asdict(TxIndexer(db, horizon_client, config).run_once())
 ```
 
@@ -201,6 +204,7 @@ client is a small fake and the repository is an in-memory stub. Place them in
 class FakeHorizonClient:
     def __init__(self, pages: list[list[dict]]): ...
     def transactions(self, cursor=None, limit=100): ...  # mimics the SDK chain
+
 
 def test_map_transaction_converts_xlm_to_minor_units():
     tx = indexer._map_transaction(make_horizon_transaction(amount="10.0000000"))
@@ -367,9 +371,12 @@ logger.info(
     "tx_indexer batch completed",
     event="tx_indexer.run.completed",
     cursor_name=config.cursor_name,
-    fetched=result.fetched, inserted=result.inserted,
-    duplicates=result.duplicates, skipped=result.skipped,
-    cursor_after=result.cursor_after, duration_ms=result.duration_ms,
+    fetched=result.fetched,
+    inserted=result.inserted,
+    duplicates=result.duplicates,
+    skipped=result.skipped,
+    cursor_after=result.cursor_after,
+    duration_ms=result.duration_ms,
 )
 ```
 

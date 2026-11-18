@@ -5,6 +5,7 @@ Revision ID: 0024_audit_log_loginfail_index
 Revises: 0020_audit_immutable
 Create Date: 2026-07-29
 """
+
 from alembic import op
 
 revision = "0024_audit_log_loginfail_index"
@@ -27,6 +28,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "DROP INDEX IF EXISTS ix_audit_logs_login_failure_created_at"
-    )
+    op.execute("DROP INDEX IF EXISTS ix_audit_logs_login_failure_created_at")

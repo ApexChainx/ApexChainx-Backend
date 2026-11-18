@@ -167,7 +167,9 @@ class TestOrderingAndCount:
 
         client.get("/api/v1/sla/disputes")
 
-        assert query.order_by.call_args[0] == (SLADispute.flagged_at.desc(), SLADispute.id)
+        actual = [str(expr) for expr in query.order_by.call_args[0]]
+        expected = [str(SLADispute.flagged_at.desc()), str(SLADispute.id)]
+        assert actual == expected
 
     def test_total_comes_from_the_page_statement(self, engineer_override):
         query = _install(_paged_rows([_dispute(), _dispute()], 45), 45)

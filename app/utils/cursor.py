@@ -34,6 +34,10 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class CursorError(ValueError):
+    """Raised when a pagination cursor cannot be decoded."""
+
+
 def encode_cursor(id_value: Any, sort_value: str) -> str:
     """Encode an (id, sort_value) pair into a URL-safe opaque cursor string.
 
@@ -51,16 +55,11 @@ def encode_cursor(id_value: Any, sort_value: str) -> str:
 def decode_cursor(cursor: str | None) -> tuple[Any, str] | None:
     """Decode a cursor string back into (id, sort_value).
 
-    Args:
-        cursor: A base64url-encoded cursor string (or None).
-
-    Returns:
-        A tuple of (id, sort_value) or None if the cursor is invalid/missing.
+    Returns None if cursor is missing/empty or invalid.
     """
     if not cursor:
         return None
     try:
-        # Pad back to a multiple of 4 for base64 decoding
         padded = cursor + "=" * (4 - len(cursor) % 4) if len(cursor) % 4 else cursor
         payload = json.loads(base64.urlsafe_b64decode(padded).decode())
         return payload["id"], payload["v"]

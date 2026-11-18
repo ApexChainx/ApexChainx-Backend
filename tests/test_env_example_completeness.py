@@ -70,8 +70,12 @@ def _dev_values() -> dict:
 
 
 def _dev_settings(**overrides) -> Settings:
-    # _env_file=None keeps a developer's real .env out of these assertions.
-    return Settings(_env_file=None, **{**_dev_values(), **overrides})
+    # Isolate from .env files and CI-injected environment variables.
+    return Settings(
+        _env_file=None,
+        _env_prefix="APEX_TEST_ISOLATED_",
+        **{**_dev_values(), **overrides},
+    )
 
 
 class TestTemplateCoverage:

@@ -289,6 +289,7 @@ async function connectWallet() {
 ```python
 from stellar_sdk import Keypair
 
+
 def create_wallet():
     """Create a new Stellar keypair for a user"""
     keypair = Keypair.random()
@@ -297,8 +298,9 @@ def create_wallet():
     # Only return the public key for wallet linking
     return {
         "public_key": keypair.public_key,
-        "secret_key": "[REDACTED - Store securely server-side or use hardware security module]"
+        "secret_key": "[REDACTED - Store securely server-side or use hardware security module]",
     }
+
 
 # CORRECT implementation - only expose public key
 def create_wallet_secure():
@@ -309,10 +311,7 @@ def create_wallet_secure():
     # NEVER return it in API responses
     store_secret_key_securely(keypair.secret)
 
-    return {
-        "public_key": keypair.public_key,
-        "message": "Wallet created. Secret key stored securely."
-    }
+    return {"public_key": keypair.public_key, "message": "Wallet created. Secret key stored securely."}
 ```
 
 > **SECURITY WARNING**: The above example shows what NOT to do. Secret keys should never be returned in API responses. Use secure key management systems and only expose public keys for wallet operations.
@@ -403,36 +402,32 @@ Example:
 from app.services.sla.sla_calculator import SLACalculator
 from app.services.stellar.payment_service import PaymentService
 
+
 async def process_outage_resolution(outage_id: str):
     """Process SLA payment after outage resolution"""
-    
+
     # Get outage details
     outage = await get_outage(outage_id)
-    
+
     # Calculate SLA result
     calculator = SLACalculator()
     sla_result = await calculator.calculate_sla_result(outage)
-    
+
     # Invoke smart contract
     contract_result = await calculator.invoke_sla_contract(
-        outage_id=outage["id"],
-        severity=outage["severity"],
-        mttr_minutes=sla_result["mttr_minutes"]
+        outage_id=outage["id"], severity=outage["severity"], mttr_minutes=sla_result["mttr_minutes"]
     )
-    
+
     # Execute payment if auto-payment enabled
     if AUTO_PAYMENT_ENABLED:
         payment_service = PaymentService()
         payment = await payment_service.execute_sla_payment(
             sla_result=contract_result,
             operator_address=outage["operator_wallet"],
-            ops_team_address=outage["ops_team_wallet"]
+            ops_team_address=outage["ops_team_wallet"],
         )
-        
-        return {
-            "sla_result": contract_result,
-            "payment": payment
-        }
+
+        return {"sla_result": contract_result, "payment": payment}
 ```
 
 ---
@@ -515,6 +510,7 @@ import os
 from stellar_sdk import SorobanServer, TransactionBuilder, Network
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
+
 async def invoke_sla_contract(outage_id: str, severity: str, mttr: int):
     """Invoke SLA calculator contract"""
 
@@ -535,11 +531,7 @@ async def invoke_sla_contract(outage_id: str, severity: str, mttr: int):
         .append_invoke_contract_function_op(
             contract_id=os.getenv("SLA_CONTRACT_ID"),
             function_name="calculate_sla",
-            parameters=[
-                scval.to_symbol(outage_id),
-                scval.to_uint32(severity_to_enum(severity)),
-                scval.to_uint32(mttr)
-            ]
+            parameters=[scval.to_symbol(outage_id), scval.to_uint32(severity_to_enum(severity)), scval.to_uint32(mttr)],
         )
         .set_timeout(30)
         .build()
@@ -598,13 +590,14 @@ service = PaymentService(network="testnet")
 
 # SECURITY: Load from environment, never pass as parameter
 import os
+
 source_secret = os.getenv("TEST_PAYMENT_SECRET_KEY")
 
 result = await service.create_payment(
     source_secret=source_secret,  # Only use for testing with testnet keys
     destination="GXXX...",
     amount="10.00",
-    asset_code="USDC"
+    asset_code="USDC",
 )
 
 print(f"Transaction hash: {result['tx_hash']}")

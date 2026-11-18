@@ -8,7 +8,7 @@ import hmac
 import os
 
 
-def hash_token_keyed(token: str, server_secret: bytes, salt: bytes = None) -> str:
+def hash_token_keyed(token: str, server_secret: bytes, salt: bytes | None = None) -> str:
     salt = salt or os.urandom(16)
     digest = hmac.new(server_secret, salt + token.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{salt.hex()}:{digest}"

@@ -8,6 +8,7 @@ Revision ID: 0018_webhook_secret_grace
 Revises: 0016_webhook_sig_versioning
 Create Date: 2026-07-28
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 

@@ -99,9 +99,7 @@ class SingleUseTokenStore:
                 key = f"{TOKEN_KEY_PREFIX}:{token}"
                 # Atomic SET NX EX: only the first worker can register the
                 # token, so the guarantee holds across processes/restarts.
-                if self.redis.set(key, "1", nx=True, ex=self.ttl_seconds):
-                    return False
-                return True
+                return not self.redis.set(key, "1", nx=True, ex=self.ttl_seconds)
             except (RedisError, OSError) as exc:
                 logger.warning("Single-use token store: Redis SET NX failed, falling back: %s", exc)
                 self._trip_circuit()

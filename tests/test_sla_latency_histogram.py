@@ -6,12 +6,17 @@ metric and that the metric is available on the Prometheus endpoint.
 
 from unittest.mock import MagicMock, patch
 
-from app.services.metrics import _SLA_LATENCY_BUCKETS, metrics
-
 import pytest
+
+from app.services.metrics import _SLA_LATENCY_BUCKETS, metrics
 
 # Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
 pytestmark = [pytest.mark.postgres]
+
+
+@pytest.fixture(autouse=True)
+def disable_sla_cache(monkeypatch):
+    monkeypatch.setattr("app.services.sla_service._get_sla_cache", lambda: None)
 
 
 class TestSLALatencyHistogram:
@@ -79,7 +84,7 @@ class TestSLALatencyBuckets:
         metrics.record_histogram("test_latency", 0.15, buckets=[0.01, 0.05, 0.1])
 
         summary = metrics.get_metrics_summary()
-        buckets = summary.get("histogram_buckets", {}).get("test_latency", {})
+        buckets = summary.get("histogram_buckets", {}).get(metrics._make_key("test_latency"), {})
         assert buckets[0.01] == 0  # 0.03 > 0.01
         assert buckets[0.05] == 1  # 0.03 <= 0.05
         assert buckets[0.1] == 2  # 0.03, 0.07 <= 0.1
@@ -89,11 +94,8 @@ class TestPrometheusEndpointIncludesHistogram:
     def test_latency_histogram_in_prometheus_output(self):
         from fastapi.testclient import TestClient
 
+        from app.core.security import require_engineer
         from app.main import app
-
-        client = TestClient(app)
-
-        # Record a metric first
         from app.services.sla_service import compute_device_sla
 
         with patch("app.services.sla_service.SLAOrchestrator") as MockOrch:
@@ -106,7 +108,13 @@ class TestPrometheusEndpointIncludesHistogram:
             db = MagicMock()
             compute_device_sla(db, "dev-prom", "2025-03")
 
-        resp = client.get("/api/v1/metrics/prometheus")
+        app.dependency_overrides[require_engineer] = lambda: None
+        try:
+            client = TestClient(app)
+            resp = client.get("/api/v1/metrics/prometheus")
+        finally:
+            app.dependency_overrides.clear()
+
         assert resp.status_code == 200
         text = resp.text
         assert "sla_computation_latency_seconds" in text

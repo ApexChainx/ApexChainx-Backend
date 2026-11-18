@@ -30,7 +30,7 @@ CALLBACK_SECRET = "test-webhook-secret-1234"
 class _BrokenRedis:
     """Redis client that always fails, to exercise the fallback path."""
 
-    def set(self, *args, **kwargs):  # noqa: ANN002, ANN003
+    def set(self, *args, **kwargs):
         raise RedisError("connection refused")
 
 

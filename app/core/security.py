@@ -54,9 +54,7 @@ def validate_password_policy(password: str) -> bool:
         return False
     if not re.search(r"\d", password):
         return False
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-        return False
-    return True
+    return re.search(r"[!@#$%^&*(),.?\":{}|<>]", password)
 
 
 def _extract_bearer_token(authorization: str | None) -> str:

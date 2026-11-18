@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field, field_validator
-
 from fastapi import APIRouter, Depends, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.coded_errors import CodedHTTPException

@@ -31,11 +31,11 @@ from unittest.mock import patch
 import fakeredis
 import pytest
 
+import app.services.token_revocation as revocation_module
 from app.services.auth_cache import AuthCache
 from app.services.sla_cache import SLACache
 from app.services.user_cache import UserCache
 from app.services.wallet_cache import WalletCache
-import app.services.token_revocation as revocation_module
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -110,9 +110,7 @@ class TestKeyNamespaceIsolation:
         assert len(user_keys) == 1
         assert not (set(auth_keys) & set(user_keys))
 
-    def test_all_four_classes_use_distinct_prefixes(
-        self, redis, wallet_cache, sla_cache, auth_cache, user_cache
-    ):
+    def test_all_four_classes_use_distinct_prefixes(self, redis, wallet_cache, sla_cache, auth_cache, user_cache):
         wallet_cache.set("GABC", WALLET)
         sla_cache.set("dev-1", "2026-09", SLA_RESULT)
         auth_cache.set_user("alice@example.com", USER_DATA)
@@ -230,9 +228,7 @@ class TestTTLExpiry:
 
 
 class TestSharedKeyspaceCoherence:
-    def test_writes_from_all_classes_coexist(
-        self, wallet_cache, sla_cache, auth_cache, user_cache
-    ):
+    def test_writes_from_all_classes_coexist(self, wallet_cache, sla_cache, auth_cache, user_cache):
         wallet_cache.set("GABC", WALLET)
         sla_cache.set("dev-1", "2026-09", SLA_RESULT)
         auth_cache.set_user("alice@example.com", USER_DATA)
@@ -243,9 +239,7 @@ class TestSharedKeyspaceCoherence:
         assert auth_cache.get_user("alice@example.com") == USER_DATA
         assert user_cache.get_sessions("alice@example.com") == SESSIONS
 
-    def test_overwriting_one_class_does_not_affect_others(
-        self, wallet_cache, sla_cache, auth_cache, user_cache
-    ):
+    def test_overwriting_one_class_does_not_affect_others(self, wallet_cache, sla_cache, auth_cache, user_cache):
         wallet_cache.set("GABC", WALLET)
         sla_cache.set("dev-1", "2026-09", SLA_RESULT)
         auth_cache.set_user("alice@example.com", USER_DATA)
@@ -266,9 +260,7 @@ class TestSharedKeyspaceCoherence:
 
 
 class TestConcurrentWrites:
-    def test_interleaved_writes_are_all_readable(
-        self, wallet_cache, sla_cache, auth_cache, user_cache
-    ):
+    def test_interleaved_writes_are_all_readable(self, wallet_cache, sla_cache, auth_cache, user_cache):
         for i in range(5):
             wallet_cache.set(f"G{i:04d}", {"index": i})
             sla_cache.set(f"dev-{i}", "2026-09", {"index": i})

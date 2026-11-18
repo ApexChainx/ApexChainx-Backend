@@ -12,6 +12,7 @@ Issue #701 — Pagination:
     ?page and ?page_size query parameters and an optional ?include_total flag.
 """
 
+import logging
 import time
 from datetime import UTC, datetime
 

@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     SLA_CONTRACT_ADDRESS: str = "local-sla-calculator"
     STELLAR_NETWORK: str = "testnet"
     CONTRACT_EXECUTION_MODE: str = "local_adapter"
+    GOVERNANCE_ENABLED: bool = True
     PAYMENT_WEBHOOK_SECRET: str = ""
     # Horizon endpoint used by the Stellar block poller. Empty falls back to
     # the public endpoint for STELLAR_NETWORK.
@@ -111,6 +112,7 @@ class Settings(BaseSettings):
     # pass and retries transient Horizon failures with exponential backoff.
     # The delay before retry N is BATCH-independent: min(base * 2**(N-1), max)
     # with +/- TX_INDEXER_BACKOFF_JITTER_RATIO jitter on top.
+    TX_INDEXER_HORIZON_URL: str = ""
     TX_INDEXER_BATCH_SIZE: int = 50  # payments fetched per Horizon page
     TX_INDEXER_MAX_ATTEMPTS: int = 4  # total attempts per page fetch (first try included)
     TX_INDEXER_BACKOFF_BASE_SECONDS: float = 0.5  # delay before the first retry
@@ -375,10 +377,14 @@ def validate_critical_settings(config: Settings) -> None:
         errors.append("BLOCK_POLLER_CACHE_TTL_SECONDS must be > 0.")
     if config.BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS <= 0:
         errors.append("BLOCK_POLLER_HORIZON_TIMEOUT_SECONDS must be > 0.")
-    if config.STELLAR_HORIZON_URL.strip():
-        parsed_horizon_url = urlparse(config.STELLAR_HORIZON_URL)
-        if parsed_horizon_url.scheme not in {"http", "https"} or not parsed_horizon_url.netloc:
-            errors.append("STELLAR_HORIZON_URL must be an http(s) URL when set.")
+    for key_name, horizon_url in (
+        ("STELLAR_HORIZON_URL", config.STELLAR_HORIZON_URL),
+        ("TX_INDEXER_HORIZON_URL", config.TX_INDEXER_HORIZON_URL),
+    ):
+        if horizon_url.strip():
+            parsed_horizon_url = urlparse(horizon_url)
+            if parsed_horizon_url.scheme not in {"http", "https"} or not parsed_horizon_url.netloc:
+                errors.append(f"{key_name} must be an http(s) URL when set.")
     for key_name, key_value in (
         ("BLOCK_POLLER_CURSOR_KEY", config.BLOCK_POLLER_CURSOR_KEY),
         ("BLOCK_POLLER_LEDGER_CACHE_PREFIX", config.BLOCK_POLLER_LEDGER_CACHE_PREFIX),
@@ -461,7 +467,7 @@ def validate_critical_settings(config: Settings) -> None:
             Fernet(encryption_key.encode("utf-8"))
         except Exception:
             errors.append(
-                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key " "(32 url-safe base64-encoded bytes)."
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key (32 url-safe base64-encoded bytes)."
             )
 
     try:

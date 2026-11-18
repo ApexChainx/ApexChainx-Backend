@@ -8,7 +8,6 @@ Pins three properties:
    and treats the result as a miss — no exception ever escapes SLACache.
 """
 
-import json
 import logging
 
 import pytest
@@ -169,10 +168,12 @@ class TestWarmUp:
 
     def test_warm_up_returns_count_of_entries_written(self):
         cache = SLACache(FakeRedis())
-        n = cache.warm_up([
-            ("dev-1", "2026-09", RESULT),
-            ("dev-2", "2026-09", RESULT),
-        ])
+        n = cache.warm_up(
+            [
+                ("dev-1", "2026-09", RESULT),
+                ("dev-2", "2026-09", RESULT),
+            ]
+        )
         assert n == 2
 
     def test_warm_up_returns_zero_for_empty_input(self):
@@ -192,10 +193,12 @@ class TestWarmUp:
 
         redis.setex = flaky_setex
         cache = SLACache(redis)
-        n = cache.warm_up([
-            ("bad", "2026-09", RESULT),
-            ("good", "2026-09", RESULT),
-        ])
+        n = cache.warm_up(
+            [
+                ("bad", "2026-09", RESULT),
+                ("good", "2026-09", RESULT),
+            ]
+        )
         # Only the second entry succeeded.
         assert n == 1
         assert cache.get("good", "2026-09") == RESULT
@@ -223,7 +226,7 @@ class TestSLACacheCorruptData:
         redis.store["sla:dev-1:2026-09"] = b"{{bad"
         with caplog.at_level(logging.WARNING, logger="app.services.sla_cache"):
             SLACache(redis).get("dev-1", "2026-09")
-        assert any("Corrupt JSON" in r.message for r in caplog.records)
+        assert any("Corrupt JSON" in r.getMessage() for r in caplog.records)
 
     def test_invalid_unicode_is_a_miss(self):
         redis = FakeRedis()
@@ -263,17 +266,17 @@ class TestSLACacheRedisFailure:
     def test_get_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.sla_cache"):
             SLACache(BrokenRedis()).get("dev-1", "2026-09")
-        assert any("read failed" in r.message for r in caplog.records)
+        assert any("read failed" in r.getMessage() for r in caplog.records)
 
     def test_set_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.sla_cache"):
             SLACache(BrokenRedis()).set("dev-1", "2026-09", RESULT)
-        assert any("write failed" in r.message for r in caplog.records)
+        assert any("write failed" in r.getMessage() for r in caplog.records)
 
     def test_invalidate_failure_logs_warning(self, caplog):
         with caplog.at_level(logging.WARNING, logger="app.services.sla_cache"):
             SLACache(BrokenRedis()).invalidate("dev-1", "2026-09")
-        assert any("invalidate failed" in r.message for r in caplog.records)
+        assert any("invalidate failed" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@ Revision ID: 0032_outage_status_detected_at_index
 Revises: 0031_merge_open_heads
 Create Date: 2026-09-28
 """
+
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0032_outage_status_detected_at_index"
@@ -29,6 +31,13 @@ branch_labels = None
 
 
 def upgrade() -> None:
+    op.alter_column(
+        "alembic_version",
+        "version_num",
+        existing_type=sa.String(length=32),
+        type_=sa.String(length=64),
+        existing_nullable=False,
+    )
     op.execute("CREATE INDEX IF NOT EXISTS ix_outages_status_detected_at ON outages (status, detected_at DESC)")
 
 

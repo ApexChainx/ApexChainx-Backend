@@ -15,15 +15,36 @@ Start the backing services with:
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.ext.compiler import compiles
 
+from app.core.config import settings as app_settings
 from app.db.session import SessionLocal
 from app.main import app
+
+
+@compiles(ARRAY, "sqlite")
+def _compile_array_on_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_on_sqlite(type_, compiler, **kw):
+    return "JSON"
 
 
 @pytest.fixture(scope="session")
 def client():
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def settings():
+    original = app_settings.model_dump()
+    yield app_settings
+    for key, value in original.items():
+        setattr(app_settings, key, value)
 
 
 @pytest.fixture

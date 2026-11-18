@@ -3,7 +3,8 @@ app/core/lock.py acquire semantics to prevent a thundering-herd
 recompute storm on cache expiry.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 async def compute_with_singleflight(

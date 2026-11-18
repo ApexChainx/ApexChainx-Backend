@@ -326,21 +326,19 @@ from app.api.deps import get_current_user
 
 router = APIRouter()
 
+
 @router.post("/payments", response_model=PaymentResponse)
-async def create_payment(
-    payment: PaymentCreate,
-    current_user = Depends(get_current_user)
-) -> PaymentResponse:
+async def create_payment(payment: PaymentCreate, current_user=Depends(get_current_user)) -> PaymentResponse:
     """
     Create a new payment transaction on Stellar network.
-    
+
     Args:
         payment: Payment details including amount and destination
         current_user: Currently authenticated user
-        
+
     Returns:
         PaymentResponse with transaction hash and status
-        
+
     Raises:
         HTTPException: If payment creation fails
     """
@@ -488,17 +486,14 @@ pytest --cov=app --cov-report=html
 import pytest
 from app.services.stellar.payment_service import PaymentService
 
+
 @pytest.mark.asyncio
 async def test_create_payment():
     """Test payment creation on Stellar network"""
     service = PaymentService(network="testnet")
-    
-    result = await service.create_payment(
-        source_secret="S...",
-        destination="G...",
-        amount="10.00"
-    )
-    
+
+    result = await service.create_payment(source_secret="S...", destination="G...", amount="10.00")
+
     assert result["status"] == "success"
     assert "tx_hash" in result
 ```

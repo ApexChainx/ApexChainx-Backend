@@ -17,8 +17,8 @@ branch_labels = None
 def upgrade() -> None:
     # Stored values were written with datetime.now(UTC), so interpret the naive
     # column as UTC when converting to timestamptz (no instant shift).
-    op.execute("ALTER TABLE outages ALTER COLUMN updated_at TYPE timestamptz " "USING updated_at AT TIME ZONE 'UTC'")
+    op.execute("ALTER TABLE outages ALTER COLUMN updated_at TYPE timestamptz USING updated_at AT TIME ZONE 'UTC'")
 
 
 def downgrade() -> None:
-    op.execute("ALTER TABLE outages ALTER COLUMN updated_at TYPE timestamp " "USING updated_at AT TIME ZONE 'UTC'")
+    op.execute("ALTER TABLE outages ALTER COLUMN updated_at TYPE timestamp USING updated_at AT TIME ZONE 'UTC'")

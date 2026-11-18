@@ -12,6 +12,12 @@ from app.models.outage_dto import OutageCreate, OutageSortDirection, OutageSortF
 from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
 def _orm_to_pydantic(orm: OutageORM) -> Outage:
     location = None
     if orm.location:
@@ -27,8 +33,8 @@ def _orm_to_pydantic(orm: OutageORM) -> Outage:
         site_id=orm.site_id,
         severity=orm.severity,
         status=orm.status,
-        detected_at=orm.detected_at,
-        resolved_at=orm.resolved_at,
+        detected_at=_as_utc(orm.detected_at),
+        resolved_at=_as_utc(orm.resolved_at),
         description=orm.description,
         affected_services=orm.affected_services or [],
         affected_subscribers=orm.affected_subscribers,
@@ -45,6 +51,10 @@ ALLOWED_STATUS_TRANSITIONS = {
 }
 
 OUTAGE_SORT_FIELDS = {"detected_at", "site_name", "severity", "status", "id"}
+
+
+def _enum_value(value):
+    return getattr(value, "value", value)
 
 
 class OutageRepository:
@@ -67,9 +77,9 @@ class OutageRepository:
         query = self.db.query(OutageORM)
 
         if severity:
-            query = query.filter(OutageORM.severity == severity.value)
+            query = query.filter(OutageORM.severity == _enum_value(severity))
         if status:
-            query = query.filter(OutageORM.status == status.value)
+            query = query.filter(OutageORM.status == _enum_value(status))
 
         if search:
             search_filter = or_(
@@ -127,9 +137,9 @@ class OutageRepository:
         query = self.db.query(OutageORM)
 
         if severity:
-            query = query.filter(OutageORM.severity == severity.value)
+            query = query.filter(OutageORM.severity == _enum_value(severity))
         if status:
-            query = query.filter(OutageORM.status == status.value)
+            query = query.filter(OutageORM.status == _enum_value(status))
 
         if search:
             search_filter = or_(
@@ -198,9 +208,9 @@ class OutageRepository:
     ) -> builtins.list[Outage]:
         query = self.db.query(OutageORM)
         if severity:
-            query = query.filter(OutageORM.severity == severity.value)
+            query = query.filter(OutageORM.severity == _enum_value(severity))
         if status:
-            query = query.filter(OutageORM.status == status.value)
+            query = query.filter(OutageORM.status == _enum_value(status))
         if search:
             query = query.filter(
                 or_(
@@ -227,9 +237,9 @@ class OutageRepository:
         """Stream filtered outages in batches to avoid loading all rows into memory."""
         query = self.db.query(OutageORM)
         if severity:
-            query = query.filter(OutageORM.severity == severity.value)
+            query = query.filter(OutageORM.severity == _enum_value(severity))
         if status:
-            query = query.filter(OutageORM.status == status.value)
+            query = query.filter(OutageORM.status == _enum_value(status))
         if search:
             query = query.filter(
                 or_(
@@ -381,8 +391,8 @@ class OutageRepository:
 
     def has_financial_history(self, outage_id: str) -> bool:
         """Return True if the outage has SLA results or payments referencing it."""
-        from app.models.orm.sla import SLAResultORM
         from app.models.orm.payment import PaymentTransactionORM
+        from app.models.orm.sla import SLAResultORM
 
         sla_count = self.db.query(SLAResultORM).filter(SLAResultORM.outage_id == outage_id).count()
         if sla_count > 0:

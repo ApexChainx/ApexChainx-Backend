@@ -53,9 +53,7 @@ class SecurityHeadersMiddleware:
 
                     # Allow a permissive CSP for docs when configured
                     path = scope.get("path", "")
-                    if settings.SECURITY_CSP_SWAGGER_PERMISSIVE and (
-                        path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/openapi")
-                    ):
+                    if settings.SECURITY_CSP_SWAGGER_PERMISSIVE and (path.startswith(("/docs", "/redoc", "/openapi"))):
                         csp_value = b"default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:"
 
                     set_header(b"content-security-policy", csp_value)

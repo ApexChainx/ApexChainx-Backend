@@ -51,14 +51,9 @@ def _validate_input(value: str, field_name: str) -> None:
     if not value:
         raise ValueError(f"{field_name} must not be empty")
     if not _SAFE_INPUT_RE.match(value):
-        raise ValueError(
-            f"{field_name} contains invalid characters. "
-            "Only printable ASCII characters are allowed."
-        )
+        raise ValueError(f"{field_name} contains invalid characters. Only printable ASCII characters are allowed.")
     if _SQLI_PATTERNS.search(value):
-        raise ValueError(
-            f"{field_name} contains disallowed SQL keywords or characters."
-        )
+        raise ValueError(f"{field_name} contains disallowed SQL keywords or characters.")
 
 
 class WalletRepository:
@@ -139,12 +134,7 @@ class WalletRepository:
         offset = (page - 1) * page_size
 
         if include_total:
-            rows = (
-                query.add_columns(func.count().over())
-                .offset(offset)
-                .limit(page_size)
-                .all()
-            )
+            rows = query.add_columns(func.count().over()).offset(offset).limit(page_size).all()
             total = rows[0][1] if rows else 0
             items = [row[0] for row in rows]
         else:

@@ -113,6 +113,7 @@ Histogram buckets: reuse `_DEFAULT_LATENCY_BUCKETS`
 ```python
 from app.services.metrics import increment_counter, record_histogram, set_gauge, timer
 
+
 def run_once(self) -> None:
     with timer("tx_indexer_ingest_duration_seconds") as stop:
         try:
@@ -202,6 +203,7 @@ linearly on large tables. Neither path is acceptable for ingestion.
    ```python
    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+
    def bulk_upsert(self, rows: list[dict], chunk_size: int = 500) -> int:
        inserted = 0
        for start in range(0, len(rows), chunk_size):
@@ -254,16 +256,11 @@ Revision ID: 00XX_tx_indexer_ledger_scan
 """
 # raw-sql-allowed  (scripts/lint_migrations.py requires this marker for op.execute)
 
+
 def upgrade() -> None:
     with op.get_context().autocommit_block():
-        op.execute(
-            "ALTER TABLE payment_transactions "
-            "ADD COLUMN IF NOT EXISTS ledger_sequence BIGINT"
-        )
-        op.execute(
-            "ALTER TABLE payment_transactions "
-            "ADD COLUMN IF NOT EXISTS paging_token VARCHAR(128)"
-        )
+        op.execute("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS ledger_sequence BIGINT")
+        op.execute("ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS paging_token VARCHAR(128)")
         op.execute(
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_payment_tx_ledger_scan "
             "ON payment_transactions (ledger_sequence, paging_token)"
@@ -383,9 +380,7 @@ class TxIndexerCache:
 
     def set_tx(self, network: str, tx_hash: str, data: dict) -> None:
         try:
-            self._redis.setex(
-                self._tx_key(network, tx_hash), self._ttl, json.dumps(data, default=str)
-            )
+            self._redis.setex(self._tx_key(network, tx_hash), self._ttl, json.dumps(data, default=str))
         except RedisError as exc:
             logger.warning("TxIndexer cache write failed for %s: %s", tx_hash, exc)
 

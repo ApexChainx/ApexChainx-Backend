@@ -43,7 +43,7 @@ class TTLCache:
         self._store: dict[str, tuple[Any, float]] = {}
         self._lock = Lock()
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Return cached value or None on miss / expiry.
 
         Records cache hit / miss / expired counters for Prometheus.

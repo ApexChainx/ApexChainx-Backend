@@ -9,6 +9,8 @@ rejected the same session. These tests pin the family gate in place and cover th
 race order the issue describes: issue, delete the family, then present the token.
 """
 
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,7 +39,7 @@ def db():
 
 def _register_and_login(db, label: str):
     """Register a throwaway user and log them in; return (login, family_id, email)."""
-    email = f"{label}-{id(object())}@example.com"
+    email = f"{label}-{uuid4().hex}@example.com"
     AuthStore.register(
         RegisterRequest(email=email, password=PASSWORD, full_name="Family Test"),
         db=db,

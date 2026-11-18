@@ -2,7 +2,7 @@
 that made the documented SSO login flow unusable.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 
 class OAuthExchangeError(Exception):
@@ -11,7 +11,7 @@ class OAuthExchangeError(Exception):
 
 def exchange_code_for_session(
     provider_token_url: str, code: str, state: str, expected_state: str, http_client
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if state != expected_state:
         raise OAuthExchangeError("OAuth state mismatch")
 

@@ -1,5 +1,5 @@
 import itertools
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.api.v1.endpoints.webhooks import WebhookCreate
@@ -95,8 +95,8 @@ def make_payment_transaction(
         "status": "confirmed",
         "outage_id": f"outage-{_next_id()}",
         "sla_result_id": 1,
-        "created_at": datetime.now(timezone.utc),
-        "confirmed_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(UTC),
+        "confirmed_at": datetime.now(UTC),
         "retry_count": 0,
         "last_retried_at": None,
     }

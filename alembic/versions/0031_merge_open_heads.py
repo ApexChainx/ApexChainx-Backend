@@ -12,6 +12,7 @@ Revision ID: 0031_merge_open_heads
 Revises: 0021_delivery_claim_auth_ledger, 0026_jobs_json_columns, 0026c_sla_payment_amounts_bigint, 0029_sla_config_publish_state, 0030_webhook_soft_delete
 Create Date: 2026-09-28
 """
+
 from typing import Sequence, Union
 
 from alembic import op

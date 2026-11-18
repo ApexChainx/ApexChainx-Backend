@@ -33,7 +33,7 @@ class AuthCache:
     def get_user(self, email: str) -> dict | None:
         try:
             raw = self._redis.get(self._key(email))
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning("Auth cache read failed for %s: %s", email, exc)
             return None
         if not raw:
@@ -47,11 +47,11 @@ class AuthCache:
     def set_user(self, email: str, data: dict) -> None:
         try:
             self._redis.setex(self._key(email), self._ttl, json.dumps(data))
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning("Auth cache write failed for %s: %s", email, exc)
 
     def invalidate_user(self, email: str) -> None:
         try:
             self._redis.delete(self._key(email))
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning("Auth cache invalidate failed for %s: %s", email, exc)

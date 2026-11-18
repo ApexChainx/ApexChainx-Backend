@@ -5,6 +5,7 @@ Revision ID: 0023_payment_tx_indexes
 Revises: 0020_audit_immutable
 Create Date: 2026-07-29
 """
+
 from alembic import op
 
 revision = "0023_payment_tx_indexes"

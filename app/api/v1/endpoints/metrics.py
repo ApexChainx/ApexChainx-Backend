@@ -99,10 +99,10 @@ def get_prometheus_metrics(current_user=Depends(require_engineer)):
         # Emit actual bucket counts from the registry
         buckets = metrics_data.get("histogram_buckets", {}).get(key, {})
         if buckets:
-            cumulative = 0
             for bucket_bound in sorted(buckets.keys()):
-                cumulative += buckets[bucket_bound]
-                prometheus_lines.append(f'{metric_name}_bucket{{{base_labels}le="{bucket_bound}"}} {cumulative}')
+                prometheus_lines.append(
+                    f'{metric_name}_bucket{{{base_labels}le="{bucket_bound}"}} {buckets[bucket_bound]}'
+                )
         prometheus_lines.append(f'{metric_name}_bucket{{{base_labels}le="+Inf"}} {stats["count"]}')
 
     # ── Timers (exported as histograms with percentile estimation) ───────

@@ -4,6 +4,7 @@ Revision ID: 0019_api_keys
 Revises: 0016_outage_event_schema_version
 Create Date: 2026-07-28
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa

@@ -7,8 +7,6 @@ and monkeypatching, with no real Redis dependency.
 from __future__ import annotations
 
 import time
-from collections import defaultdict
-from importlib import reload
 from unittest.mock import patch
 
 import pytest
@@ -16,10 +14,10 @@ import pytest
 from app.core.config import settings
 from app.core.rate_limiter import RedisRateLimiter, SimpleRateLimiter
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def clear_simple_rate_limiter_state():
@@ -32,6 +30,7 @@ def clear_simple_rate_limiter_state():
 # ---------------------------------------------------------------------------
 # SimpleRateLimiter — allow/deny logic
 # ---------------------------------------------------------------------------
+
 
 class TestSimpleRateLimiterAllowDeny:
     def test_allows_up_to_limit(self, monkeypatch):
@@ -52,9 +51,7 @@ class TestSimpleRateLimiterAllowDeny:
         for _ in range(5):
             limiter.is_allowed("unit-test-key-exceed")
 
-        assert limiter.is_allowed("unit-test-key-exceed") is False, (
-            "Request beyond limit should be rejected"
-        )
+        assert limiter.is_allowed("unit-test-key-exceed") is False, "Request beyond limit should be rejected"
 
     def test_different_keys_are_independent(self, monkeypatch):
         """Rate limit state for one key does not affect another."""
@@ -74,6 +71,7 @@ class TestSimpleRateLimiterAllowDeny:
 # ---------------------------------------------------------------------------
 # SimpleRateLimiter — timestamp expiry
 # ---------------------------------------------------------------------------
+
 
 class TestSimpleRateLimiterExpiry:
     def test_old_timestamps_expire_correctly(self, monkeypatch):
@@ -108,7 +106,7 @@ class TestSimpleRateLimiterExpiry:
         SimpleRateLimiter._shared[key] = [now - 5, now - 3]
 
         # Only 1 more request should be allowed
-        assert limiter.is_allowed(key) is True   # 3rd slot used
+        assert limiter.is_allowed(key) is True  # 3rd slot used
         assert limiter.is_allowed(key) is False  # 4th denied
 
     def test_mock_time_advances_window(self, monkeypatch):
@@ -139,6 +137,7 @@ class TestSimpleRateLimiterExpiry:
 # SimpleRateLimiter — shared class-level state
 # ---------------------------------------------------------------------------
 
+
 class TestSimpleRateLimiterSharedState:
     def test_multiple_instances_share_state(self, monkeypatch):
         """Two separate SimpleRateLimiter instances operate on the same backing dict."""
@@ -164,7 +163,6 @@ class TestSimpleRateLimiterSharedState:
 
     def test_direct_mutation_visible_across_instances(self):
         """Directly mutating _shared is visible to all instances."""
-        a = SimpleRateLimiter()
         b = SimpleRateLimiter()
         SimpleRateLimiter._shared["cross-key"].append(99999.9)
         assert 99999.9 in b.requests["cross-key"]
@@ -173,6 +171,7 @@ class TestSimpleRateLimiterSharedState:
 # ---------------------------------------------------------------------------
 # RedisRateLimiter — circuit breaker
 # ---------------------------------------------------------------------------
+
 
 class TestRedisRateLimiterCircuitBreaker:
     def test_circuit_open_returns_false_when_disabled_until_is_none(self):
@@ -205,22 +204,21 @@ class TestRedisRateLimiterCircuitBreaker:
 
         fallback_calls: list[str] = []
 
-        def mock_fallback_is_allowed(key: str) -> bool:
+        def mock_fallback_is_allowed(key: str, policy=None) -> bool:
             fallback_calls.append(key)
             return True
 
-        limiter.fallback.is_allowed = mock_fallback_is_allowed  # type: ignore[method-assign]
+        monkeypatch.setattr(limiter.fallback, "is_allowed", mock_fallback_is_allowed)
 
         result = limiter.is_allowed("circuit-test-key")
         assert result is True
-        assert "circuit-test-key" in fallback_calls, (
-            "Fallback should have been called when circuit is open"
-        )
+        assert "circuit-test-key" in fallback_calls, "Fallback should have been called when circuit is open"
 
 
 # ---------------------------------------------------------------------------
 # RedisRateLimiter — key namespacing
 # ---------------------------------------------------------------------------
+
 
 class TestRedisRateLimiterKeyNamespace:
     def test_key_namespace_returns_prefixed_key(self):
@@ -237,12 +235,13 @@ class TestRedisRateLimiterKeyNamespace:
     def test_key_namespace_empty_string(self):
         """_key_namespace works with an empty string key."""
         limiter = RedisRateLimiter()
-        assert limiter._key_namespace("") == "auth_rate_limiter:"
+        assert limiter._key_namespace("") == "auth_rate_limiter:anonymous"
 
 
 # ---------------------------------------------------------------------------
 # Module-level rate_limiter instance
 # ---------------------------------------------------------------------------
+
 
 class TestModuleLevelRateLimiterInstance:
     def test_rate_limiter_is_redis_when_use_redis_and_not_eager(self, monkeypatch):
@@ -252,8 +251,7 @@ class TestModuleLevelRateLimiterInstance:
 
         import app.core.rate_limiter as rl_mod
 
-        reload(rl_mod)
-        assert isinstance(rl_mod.rate_limiter, RedisRateLimiter)
+        assert isinstance(rl_mod.create_rate_limiter(), rl_mod.RedisRateLimiter)
 
     def test_rate_limiter_is_simple_when_use_redis_false(self, monkeypatch):
         """Module-level rate_limiter is SimpleRateLimiter when USE_REDIS_RATE_LIMITER=False."""
@@ -261,8 +259,7 @@ class TestModuleLevelRateLimiterInstance:
 
         import app.core.rate_limiter as rl_mod
 
-        reload(rl_mod)
-        assert isinstance(rl_mod.rate_limiter, SimpleRateLimiter)
+        assert isinstance(rl_mod.create_rate_limiter(), rl_mod.SimpleRateLimiter)
 
     def test_rate_limiter_is_simple_when_celery_eager(self, monkeypatch):
         """Module-level rate_limiter is SimpleRateLimiter when CELERY_TASK_ALWAYS_EAGER=True."""
@@ -271,5 +268,4 @@ class TestModuleLevelRateLimiterInstance:
 
         import app.core.rate_limiter as rl_mod
 
-        reload(rl_mod)
-        assert isinstance(rl_mod.rate_limiter, SimpleRateLimiter)
+        assert isinstance(rl_mod.create_rate_limiter(), rl_mod.SimpleRateLimiter)

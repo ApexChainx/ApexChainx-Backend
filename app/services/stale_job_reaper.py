@@ -2,17 +2,16 @@
 which job_cleanup deliberately skips today.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 DEFAULT_HEARTBEAT_TTL = timedelta(minutes=30)
 
 
 def is_stale_started_job(
-    started_at: datetime, now: Optional[datetime] = None, heartbeat_ttl: timedelta = DEFAULT_HEARTBEAT_TTL
+    started_at: datetime, now: datetime | None = None, heartbeat_ttl: timedelta = DEFAULT_HEARTBEAT_TTL
 ) -> bool:
     """A STARTED job older than the heartbeat TTL is considered orphaned."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     return now - started_at > heartbeat_ttl
 
 

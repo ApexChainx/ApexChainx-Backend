@@ -136,7 +136,7 @@ def update_sla_config(
     """
     try:
         if expected_token is not None:
-            policy, new_token, _history = publish_config_for_severity(
+            policy, _new_token, _history = publish_config_for_severity(
                 severity,
                 payload,
                 expected_token=expected_token,

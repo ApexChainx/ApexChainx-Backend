@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
 
 from app.db.base import Base
 
@@ -14,3 +15,9 @@ class TokenFamilyORM(Base):
     compromised = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC), onupdate=datetime.now(UTC))
+
+    sessions = relationship(
+        "SessionORM",
+        back_populates="family",
+        cascade="all, delete-orphan",
+    )

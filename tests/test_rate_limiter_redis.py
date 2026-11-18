@@ -1,7 +1,5 @@
-import asyncio
-
 import pytest
-from fakeredis.aioredis import FakeRedis
+from fakeredis import FakeRedis
 from redis.exceptions import RedisError
 
 from app.core.config import settings
@@ -21,8 +19,8 @@ def fake_redis():
     try:
         yield client
     finally:
-        asyncio.run(client.flushall())
-        asyncio.run(client.close())
+        client.flushall()
+        client.close()
 
 
 def test_redis_rate_limiter_allows_up_to_limit_and_rejects_11th(fake_redis):
@@ -53,7 +51,7 @@ def test_redis_rate_limiter_falls_back_gracefully_when_redis_unreachable(monkeyp
     limiter = RedisRateLimiter()
     limiter.client = fake_redis
 
-    async def fail_eval(*args, **kwargs):
+    def fail_eval(*args, **kwargs):
         raise RedisError("network failure")
 
     monkeypatch.setattr(limiter.client, "eval", fail_eval)

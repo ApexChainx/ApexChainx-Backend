@@ -8,6 +8,7 @@ Revision ID: 0013_webhook_secret_metadata
 Revises: 0012_sla_latest_backfill
 Create Date: 2026-04-28
 """
+
 import sqlalchemy as sa
 
 from alembic import op

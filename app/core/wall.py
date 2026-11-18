@@ -352,7 +352,7 @@ def validate_critical_settings(config: Settings) -> None:
             Fernet(encryption_key.encode("utf-8"))
         except Exception:
             errors.append(
-                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key " "(32 url-safe base64-encoded bytes)."
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key (32 url-safe base64-encoded bytes)."
             )
 
     try:

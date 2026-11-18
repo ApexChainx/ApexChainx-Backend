@@ -347,6 +347,23 @@ def _attempt_delivery(delivery: WebhookDelivery, webhook: Webhook) -> bool:
 
 @traced("webhook.dispatch")
 def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
+    delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
+    if not delivery:
+        logger.error("WebhookDelivery %s not found.", delivery_id)
+        return
+
+    if delivery.status in (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.DEAD_LETTER):
+        logger.info("WebhookDelivery %s already in terminal state %s, skipping.", delivery_id, delivery.status)
+        return
+
+    webhook = delivery.webhook
+    if webhook is None:
+        logger.error("Webhook for delivery %s not found.", delivery_id)
+        return
+    if getattr(webhook, "__dict__", {}).get("deleted_at") is not None or getattr(webhook, "is_active", True) is False:
+        logger.info("Webhook for delivery %s is deleted or inactive, skipping.", delivery_id)
+        return
+
     claimed = (
         db.query(WebhookDelivery)
         .filter(
@@ -371,10 +388,6 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
         logger.error("WebhookDelivery %s not found.", delivery_id)
         return
 
-    if delivery.status in (WebhookDeliveryStatus.SUCCESS, WebhookDeliveryStatus.DEAD_LETTER):
-        logger.info("WebhookDelivery %s already in terminal state %s, skipping.", delivery_id, delivery.status)
-        return
-
     webhook = delivery.webhook
     success = _attempt_delivery(delivery, webhook)
 
@@ -391,16 +404,17 @@ def dispatch_delivery(db: Session, delivery_id: UUID) -> None:
     elif delivery.status == WebhookDeliveryStatus.BREAKER_OPEN:
         pass
     else:
-        retry_index = delivery.attempt_count - 1
+        retry_index = int(delivery.attempt_count) - 1
         max_retries = webhook.max_retries or 3
         retry_delays = _get_retry_delays()
 
         if retry_index < max_retries and retry_index < len(retry_delays):
             base_delay = retry_delays[retry_index]
-            raw_delay = min(base_delay * (2**retry_index), settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
+            max_delay = int(settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
+            raw_delay = min(base_delay * (2**retry_index), max_delay)
             delay = _apply_jitter(raw_delay)
             # Enforce the hard cap after jitter to prevent jitter from exceeding the ceiling
-            delay = min(delay, settings.WEBHOOK_RETRY_MAX_DELAY_SECONDS)
+            delay = min(delay, max_delay)
             delivery.next_retry_at = datetime.now(UTC) + timedelta(seconds=delay)
             delivery.status = WebhookDeliveryStatus.RETRYING
             logger.warning(

@@ -69,9 +69,8 @@ def test_advisory_lock_raises_after_timeout():
             {"lock_id": _lock_id_from_key(lock_key)},
         )
         started = time.monotonic()
-        with pytest.raises(ConcurrencyLockError):
-            with advisory_lock(waiter, lock_key, timeout_seconds=0.2):
-                pass
+        with pytest.raises(ConcurrencyLockError), advisory_lock(waiter, lock_key, timeout_seconds=0.2):
+            pass
         assert time.monotonic() - started >= 0.18
     finally:
         waiter.rollback()

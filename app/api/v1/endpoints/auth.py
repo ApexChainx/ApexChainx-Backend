@@ -29,7 +29,8 @@ from app.services.auth_store import AuthStore
 from app.services.credential_stuffing_detector import credential_stuffing_detector
 from app.services.metrics import increment_counter, timer
 from app.services.token_revocation import revoke
-from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
+from app.utils.wallet_address import WalletAddressError
+from app.utils.wallet_address import normalize as normalize_wallet
 
 router = APIRouter()
 
@@ -143,33 +144,6 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix) :]
 
 
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
-
-
-def _validate_email_param(email: str) -> str:
-    """Validate an email path parameter before it reaches the data layer (#668)."""
-    cleaned = email.strip().lower()
-    if not _EMAIL_PATTERN.match(cleaned):
-        raise CodedHTTPException(status_code=422, detail="Invalid email address")
-    return cleaned
-
-
-def _validate_wallet_or_422(value: str) -> None:
-    """Validate a Stellar wallet address, raising a coded 422 on failure (#680)."""
-    try:
-        normalize_wallet(value)
-    except WalletAddressError as exc:
-        raise CodedHTTPException(status_code=422, detail=exc.reason, error_code="invalid_stellar_public_key") from exc
-
-
-def _validate_user_id(user_id: str) -> str:
-    """Reject user-id values carrying characters outside a safe allowlist (#684)."""
-    if not _USER_ID_PATTERN.match(user_id):
-        raise CodedHTTPException(status_code=422, detail="Invalid user id")
-    return user_id
-
-
 def _enforce_login_rate_limits(payload: LoginRequest, client_ip: str, db: Session) -> None:
     """Apply credential-stuffing detection and account-scoped lockouts (#664).
 
@@ -251,14 +225,10 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
     try:
         with timer("auth_register_duration", {"endpoint": "register"}):
-            AuthStore.register(payload, db=db)
+            user = AuthStore.register(payload, db=db)
     except ValueError as exc:
         increment_counter("auth_register_total", tags={"status": "error"})
         raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise CodedHTTPException(status_code=500, detail="Internal server error") from exc
-    return user
-
     return user
 
 
@@ -703,7 +673,9 @@ def impersonate_user(
 def _generate_impersonation_token(target_orm, admin_user: AuthUser) -> str:
     """Generate a short-lived impersonation JWT using PyJWT."""
     import time
+
     import jwt
+
     from app.core.config import settings as app_settings
 
     now = int(time.time())

@@ -28,8 +28,14 @@ class Job(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     celery_task_id = Column(String(255), unique=True, nullable=False, index=True)
-    job_type = Column(SAEnum(JobType), nullable=False)
-    status = Column(SAEnum(JobStatus), default=JobStatus.PENDING, nullable=False)
+    job_type = Column(
+        SAEnum(JobType, values_callable=lambda members: [member.value for member in members]), nullable=False
+    )
+    status = Column(
+        SAEnum(JobStatus, values_callable=lambda members: [member.value for member in members]),
+        default=JobStatus.PENDING,
+        nullable=False,
+    )
     payload = Column(JSONB, nullable=True)  # JSON input params
     result = Column(JSONB, nullable=True)  # JSON result
     error = Column(Text, nullable=True)

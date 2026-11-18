@@ -17,7 +17,7 @@ from app.db.base import Base
 import app.models.orm.audit_log  # noqa: F401
 import app.models.orm.outage  # noqa: F401
 import app.models.orm.outage_event  # noqa: F401
-import app.models.orm.sla     # noqa: F401
+import app.models.orm.sla  # noqa: F401
 import app.models.orm.payment  # noqa: F401
 import app.models.job  # noqa: F401
 import app.models.webhook  # noqa: F401
@@ -32,7 +32,7 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

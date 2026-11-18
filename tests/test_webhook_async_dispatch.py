@@ -13,6 +13,7 @@ def _make_delivery(status=WebhookDeliveryStatus.PENDING, attempt_count=0):
     delivery.webhook.url = "https://example.com/hook"
     delivery.webhook.max_retries = 3
     delivery.webhook.secret = None
+    delivery.webhook.deleted_at = None
     delivery.event = MagicMock()
     delivery.event.value = "sla.violation"
     delivery.signature_version = 1

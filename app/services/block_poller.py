@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Protocol, Self
 
 import httpx
+from sqlalchemy import and_, or_
 
 from app.utils.logging import StructuredLogger, get_structured_logger
 
@@ -71,6 +73,16 @@ class Block:
             raise ValueError("block cursor must not be empty")
         if self.height < 0:
             raise ValueError("block height must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentPollReport:
+    """Summary of one pending-payment confirmation cycle."""
+
+    checked: int
+    confirmed: int
+    skipped: int
+    errors: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +200,7 @@ class HorizonBlockSource:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> HorizonBlockSource:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc_info: object) -> None:
@@ -211,7 +223,33 @@ class BlockPoller:
         retry_max_delay_seconds: float = 8.0,
         sleep: Callable[[float], None] = time.sleep,
         logger: StructuredLogger | None = None,
+        horizon_client: Any | None = None,
     ) -> None:
+        self._payment_mode = horizon_client is not None or (
+            hasattr(source, "query") and not hasattr(source, "fetch_blocks")
+        )
+        self._db = source if self._payment_mode else None
+        self._horizon_client = horizon_client
+        if self._payment_mode:
+            self._source = None
+            self._handler = None
+            self._poll_interval_seconds = poll_interval_seconds
+            self._batch_size = batch_size
+            self._cursor = start_cursor
+            self._max_attempts = max_attempts
+            self._retry_base_delay_seconds = retry_base_delay_seconds
+            self._retry_max_delay_seconds = retry_max_delay_seconds
+            self._sleep = sleep
+            self._logger = logger or get_structured_logger("block_poller")
+            self._stop_event = threading.Event()
+            self._active_stop_event: threading.Event | None = None
+            self._running = False
+            self._last_poll_at: datetime | None = None
+            self._last_success_at: datetime | None = None
+            self._last_error: str | None = None
+            self._last_error_type: str | None = None
+            self._consecutive_failures = 0
+            return
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be > 0")
         if not 1 <= batch_size <= HORIZON_MAX_LEDGERS_PER_PAGE:
@@ -235,12 +273,12 @@ class BlockPoller:
         self._logger = logger or get_structured_logger("block_poller")
 
         self._stop_event = threading.Event()
-        self._active_stop_event: threading.Event | None = None
+        self._active_stop_event = None
         self._running = False
-        self._last_poll_at: datetime | None = None
-        self._last_success_at: datetime | None = None
-        self._last_error: str | None = None
-        self._last_error_type: str | None = None
+        self._last_poll_at = None
+        self._last_success_at = None
+        self._last_error = None
+        self._last_error_type = None
         self._consecutive_failures = 0
 
     @property
@@ -306,7 +344,91 @@ class BlockPoller:
             self._active_stop_event = None
             self._logger.info("block_poller.stopped", event="stopped", cursor=self._cursor)
 
-    def poll_once(self) -> PollCycleResult:
+    def pending_page(self, *, cursor: str | None = None, limit: int | None = None):
+        """Return one stable page of pending payments and its next cursor."""
+        from app.models.orm.payment import PaymentTransactionORM
+        from app.services.block_poller_pagination import (
+            PollerPage,
+            clamp_page_size,
+            decode_payment_cursor,
+            encode_payment_cursor,
+        )
+
+        page_size = clamp_page_size(limit if limit is not None else 20)
+        query = self._db.query(PaymentTransactionORM).filter(PaymentTransactionORM.status == "pending")
+        decoded = decode_payment_cursor(cursor)
+        if decoded is not None:
+            payment_id, created_at = decoded
+            query = query.filter(
+                or_(
+                    PaymentTransactionORM.created_at > created_at,
+                    and_(
+                        PaymentTransactionORM.created_at == created_at,
+                        PaymentTransactionORM.id > payment_id,
+                    ),
+                )
+            )
+        rows = list(
+            query.order_by(PaymentTransactionORM.created_at, PaymentTransactionORM.id).limit(page_size + 1).all()
+        )
+        has_more = len(rows) > page_size
+        payments = rows[:page_size]
+        next_cursor = encode_payment_cursor(payments[-1].id, payments[-1].created_at) if has_more and payments else None
+        return PollerPage(payments=payments, next_cursor=next_cursor, has_more=has_more)
+
+    def payment_by_hash(self, transaction_hash: str):
+        """Look up a payment after validating the externally supplied hash."""
+        from app.models.orm.payment import PaymentTransactionORM
+        from app.services.block_poller_security import validate_transaction_hash
+
+        validated = validate_transaction_hash(transaction_hash)
+        return self._db.query(PaymentTransactionORM).filter(PaymentTransactionORM.transaction_hash == validated).first()
+
+    def traceparent(self) -> str | None:
+        """Return the W3C traceparent for the active span, if any."""
+        from app.core import tracing
+
+        return tracing.get_current_traceparent()
+
+    def _poll_pending_payments(self, *, limit: int | None, cursor: str | None) -> PaymentPollReport:
+        from app.core import tracing
+        from app.services.block_poller_pagination import clamp_page_size
+
+        page_size = clamp_page_size(limit if limit is not None else 20)
+        with tracing.tracer.start_as_current_span("block_poller.poll") as span:
+            span.set_attribute("block_poller.limit", page_size)
+            with tracing.tracer.start_as_current_span("block_poller.pending_payments"):
+                page = self.pending_page(cursor=cursor, limit=page_size)
+
+            confirmed = 0
+            skipped = 0
+            errors: list[str] = []
+            for payment in page.payments:
+                try:
+                    response = self._horizon_client.transaction(payment.transaction_hash)
+                    successful = response.get("successful") if isinstance(response, dict) else False
+                except Exception as exc:
+                    skipped += 1
+                    errors.append(str(exc))
+                    continue
+                if successful:
+                    payment.status = "confirmed"
+                    payment.confirmed_at = datetime.now(UTC)
+                    if self._db is not None and hasattr(self._db, "refresh"):
+                        self._db.refresh(payment)
+                    confirmed += 1
+                else:
+                    skipped += 1
+            if self._db is not None and hasattr(self._db, "commit"):
+                self._db.commit()
+            return PaymentPollReport(
+                checked=len(page.payments),
+                confirmed=confirmed,
+                skipped=skipped,
+                errors=errors,
+            )
+
+    def poll_once(self, *, limit: int | None = None, cursor: str | None = None):
         """Fetch and process one page of blocks.
 
         Returns a summary on success. Raises :class:`BlockFetchError` after the
@@ -314,6 +436,11 @@ class BlockPoller:
         handler rejects a block; in both cases the cursor only reflects blocks
         that were fully processed.
         """
+        if self._payment_mode:
+            return self._poll_pending_payments(limit=limit, cursor=cursor)
+        if limit is not None or cursor is not None:
+            raise TypeError("limit/cursor are only valid for the payment poller")
+
         started_at = datetime.now(UTC)
 
         try:
@@ -329,7 +456,7 @@ class BlockPoller:
             if self._handler is not None:
                 try:
                     self._handler(block)
-                except Exception as exc:  # noqa: BLE001 - handler failures are surfaced, not swallowed
+                except Exception as exc:
                     error = BlockHandlerError(
                         f"block handler failed at height {block.height}: {exc}",
                         block=block,
@@ -393,7 +520,7 @@ class BlockPoller:
                 return self._validate_blocks(raw_blocks), attempt
             except BlockFetchError as exc:
                 last_error = exc
-            except Exception as exc:  # noqa: BLE001 - an injected source may raise anything
+            except Exception as exc:
                 last_error = BlockFetchError(f"unexpected block source error: {exc}", retryable=True)
 
             assert last_error is not None

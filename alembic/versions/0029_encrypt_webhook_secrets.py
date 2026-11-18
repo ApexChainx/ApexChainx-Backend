@@ -10,6 +10,7 @@ Revision ID: 0029_encrypt_webhook_secrets
 Revises: 0028_outage_search_trgm
 Create Date: 2026-08-27
 """
+
 import sqlalchemy as sa
 
 from alembic import op
@@ -31,9 +32,7 @@ def upgrade() -> None:
     )
 
     connection = op.get_bind()
-    rows = connection.execute(
-        sa.text("SELECT id, secret FROM webhooks WHERE secret IS NOT NULL")
-    ).fetchall()
+    rows = connection.execute(sa.text("SELECT id, secret FROM webhooks WHERE secret IS NOT NULL")).fetchall()
     for webhook_id, secret in rows:
         if secret and not is_encrypted(secret):
             encrypted = encrypt_secret(secret)
@@ -45,9 +44,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     connection = op.get_bind()
-    rows = connection.execute(
-        sa.text("SELECT id, secret FROM webhooks WHERE secret IS NOT NULL")
-    ).fetchall()
+    rows = connection.execute(sa.text("SELECT id, secret FROM webhooks WHERE secret IS NOT NULL")).fetchall()
     for webhook_id, secret in rows:
         if secret and is_encrypted(secret):
             plaintext = decrypt_secret(secret)

@@ -4,6 +4,7 @@ Revision ID: 0010_wallet_persistence
 Revises: 0009
 Create Date: 2026-04-28
 """
+
 import sqlalchemy as sa
 
 from alembic import op

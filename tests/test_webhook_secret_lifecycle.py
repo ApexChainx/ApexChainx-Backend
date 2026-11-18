@@ -32,7 +32,6 @@ from app.core.config import settings
 from app.core.security import hash_token
 from app.utils.secret_history import parse_expiry
 
-
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
 
@@ -128,6 +127,7 @@ def _webhook(secret="current-secret", secret_grace_hours=24, version=1, history=
         url="https://example.com/hook",
         secret=secret,
         events='["sla.violation"]',
+        max_retries=3,
         secret_version=version,
         last_secret_rotation_at=None,
         previous_secrets=history or [],
@@ -176,7 +176,7 @@ class TestPatchSecretIsARotation:
 
         from app.api.v1.endpoints.webhooks import WebhookUpdate
 
-        webhook, audit, _response = _patch_call(webhook, WebhookUpdate(secret="replacement-secret"))
+        webhook, _audit, _response = _patch_call(webhook, WebhookUpdate(secret="replacement-secret"))
 
         assert webhook.secret == "replacement-secret"
         assert webhook.secret_version == 2
@@ -189,9 +189,9 @@ class TestPatchSecretIsARotation:
 
         from app.api.v1.endpoints.webhooks import WebhookUpdate
 
-        webhook, audit, _response = _patch_call(webhook, WebhookUpdate(secret="next-secret"))
+        webhook, _audit, _response = _patch_call(webhook, WebhookUpdate(secret="next-secret"))
 
-        event, payload = audit[-1]
+        event, payload = _audit[-1]
         assert event == "webhook_secret_rotated"
         assert payload["rotation_source"] == "patch"
         assert payload["rotated_by"] == "admin@example.com"
@@ -201,12 +201,12 @@ class TestPatchSecretIsARotation:
 
         from app.api.v1.endpoints.webhooks import WebhookUpdate
 
-        webhook, audit, _response = _patch_call(webhook, WebhookUpdate(name="renamed-hook"))
+        webhook, _audit, _response = _patch_call(webhook, WebhookUpdate(name="renamed-hook"))
 
         assert webhook.secret_version == 3
         assert webhook.previous_secrets == []
         assert webhook.last_secret_rotation_at is None
-        assert audit == []
+        assert _audit == []
 
     def test_patch_honours_the_webhook_grace_window(self):
         webhook = _webhook(secret_grace_hours=48)

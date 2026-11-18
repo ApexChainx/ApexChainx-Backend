@@ -7,7 +7,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 
 # Identifies the process/worker exporting a metric series so scrapes from
 # multiple gunicorn workers are attributable instead of silently under-reporting.
@@ -72,9 +72,9 @@ class MetricsRegistry:
             # curve from these per-bucket counts, so +Inf equals the sample count.
             bucket_list = buckets or _DEFAULT_LATENCY_BUCKETS
             for bucket_bound in bucket_list:
+                self._histogram_buckets[key][bucket_bound] += 0
                 if value <= bucket_bound:
                     self._histogram_buckets[key][bucket_bound] += 1
-                    break
 
     def record_timer(self, name: str, duration_ms: float, tags: dict[str, str] | None = None) -> None:
         """Record a timing measurement."""
@@ -177,7 +177,7 @@ class TimerContext:
         self.tags = tags
         self.start_time = None
 
-    def __enter__(self) -> TimerContext:
+    def __enter__(self) -> Self:
         self.start_time = time.time()
         return self
 

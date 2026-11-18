@@ -5,17 +5,45 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from redis import Redis
 from sqlalchemy.orm import Session
 
-from redis import Redis
-
+from app.core.config import settings
 from app.core.exceptions import ApexTransientError
 from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.sla import SLACalculationResult
 from app.services.audit_log import audit_log
-from app.services.metrics import increment_counter
+from app.services.metrics import _SLA_LATENCY_BUCKETS, increment_counter, record_histogram
 from app.services.sla_cache import SLACache
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+_sla_cache: SLACache | None = None
+
+
+def _get_sla_cache() -> SLACache | None:
+    """Return a process-wide SLA cache backed by Redis when configured."""
+    global _sla_cache
+    if _sla_cache is not None:
+        return _sla_cache
+    broker_url = getattr(settings, "CELERY_BROKER_URL", "").strip()
+    if not broker_url:
+        return None
+    try:
+        client = Redis.from_url(broker_url, decode_responses=True)
+        _sla_cache = SLACache(client)
+    except Exception as exc:
+        logger.warning("SLA cache unavailable: %s", exc)
+        _sla_cache = None
+    return _sla_cache
 
 
 class SLAOrchestrator:
@@ -203,11 +231,9 @@ def compute_device_sla(
             record_histogram(
                 "sla_computation_latency_seconds",
                 latency,
-                tags={"period": period, "status": "no_outages"},
+                tags={"period": period, "device_id": device_id, "status": "no_outages"},
                 buckets=_SLA_LATENCY_BUCKETS,
             )
-            record_sla_settlement_audit_events(device_id, period, result, status="initiated")
-            record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
             if cache is not None:
                 cache.set(device_id, period, result.model_dump())
             return result
@@ -272,8 +298,6 @@ def compute_device_sla(
             tags={"period": period, "status": "violated" if is_violated else "ok"},
             buckets=_SLA_LATENCY_BUCKETS,
         )
-        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
-        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         if cache is not None:
             cache.set(device_id, period, result.model_dump())
         return result

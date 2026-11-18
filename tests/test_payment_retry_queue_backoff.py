@@ -5,15 +5,28 @@ and that the admin retry-now endpoint bypasses backoff.
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1.endpoints.payments import _compute_next_retry_at
+from app.core.security import require_admin, require_engineer
 from app.main import app
 from app.models.payment import PaymentTransaction
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def auth_overrides():
+    user = SimpleNamespace(email="admin@example.com", id="user_admin", role="admin")
+    app.dependency_overrides[require_engineer] = lambda: user
+    app.dependency_overrides[require_admin] = lambda: user
+    yield
+    app.dependency_overrides.pop(require_engineer, None)
+    app.dependency_overrides.pop(require_admin, None)
 
 
 class TestComputeNextRetryAt:

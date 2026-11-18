@@ -1,26 +1,23 @@
-"""The event listener: who hears about a domain event, and how it is reported.
+"""Event listener utilities and in-process event bus.
 
-``EventListener`` is the single place that answers two questions for every
-domain event the backend emits:
-
-1. *Who* is subscribed to it? -- the registered, active webhooks.
-2. *Is this subscriber allowed to receive it right now?* -- the fan-out policy
-   and the per-subscriber event budget.
-
-It resolves the subscribers with one statement, applies the fan-out policy to
-them, and reports what it did through Prometheus metrics, structured logs and
-a subscriber-id cache.
-
-The listener is deliberately read-only with respect to the database: it
-resolves and filters the subscribers, and the delivery pipeline stays
-responsible for creating and dispatching the deliveries themselves.
+This module contains two related APIs used by the codebase/tests:
+- DB-backed webhook subscriber resolution (`EventListener(db, ...)`, `load_event_subscribers`)
+  for the webhook fan-out path.
+- In-process event history/subscription bus (`EventListener(...)` with no DB,
+  `event_listener` singleton, `RetryPolicy`, `process_event`, `health`) used by
+  events endpoints and retry/health tests.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import random
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -39,6 +36,7 @@ from app.services.metrics import increment_counter
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger(__name__)
+_std_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,13 +48,118 @@ class SubscriberDecision:
     reason: str | None = None
 
 
-class EventListener:
-    """Resolves the subscribers of a domain event and applies the fan-out policy."""
+@dataclass
+class RetryPolicy:
+    """Retry policy for in-process subscriber callbacks."""
 
+    max_attempts: int = 3
+    base_delay: float = 0.1
+    max_delay: float = 5.0
+    jitter: bool = True
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
+        if self.base_delay < 0:
+            raise ValueError("base_delay must be >= 0")
+        if self.max_delay < 0:
+            raise ValueError("max_delay must be >= 0")
+
+    def delay_for_attempt(self, attempt: int) -> float:
+        """Return delay before the next retry after `attempt` (1-based failure)."""
+        if attempt < 1:
+            raise ValueError("attempt must be >= 1")
+        delay = min(self.base_delay * (2 ** (attempt - 1)), self.max_delay)
+        if self.jitter and delay > 0:
+            delay = random.uniform(0.0, delay)
+        return min(delay, self.max_delay)
+
+
+class _InProcessEventBus:
+    def __init__(
+        self,
+        *,
+        retry_policy: RetryPolicy | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self._events: list[dict[str, Any]] = []
+        self._subscribers: dict[str, list[Callable[[dict[str, Any]], Any]]] = defaultdict(list)
+        self._retry = retry_policy or RetryPolicy()
+        self._sleep = sleep or time.sleep
+
+    def subscribe(self, topic: str, callback: Callable[[dict[str, Any]], Any]) -> None:
+        self._subscribers[topic].append(callback)
+
+    def process_event(self, event: dict[str, Any]) -> dict[str, int]:
+        self._events.append(event)
+        topic = event.get("topic")
+        callbacks = list(self._subscribers.get(topic, [])) + list(self._subscribers.get("*", []))
+        delivered = 0
+        failed = 0
+        for callback in callbacks:
+            if self._deliver_with_retry(topic, event, callback):
+                delivered += 1
+            else:
+                failed += 1
+        _std_logger.debug(
+            "Event processed",
+            extra={
+                "topic": topic,
+                "subscribers_delivered": delivered,
+                "subscribers_failed": failed,
+            },
+        )
+        return {"subscribers_delivered": delivered, "subscribers_failed": failed}
+
+    def _deliver_with_retry(self, topic: Any, event: dict[str, Any], callback: Callable[[dict[str, Any]], Any]) -> bool:
+        for attempt in range(1, self._retry.max_attempts + 1):
+            try:
+                callback(event)
+                return True
+            except Exception as exc:
+                if attempt >= self._retry.max_attempts:
+                    _std_logger.warning(
+                        "Subscriber failed after all retry attempts",
+                        extra={
+                            "topic": topic,
+                            "error_type": type(exc).__name__,
+                            "attempts": attempt,
+                            "callback": getattr(callback, "__name__", repr(callback)),
+                        },
+                    )
+                    return False
+                delay = self._retry.delay_for_attempt(attempt)
+                _std_logger.warning(
+                    "Subscriber raised an exception, retrying with backoff",
+                    extra={
+                        "topic": topic,
+                        "attempt": attempt,
+                        "max_attempts": self._retry.max_attempts,
+                        "retry_delay_seconds": delay,
+                        "callback": getattr(callback, "__name__", repr(callback)),
+                    },
+                )
+                self._sleep(delay)
+        return False
+
+    def list_events(self) -> dict[str, Any]:
+        return {"events": list(self._events), "total": len(self._events)}
+
+    def health(self) -> dict[str, Any]:
+        topics = {event.get("topic") for event in self._events}
+        return {
+            "status": "ok",
+            "total_events": len(self._events),
+            "topic_count": len(topics),
+        }
+
+
+class EventListener:
+    """Resolves webhook subscribers and/or serves as an in-process event bus."""
 
     def __init__(
         self,
-        db: Session,
+        db: Session | None = None,
         *,
         repository: WebhookRepository | None = None,
         metrics: EventListenerMetrics | None = None,
@@ -64,55 +167,59 @@ class EventListener:
         logger: EventListenerLogger | None = None,
         cache: EventListenerCache | None = None,
         rate_limiter: EventRateLimiter | None = None,
+        loader: Callable[[Session, WebhookEvent], list[Webhook]] | None = None,
+        retry_policy: RetryPolicy | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
+        self._bus = _InProcessEventBus(retry_policy=retry_policy, sleep=sleep)
+        self._retry = self._bus._retry
+        self._events = self._bus._events
+
         self._db = db
-        self._repository = repository if repository is not None else WebhookRepository(db)
+        self._repository = (
+            repository
+            if repository is not None and db is not None
+            else (WebhookRepository(db) if db is not None else None)
+        )
         self._metrics = metrics if metrics is not None else EventListenerMetrics()
         self._policy = policy
         self._logger = logger if logger is not None else EventListenerLogger(__name__)
         self._cache = cache
         self._rate_limiter = rate_limiter
+        self._loader = loader
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
+    # In-process bus API --------------------------------------------------
+
+    def subscribe(self, topic: str, callback: Callable[[dict[str, Any]], Any]) -> None:
+        self._bus.subscribe(topic, callback)
+
+    def process_event(self, event: dict[str, Any]) -> dict[str, int]:
+        return self._bus.process_event(event)
+
+    def list_events(self) -> dict[str, Any]:
+        return self._bus.list_events()
+
+    def health(self) -> dict[str, Any]:
+        return self._bus.health()
+
+    # DB subscriber API ---------------------------------------------------
 
     @staticmethod
     def _event_name(event: WebhookEvent) -> str:
         return event.value
 
     def _coerce_event(self, event: WebhookEvent | str) -> WebhookEvent:
-        """Normalise the event into a :class:`WebhookEvent`.
-
-        Raises:
-            InvalidEventError: when the event is not one the listener knows.
-        """
         if isinstance(event, WebhookEvent):
             return event
         try:
             return WebhookEvent(event)
         except ValueError as exc:
-            raise InvalidEventError(f"unsupported event: {event!r}") from exc
+            raise InvalidEventError(f"unsupported event: {event!r}", event=str(event)) from exc
 
     def _decide(self, event: WebhookEvent, webhook: Webhook) -> SubscriberDecision:
         if self._policy is None:
             return SubscriberDecision(webhook=webhook, allowed=True)
         return self._policy(event, webhook)
-
-    def _cached_subscriber_ids(self, event: WebhookEvent) -> list[str] | None:
-        if self._cache is None:
-            return None
-        try:
-            return self._cache.get_subscriber_ids(self._event_name(event))
-        except Exception as exc:  # pragma: no cover - defensive: a cache must never break fan-out
-            logger.warning(
-                "event_listener_cache_unusable",
-                event_name="event_listener_cache_unusable",
-                event=self._event_name(event),
-                error=str(exc),
-            )
-            increment_counter("event_listener.cache.unavailable")
-            return None
 
     def _store_subscriber_ids(self, event: WebhookEvent, subscribers: list[Webhook]) -> None:
         if self._cache is None:
@@ -122,7 +229,7 @@ class EventListener:
                 self._event_name(event),
                 [str(subscriber.id) for subscriber in subscribers],
             )
-        except Exception as exc:  # pragma: no cover - defensive: a cache must never break fan-out
+        except Exception as exc:  # pragma: no cover
             logger.warning(
                 "event_listener_cache_unusable",
                 event_name="event_listener_cache_unusable",
@@ -131,32 +238,33 @@ class EventListener:
             )
             increment_counter("event_listener.cache.unavailable")
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def subscribers(self, event: WebhookEvent | str) -> list[Webhook]:
-        """Return the active subscribers of ``event``.
-
-        The subscriber list is resolved with one statement (the subscription
-        filter is part of it, issue #739) and its *ids* are cached; the rows
-        themselves are always re-read from the database, so a webhook that was
-        deactivated or deleted is never delivered to because of a stale cache
-        entry.
-
-        Raises:
-            InvalidEventError: when the event is not a known event.
-            SubscriberResolutionError: when the subscriber list cannot be read.
-        """
-        resolved = self._coerce_event(event)
+    def _resolve_subscribers(self, resolved: WebhookEvent) -> list[Webhook]:
         event_name = self._event_name(resolved)
-
         self._metrics.resolution_started(event_name)
         self._logger.resolve_started(event_name)
-
         started = time.perf_counter()
+        cached_ids = self._cache.get_subscriber_ids(resolved) if self._cache is not None else None
+        if cached_ids is not None:
+            subscribers = [Webhook(id=subscriber_id) for subscriber_id in cached_ids]
+            duration_ms = (time.perf_counter() - started) * 1000
+            self._metrics.resolution_completed(event_name, len(subscribers), duration_ms / 1000)
+            self._logger.resolve_completed(event_name, len(subscribers), duration_ms)
+            return subscribers
         try:
-            subscribers = self._repository.subscribers_for_event(resolved)
+            if self._loader is not None:
+                if self._db is None:
+                    raise SubscriberResolutionError(
+                        "No database session available for subscriber resolution", event=event_name
+                    )
+                subscribers = self._loader(self._db, resolved)
+            elif self._repository is not None:
+                subscribers = self._repository.subscribers_for_event(resolved)
+            elif self._db is not None:
+                subscribers = load_event_subscribers(self._db, resolved)
+            else:
+                subscribers = []
+        except (InvalidEventError, SubscriberResolutionError):
+            raise
         except SQLAlchemyError as exc:
             self._metrics.error(event_name, "resolve")
             self._logger.resolve_failed(event_name, str(exc))
@@ -171,17 +279,34 @@ class EventListener:
         self._store_subscriber_ids(resolved, subscribers)
         return subscribers
 
-    def dispatch_plan(self, event: WebhookEvent | str) -> list[SubscriberDecision]:
-        """Return the subscribers of ``event`` with the fan-out policy applied.
+    def subscribers(self, event: WebhookEvent | str) -> list[Webhook]:
+        resolved = self._coerce_event(event)
+        return self._resolve_subscribers(resolved)
 
-        A subscriber that is not allowed to receive the event -- because of
-        the fan-out policy or because it is over its event budget -- is
-        reported with ``allowed=False`` instead of being silently dropped, so
-        the caller can log, count and (if it wants to) retry it later.
-        """
+    def _check_rate_limit(self, event: WebhookEvent, subscriber_id: str) -> tuple[bool, str | None]:
+        if self._rate_limiter is None:
+            return True, None
+        if self._rate_limiter.allow(subscriber_id):
+            return True, None
+        retry_after = 0
+        if hasattr(self._rate_limiter, "retry_after_seconds"):
+            try:
+                retry_after = int(self._rate_limiter.retry_after_seconds(subscriber_id))
+            except Exception:
+                retry_after = 0
+        increment_counter("event_listener.rate_limited", tags={"event": event.value})
+        logger.warning(
+            "event_listener_rate_limited",
+            event_name="event_listener_rate_limited",
+            event=event.value,
+            subscriber_id=subscriber_id,
+            retry_after_seconds=retry_after,
+        )
+        return False, f"subscriber is over its event budget; retry in {retry_after}s"
+
+    def dispatch_plan(self, event: WebhookEvent | str) -> list[SubscriberDecision]:
         resolved = self._coerce_event(event)
         event_name = self._event_name(resolved)
-
         decisions: list[SubscriberDecision] = []
         for webhook in self.subscribers(resolved):
             subscriber_id = str(webhook.id)
@@ -197,34 +322,37 @@ class EventListener:
             decisions.append(decision)
         return decisions
 
-    def _check_rate_limit(self, event: WebhookEvent, subscriber_id: str) -> tuple[bool, str | None]:
-        if self._rate_limiter is None:
-            return True, None
-        if self._rate_limiter.allow(subscriber_id):
-            return True, None
-        retry_after = self._rate_limiter.retry_after_seconds(subscriber_id)
-        increment_counter("event_listener.rate_limited", tags={"event": event.value})
-        logger.warning(
-            "event_listener_rate_limited",
-            event_name="event_listener_rate_limited",
-            event=event.value,
-            subscriber_id=subscriber_id,
-            retry_after_seconds=retry_after,
-        )
-        return False, f"subscriber is over its event budget; retry in {retry_after}s"
-
     def dispatch(self, event: WebhookEvent | str) -> list[SubscriberDecision]:
-        """Resolve the subscribers of ``event`` and report the dispatch."""
         decisions = self.dispatch_plan(event)
         allowed = [decision for decision in decisions if decision.allowed]
         self._metrics.dispatch_completed(self._event_name(self._coerce_event(event)), len(allowed))
         return allowed
 
     def invalidate_cache(self, event: WebhookEvent | str | None = None) -> None:
-        """Drop the cached subscriber list for ``event`` (or for every event)."""
         if self._cache is None:
             return
         if event is None:
             self._cache.invalidate_all()
             return
         self._cache.invalidate(self._event_name(self._coerce_event(event)))
+
+
+def load_event_subscribers(db: Session, event: WebhookEvent | str) -> list[Webhook]:
+    """Resolve active webhook subscribers for an event from the database."""
+    resolved = event if isinstance(event, WebhookEvent) else WebhookEvent(event)
+    try:
+        rows = db.query(Webhook).filter(Webhook.is_active.is_(True)).filter(Webhook.deleted_at.is_(None)).all()
+    except SQLAlchemyError:
+        raise
+    subscribers: list[Webhook] = []
+    for webhook in rows:
+        try:
+            events = json.loads(webhook.events)
+        except Exception:
+            continue
+        if isinstance(events, list) and resolved.value in events:
+            subscribers.append(webhook)
+    return subscribers
+
+
+event_listener = EventListener()

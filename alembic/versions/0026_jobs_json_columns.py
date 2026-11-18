@@ -5,6 +5,7 @@ Revision ID: 0026_jobs_json_columns
 Revises: 0025_merge_branches
 Create Date: 2026-08-26
 """
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB

@@ -29,7 +29,11 @@ class SLADispute(Base):
     flagged_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Resolution metadata
-    status = Column(Enum(DisputeStatus), default=DisputeStatus.PENDING, nullable=False)
+    status = Column(
+        Enum(DisputeStatus, values_callable=lambda members: [member.value for member in members]),
+        default=DisputeStatus.PENDING,
+        nullable=False,
+    )
     resolved_by = Column(String(255), nullable=True)
     resolution_notes = Column(Text, nullable=True)
     resolved_at = Column(DateTime, nullable=True)

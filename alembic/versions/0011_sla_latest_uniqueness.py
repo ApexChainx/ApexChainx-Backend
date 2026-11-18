@@ -7,6 +7,7 @@ Revision ID: 0011_sla_latest_uniqueness
 Revises: 0010_wallet_persistence
 Create Date: 2026-04-28
 """
+
 from alembic import op
 
 revision = "0011_sla_latest_uniqueness"

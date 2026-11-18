@@ -60,4 +60,3 @@ def test_cache_layer_fails_open_after_redis_retries():
 
     cache = CacheLayer(BrokenRedis(), max_attempts=2, backoff_seconds=0)
     assert cache.get("key") is None
-

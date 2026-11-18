@@ -32,7 +32,7 @@ class UserCache:
     def get_sessions(self, email: str) -> list | None:
         try:
             raw = self._redis.get(self._key(email))
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning("User cache read failed for %s: %s", email, exc)
             return None
         if not raw:
@@ -48,11 +48,11 @@ class UserCache:
             # ``default=str`` keeps datetime timestamps JSON-serialisable; the
             # consumer (SessionInfo) parses the ISO strings back.
             self._redis.setex(self._key(email), self._ttl, json.dumps(sessions, default=str))
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning("User cache write failed for %s: %s", email, exc)
 
     def invalidate(self, email: str) -> None:
         try:
             self._redis.delete(self._key(email))
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning("User cache invalidate failed for %s: %s", email, exc)

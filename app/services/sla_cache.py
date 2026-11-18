@@ -1,24 +1,29 @@
 """Redis caching layer for SLA calculation results (#25).
 
 Cache failures are logged and treated as misses so a degraded Redis never
-breaks the SLA computation path.  Every Redis operation is wrapped in a
+breaks the SLA computation path. Every Redis operation is wrapped in a
 ``try/except (RedisError, OSError)`` guard, matching the contract of
 ``AuthCache``, ``UserCache``, and ``WalletCache``.
 """
 
+import json
+import logging
 from collections.abc import Callable, Iterable
 
 from redis import Redis
 from redis.exceptions import RedisError
 
-from app.services.cache_layer import CacheLayer
+from app.services import metrics
+
+logger = logging.getLogger(__name__)
+
 
 class SLACache:
     """Read-through cache for SLA computation results.
 
     A degraded or unreachable Redis is always treated as a cache miss —
     the caller falls through to recomputing the SLA result and the error is
-    logged at WARNING level.  No exception ever escapes this class.
+    logged at WARNING level. No exception ever escapes this class.
     """
 
     # Prometheus metric names
@@ -30,20 +35,38 @@ class SLACache:
     _ERROR_TOTAL = "cache_sla_error_total"
     _DURATION_MS = "cache_sla_operation_duration_seconds"
 
-    def __init__(self, redis, ttl: int = 60):
+    def __init__(self, redis: Redis, ttl: int = 60):
         self._redis = redis
         self._ttl = ttl
-        self._cache = CacheLayer(redis, namespace="sla", ttl_seconds=ttl)
 
-    def _key(self, device_id: str, period: str) -> str:
+    @staticmethod
+    def _key(device_id: str, period: str) -> str:
         return f"sla:{device_id}:{period}"
 
     def get(self, device_id: str, period: str) -> dict | None:
-        value = self._cache.get(f"{device_id}:{period}")
+        key = self._key(device_id, period)
+        try:
+            raw = self._redis.get(key)
+        except (RedisError, OSError) as exc:
+            logger.warning("SLA cache read failed for %s: %s", key, exc)
+            return None
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning("Corrupt JSON in SLA cache for %s, treating as miss", key)
+            return None
         return value if isinstance(value, dict) else None
 
-    def set(self, device_id: str, period: str, result: dict) -> None:
-        self._cache.set(f"{device_id}:{period}", result)
+    def set(self, device_id: str, period: str, result: dict) -> bool:
+        key = self._key(device_id, period)
+        try:
+            self._redis.setex(key, self._ttl, json.dumps(result, separators=(",", ":")))
+            return True
+        except (RedisError, OSError) as exc:
+            logger.warning("SLA cache write failed for %s: %s", key, exc)
+            return False
 
     def get_or_compute(
         self,
@@ -68,28 +91,28 @@ class SLACache:
         return result
 
     def invalidate(self, device_id: str, period: str) -> None:
-        self._cache.delete(f"{device_id}:{period}")
+        key = self._key(device_id, period)
+        try:
+            self._redis.delete(key)
+        except (RedisError, OSError) as exc:
+            logger.warning("SLA cache invalidate failed for %s: %s", key, exc)
 
     def get_stats(self) -> dict:
-        """Return cache operational statistics for monitoring (#1372).
+        """Return cache operational statistics for monitoring."""
+        return {
+            "namespace": "sla",
+            "ttl_seconds": self._ttl,
+        }
+
+    def warm_up(self, entries: Iterable[tuple[str, str, dict]]) -> int:
+        """Pre-populate the cache with precomputed SLA results.
 
         Uses the exact same keys and TTL as the read path, so a value written
-        here is indistinguishable from one written by ``set``/``get_or_compute``
-        during a request.
-
-        Individual write failures are logged and skipped so a single bad entry
-        cannot abort the whole warm-up pass.  Returns the number of entries
-        successfully written.
+        here is indistinguishable from one written by ``set``/``get_or_compute``.
+        Individual failures are skipped so one bad entry cannot abort the pass.
         """
         warmed = 0
         for device_id, period, result in entries:
-            try:
-                self.set(device_id, period, result)
+            if self.set(device_id, period, result):
                 warmed += 1
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "SLA cache warm-up skipped entry %s/%s due to unexpected error",
-                    device_id,
-                    period,
-                )
         return warmed

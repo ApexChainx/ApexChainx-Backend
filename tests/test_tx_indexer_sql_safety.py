@@ -24,6 +24,7 @@ from app.repositories.tx_indexer_repository import TxIndexerRepository
 from app.services.tx_indexer import IndexedTransaction
 from app.services.tx_indexer_query import (
     DEFAULT_LIMIT,
+    TxIndexerQueryError,
     escape_like,
     validate_account,
     validate_amount,
@@ -36,7 +37,6 @@ from app.services.tx_indexer_query import (
     validate_timestamp_range,
     validate_transaction_hash,
     validate_transaction_type,
-    TxIndexerQueryError,
 )
 
 INJECTION = "'; DROP TABLE payment_transactions; --"
@@ -310,6 +310,6 @@ class TestSearchEndpoint:
         )
 
         assert response.status_code == 200
-        body = response.json()
-        assert [item["transaction_hash"] for item in body] == [rows[0].transaction_hash]
-        assert body[0]["amount"] == 100
+        items = response.json()["items"]
+        assert [item["transaction_hash"] for item in items] == [rows[0].transaction_hash]
+        assert items[0]["amount"] == 100

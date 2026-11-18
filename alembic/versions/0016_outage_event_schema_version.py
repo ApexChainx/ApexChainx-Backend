@@ -7,6 +7,7 @@ Create Date: 2026-04-29
 Adds schema_version column to outage_events so consumers can safely
 deserialize event payloads across future schema changes.
 """
+
 import sqlalchemy as sa
 
 from alembic import op

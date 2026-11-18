@@ -19,9 +19,7 @@ def _mock_request() -> Mock:
 
 
 def test_extract_integrity_fields_parses_key():
-    msg = (
-        'duplicate key value violates unique constraint "uq_outage_id"\n' "DETAIL:  Key (id)=(OUT-001) already exists."
-    )
+    msg = 'duplicate key value violates unique constraint "uq_outage_id"\nDETAIL:  Key (id)=(OUT-001) already exists.'
     exc = IntegrityError("stmt", {}, _MockOrig(msg))
     assert _extract_integrity_fields(exc) == {"id": "OUT-001"}
 
@@ -32,9 +30,7 @@ def test_extract_integrity_fields_no_match():
 
 
 def test_integrity_handler_returns_409():
-    msg = (
-        'duplicate key value violates unique constraint "uq_outage_id"\n' "DETAIL:  Key (id)=(OUT-001) already exists."
-    )
+    msg = 'duplicate key value violates unique constraint "uq_outage_id"\nDETAIL:  Key (id)=(OUT-001) already exists.'
     exc = IntegrityError("stmt", {}, _MockOrig(msg))
 
     response = asyncio.run(integrity_error_handler(_mock_request(), exc))

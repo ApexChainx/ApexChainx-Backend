@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import httpx
 import pytest

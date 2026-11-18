@@ -6,11 +6,8 @@ Pins two properties:
    treated as misses.
 """
 
-import json
-
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import RedisError
 
 from app.services.wallet_cache import WalletCache
 
@@ -125,7 +122,7 @@ class TestWalletCacheCorruptData:
         redis.store["wallet:GABC"] = b"not-json"
         with caplog.at_level(logging.WARNING, logger="app.services.wallet_cache"):
             WalletCache(redis).get("GABC")
-        assert any("Corrupt JSON" in r.message for r in caplog.records)
+        assert any("Corrupt JSON" in r.getMessage() for r in caplog.records)
 
     def test_invalid_unicode_on_get_is_a_miss(self):
         redis = FakeRedis()
@@ -157,21 +154,21 @@ class TestWalletCacheRedisFailure:
 
         with caplog.at_level(logging.WARNING, logger="app.services.wallet_cache"):
             WalletCache(BrokenRedis()).get("GABC")
-        assert any("read failed" in r.message for r in caplog.records)
+        assert any("read failed" in r.getMessage() for r in caplog.records)
 
     def test_set_failure_logs_warning(self, caplog):
         import logging
 
         with caplog.at_level(logging.WARNING, logger="app.services.wallet_cache"):
             WalletCache(BrokenRedis()).set("GABC", WALLET)
-        assert any("write failed" in r.message for r in caplog.records)
+        assert any("write failed" in r.getMessage() for r in caplog.records)
 
     def test_invalidate_failure_logs_warning(self, caplog):
         import logging
 
         with caplog.at_level(logging.WARNING, logger="app.services.wallet_cache"):
             WalletCache(BrokenRedis()).invalidate("GABC")
-        assert any("invalidate failed" in r.message for r in caplog.records)
+        assert any("invalidate failed" in r.getMessage() for r in caplog.records)
 
     def test_consecutive_redis_failures_do_not_accumulate_exceptions(self):
         cache = WalletCache(BrokenRedis())

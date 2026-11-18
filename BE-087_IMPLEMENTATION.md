@@ -128,20 +128,17 @@ X-Webhook-Signature-Version: 1
 import hmac
 import hashlib
 
+
 def verify_webhook(request_body: str, headers: dict, secret: str) -> bool:
     # Read signature version (enables future algorithm evolution)
-    sig_version = int(headers.get('X-Webhook-Signature-Version', '1'))
-    signature_header = headers.get('X-Webhook-Signature', '')
-    
+    sig_version = int(headers.get("X-Webhook-Signature-Version", "1"))
+    signature_header = headers.get("X-Webhook-Signature", "")
+
     if sig_version == 1:
         # HMAC-SHA256 verification
-        provided_sig = signature_header.replace('sha256=', '')
-        expected_sig = hmac.new(
-            secret.encode(),
-            request_body.encode(),
-            hashlib.sha256
-        ).hexdigest()
-        
+        provided_sig = signature_header.replace("sha256=", "")
+        expected_sig = hmac.new(secret.encode(), request_body.encode(), hashlib.sha256).hexdigest()
+
         return hmac.compare_digest(expected_sig, provided_sig)
     elif sig_version == 2:
         # Future algorithm (e.g., EdDSA)
@@ -167,11 +164,16 @@ class DeliveredWebhook(db.Model):
     payload_hash = Column(String)
     processed_at = Column(DateTime)
 
+
 # Query to check if webhook was already processed
-existing = db.query(DeliveredWebhook).filter(
-    DeliveredWebhook.webhook_id == webhook_id,
-    DeliveredWebhook.timestamp == datetime.fromisoformat(payload['timestamp'])
-).first()
+existing = (
+    db.query(DeliveredWebhook)
+    .filter(
+        DeliveredWebhook.webhook_id == webhook_id,
+        DeliveredWebhook.timestamp == datetime.fromisoformat(payload["timestamp"]),
+    )
+    .first()
+)
 
 if existing:
     return 200  # Already processed, return success

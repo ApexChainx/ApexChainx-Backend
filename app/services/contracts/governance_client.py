@@ -22,7 +22,12 @@ class GovernanceError(Exception):
 
 
 class GovernanceNotImplementedError(GovernanceError):
-    """Compatibility alias for callers expecting a more specific error."""
+    """Raised when governance operations are explicitly disabled."""
+
+
+def _ensure_governance_enabled() -> None:
+    if not settings.GOVERNANCE_ENABLED:
+        raise GovernanceNotImplementedError("governance operations are disabled")
 
 
 def _stub_tx_hash(operation: str, address: str) -> str:
@@ -39,12 +44,14 @@ def propose_admin(new_admin_address: str) -> dict[str, Any]:
     if not new_admin_address:
         raise GovernanceError("new_admin_address is required")
 
+    _ensure_governance_enabled()
     if settings.CONTRACT_EXECUTION_MODE == "local_adapter":
         tx_hash = _stub_tx_hash("propose_admin", new_admin_address)
         return {
             "tx_hash": tx_hash,
             "pending_admin": new_admin_address,
             "status": "proposed",
+            "simulated": True,
             "contract_address": settings.SLA_CONTRACT_ADDRESS,
             "network": settings.STELLAR_NETWORK,
         }
@@ -57,11 +64,13 @@ def accept_admin() -> dict[str, Any]:
 
     Returns the transaction hash.
     """
+    _ensure_governance_enabled()
     if settings.CONTRACT_EXECUTION_MODE == "local_adapter":
         tx_hash = _stub_tx_hash("accept_admin", "current")
         return {
             "tx_hash": tx_hash,
             "status": "accepted",
+            "simulated": True,
             "contract_address": settings.SLA_CONTRACT_ADDRESS,
             "network": settings.STELLAR_NETWORK,
         }
@@ -71,11 +80,13 @@ def accept_admin() -> dict[str, Any]:
 
 def cancel_admin_proposal() -> dict[str, Any]:
     """Cancel a pending admin proposal."""
+    _ensure_governance_enabled()
     if settings.CONTRACT_EXECUTION_MODE == "local_adapter":
         tx_hash = _stub_tx_hash("cancel_admin_proposal", "current")
         return {
             "tx_hash": tx_hash,
             "status": "cancelled",
+            "simulated": True,
             "contract_address": settings.SLA_CONTRACT_ADDRESS,
             "network": settings.STELLAR_NETWORK,
         }
@@ -85,11 +96,13 @@ def cancel_admin_proposal() -> dict[str, Any]:
 
 def renounce_admin() -> dict[str, Any]:
     """Renounce admin role permanently."""
+    _ensure_governance_enabled()
     if settings.CONTRACT_EXECUTION_MODE == "local_adapter":
         tx_hash = _stub_tx_hash("renounce_admin", "current")
         return {
             "tx_hash": tx_hash,
             "status": "renounced",
+            "simulated": True,
             "contract_address": settings.SLA_CONTRACT_ADDRESS,
             "network": settings.STELLAR_NETWORK,
         }
@@ -105,12 +118,14 @@ def propose_operator(new_operator_address: str) -> dict[str, Any]:
     if not new_operator_address:
         raise GovernanceError("new_operator_address is required")
 
+    _ensure_governance_enabled()
     if settings.CONTRACT_EXECUTION_MODE == "local_adapter":
         tx_hash = _stub_tx_hash("propose_operator", new_operator_address)
         return {
             "tx_hash": tx_hash,
             "pending_operator": new_operator_address,
             "status": "proposed",
+            "simulated": True,
             "contract_address": settings.SLA_CONTRACT_ADDRESS,
             "network": settings.STELLAR_NETWORK,
         }
@@ -120,11 +135,13 @@ def propose_operator(new_operator_address: str) -> dict[str, Any]:
 
 def accept_operator() -> dict[str, Any]:
     """Complete an operator transfer (called by the proposed new operator)."""
+    _ensure_governance_enabled()
     if settings.CONTRACT_EXECUTION_MODE == "local_adapter":
         tx_hash = _stub_tx_hash("accept_operator", "current")
         return {
             "tx_hash": tx_hash,
             "status": "accepted",
+            "simulated": True,
             "contract_address": settings.SLA_CONTRACT_ADDRESS,
             "network": settings.STELLAR_NETWORK,
         }

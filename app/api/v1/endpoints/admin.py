@@ -12,6 +12,7 @@ from app.core.security import require_admin
 from app.services.audit_log import audit_log
 from app.services.contracts.governance_client import (
     GovernanceError,
+    GovernanceNotImplementedError,
     accept_admin,
     accept_operator,
     cancel_admin_proposal,
@@ -21,6 +22,12 @@ from app.services.contracts.governance_client import (
 )
 
 router = APIRouter()
+
+
+def _governance_http_error(exc: GovernanceError) -> CodedHTTPException:
+    if isinstance(exc, GovernanceNotImplementedError):
+        return CodedHTTPException(status_code=501, detail="governance operations are disabled")
+    return CodedHTTPException(status_code=400, detail=str(exc))
 
 
 class ProposeAdminRequest(BaseModel):
@@ -40,7 +47,7 @@ def api_propose_admin(
     try:
         result = propose_admin(payload.new_admin_address)
     except GovernanceError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+        raise _governance_http_error(exc) from exc
 
     audit_log.log(
         event_type="governance_propose_admin",
@@ -61,7 +68,7 @@ def api_accept_admin(
     try:
         result = accept_admin()
     except GovernanceError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+        raise _governance_http_error(exc) from exc
 
     audit_log.log(
         event_type="governance_accept_admin",
@@ -81,7 +88,7 @@ def api_cancel_admin_proposal(
     try:
         result = cancel_admin_proposal()
     except GovernanceError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+        raise _governance_http_error(exc) from exc
 
     audit_log.log(
         event_type="governance_cancel_admin_proposal",
@@ -101,7 +108,7 @@ def api_renounce_admin(
     try:
         result = renounce_admin()
     except GovernanceError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+        raise _governance_http_error(exc) from exc
 
     audit_log.log(
         event_type="governance_renounce_admin",
@@ -122,7 +129,7 @@ def api_propose_operator(
     try:
         result = propose_operator(payload.new_operator_address)
     except GovernanceError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+        raise _governance_http_error(exc) from exc
 
     audit_log.log(
         event_type="governance_propose_operator",
@@ -143,7 +150,7 @@ def api_accept_operator(
     try:
         result = accept_operator()
     except GovernanceError as exc:
-        raise CodedHTTPException(status_code=400, detail=str(exc)) from exc
+        raise _governance_http_error(exc) from exc
 
     audit_log.log(
         event_type="governance_accept_operator",

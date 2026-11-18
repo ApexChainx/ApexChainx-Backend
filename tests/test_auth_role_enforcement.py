@@ -152,8 +152,8 @@ class TestAdminUserCreationEndpoint:
         We'll use a mock approach — create a user directly and mock auth.
         """
         # We'll use the DB directly to create an admin user for testing
-        from app.db.session import SessionLocal
         from app.core.security import get_password_hash
+        from app.db.session import SessionLocal
         from app.repositories.user_repository import UserRepository
 
         with SessionLocal() as db:

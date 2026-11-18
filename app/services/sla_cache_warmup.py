@@ -56,7 +56,7 @@ def warm_sla_cache(db: Session, *, limit: int = 25, periods: list[str] | None = 
     for period in window_periods:
         try:
             start_date, end_date = orchestrator.parse_period(period)
-        except Exception:  # noqa: BLE001 - bad period strings must not kill warm-up
+        except Exception:
             continue
         rows = (
             db.query(OutageORM.id)
@@ -75,7 +75,7 @@ def warm_sla_cache(db: Session, *, limit: int = 25, periods: list[str] | None = 
         for period in window_periods:
             try:
                 result = _compute_for_warmup(db, device_id, period)
-            except Exception as exc:  # noqa: BLE001 - one bad device must not abort the warm-up
+            except Exception as exc:
                 logger.warning("SLA cache warm-up failed for device=%s period=%s: %s", device_id, period, exc)
                 continue
             warmed.append({"device_id": device_id, "period": period, "result": result})

@@ -57,9 +57,13 @@ def _failure_records(caplog):
 
 
 def _counter_delta(before: dict, reason: str) -> float:
-    key = f"{IMPERSONATION_VERIFICATION_FAILURES}{{reason={reason}}}"
     after = metrics.get_metrics_summary()["counters"]
-    return after.get(key, 0.0) - before.get(key, 0.0)
+    keys = [
+        key
+        for key in {*before, *after}
+        if key.startswith(f"{IMPERSONATION_VERIFICATION_FAILURES}{{") and f"reason={reason}" in key
+    ]
+    return sum(after.get(key, 0.0) - before.get(key, 0.0) for key in keys)
 
 
 def _counters_snapshot() -> dict:

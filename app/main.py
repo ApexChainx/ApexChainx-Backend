@@ -33,8 +33,8 @@ from app.middleware.content_type import ContentTypeMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.etag import ETagMiddleware
 from app.middleware.idempotency import IdempotencyMiddleware
-from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.services.health_report import build_readiness_report
 from app.utils.correlation_ctx import get_or_generate_correlation_id
 

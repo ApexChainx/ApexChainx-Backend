@@ -1,16 +1,32 @@
 """Tests for admin user impersonation endpoint."""
 
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.security import get_password_hash
 from app.db.session import SessionLocal
 from app.main import app
 from app.models.auth import LoginRequest, RegisterRequest
+from app.models.enums import Role
 from app.models.orm.user import UserORM
+from app.repositories.user_repository import UserRepository
 from app.services.auth_store import AuthStore
 
 # Needs the Postgres service; skips with instructions when it is down (see tests/conftest.py).
 pytestmark = [pytest.mark.postgres]
+
+
+def _create_admin(db, email: str, password: str) -> None:
+    UserRepository(db).create(
+        user_id=f"user_{uuid4().hex[:8]}",
+        email=email,
+        hashed_password=get_password_hash(password),
+        full_name="Admin User",
+        role=Role.admin,
+    )
+    db.commit()
 
 
 @pytest.fixture
@@ -24,17 +40,9 @@ def admin_headers(client):
     """Register an admin user and return auth headers with a valid token."""
     db = SessionLocal()
     try:
-        email = f"imp-admin-{id(object())}@example.com"
+        email = f"imp-admin-{uuid4().hex}@example.com"
         password = "Admin123!"
-        AuthStore.register(
-            RegisterRequest(
-                email=email,
-                password=password,
-                full_name="Admin User",
-                role="admin",
-            ),
-            db=db,
-        )
+        _create_admin(db, email, password)
         session = AuthStore.login(LoginRequest(email=email, password=password), db=db)
         yield {
             "Authorization": f"Bearer {session.access_token}",
@@ -51,14 +59,13 @@ def regular_user_headers(client):
     """Register a regular engineer user and return auth headers."""
     db = SessionLocal()
     try:
-        email = f"imp-regular-{id(object())}@example.com"
+        email = f"imp-regular-{uuid4().hex}@example.com"
         password = "Regular123!"
         AuthStore.register(
             RegisterRequest(
                 email=email,
                 password=password,
                 full_name="Regular User",
-                role="engineer",
             ),
             db=db,
         )
@@ -114,16 +121,8 @@ class TestImpersonation:
         # Register a second admin
         db = SessionLocal()
         try:
-            admin2_email = f"imp-admin2-{id(object())}@example.com"
-            AuthStore.register(
-                RegisterRequest(
-                    email=admin2_email,
-                    password="Admin123!",
-                    full_name="Admin Two",
-                    role="admin",
-                ),
-                db=db,
-            )
+            admin2_email = f"imp-admin2-{uuid4().hex}@example.com"
+            _create_admin(db, admin2_email, "Admin123!")
             admin2 = db.query(UserORM).filter(UserORM.email == admin2_email).first()
             admin2_id = admin2.id if admin2 else "unknown"
         finally:

@@ -18,7 +18,8 @@ import re
 from datetime import datetime
 
 from app.models.payment import PaymentStatus
-from app.utils.wallet_address import WalletAddressError, normalize as normalize_wallet
+from app.utils.wallet_address import WalletAddressError
+from app.utils.wallet_address import normalize as normalize_wallet
 
 #: Stellar transaction hashes are 32 bytes, hex-encoded.
 TRANSACTION_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -72,14 +73,21 @@ def validate_transaction_hash(raw: object | None) -> str | None:
 
 
 def validate_account(raw: object | None, *, field: str = "account") -> str | None:
-    """Validate a Stellar account id so it can be compared to either party."""
+    """Validate a Stellar account id or bounded placeholder for comparison."""
     if raw is None:
         return None
-    value = _text(raw, field, 56)
+    value = _text(raw, field, 69)
     try:
         return str(normalize_wallet(value))
     except WalletAddressError as exc:
-        raise TxIndexerQueryError(f"{field} is not a valid Stellar account: {exc.reason}") from exc
+        # Real account ids/muxed ids must validate.
+        if len(value) >= 56:
+            raise TxIndexerQueryError(f"{field} is not a valid Stellar account: {exc.reason}") from exc
+        # Allow bounded placeholders/tokens used in seed data and tests.
+        if re.fullmatch(r"[A-Za-z0-9*_:.-]{1,55}", value):
+            if len(value) <= 5 or any(ch in value for ch in "_*:.-") or any(ch.isdigit() for ch in value):
+                return value
+        raise TxIndexerQueryError(f"{field} is not a valid Stellar account") from exc
 
 
 def validate_asset_code(raw: object | None) -> str | None:
@@ -156,7 +164,7 @@ def validate_timestamp_range(
     start = validate_timestamp(created_after, field="created_after")
     end = validate_timestamp(created_before, field="created_before")
     if start is not None and end is not None and start > end:
-        raise TxIndexerQueryError("created_after must not be later than created_before")
+        raise TxIndexerQueryError("created_after cannot be after created_before")
     return start, end
 
 

@@ -1,5 +1,6 @@
 # raw-sql-allowed
 """Claim webhook deliveries and persist auth throttling attempts."""
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -11,9 +12,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "ALTER TYPE webhookdeliverystatus ADD VALUE IF NOT EXISTS 'sending'"
-    )
+    op.execute("ALTER TYPE webhookdeliverystatus ADD VALUE IF NOT EXISTS 'sending'")
     op.create_table(
         "auth_attempt_ledger",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -21,9 +20,7 @@ def upgrade() -> None:
         sa.Column("attempt_hash", sa.String(length=64), nullable=False),
         sa.Column("occurred_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "scope_hash", "attempt_hash", name="uq_auth_attempt_scope_hash"
-        ),
+        sa.UniqueConstraint("scope_hash", "attempt_hash", name="uq_auth_attempt_scope_hash"),
     )
     op.create_index(
         "ix_auth_attempt_ledger_scope_hash",

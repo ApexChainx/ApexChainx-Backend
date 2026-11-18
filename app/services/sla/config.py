@@ -224,7 +224,7 @@ def publish_config_for_severity(
     # Optimistic concurrency: reject if token doesn't match
     if expected_token is not None and expected_token != current_token:
         raise ConcurrencyError(
-            f"Config for '{severity}' was modified by another request. " f"Re-fetch the current config and retry."
+            f"Config for '{severity}' was modified by another request. Re-fetch the current config and retry."
         )
 
     # Bump version and write config atomically
@@ -253,7 +253,7 @@ def publish_config_for_severity(
         except IntegrityError as exc:
             db.rollback()
             raise ConcurrencyError(
-                f"Config for '{severity}' was modified by another request. " "Re-fetch the current config and retry."
+                f"Config for '{severity}' was modified by another request. Re-fetch the current config and retry."
             ) from exc
 
     # Commit succeeded (or no DB) — refresh the in-process cache so the

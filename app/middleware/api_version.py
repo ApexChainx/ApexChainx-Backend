@@ -71,7 +71,7 @@ def reject_unsupported_version(request: Request) -> JSONResponse | None:
         return _unsupported(
             requested,
             400,
-            f"Malformed {API_VERSION_HEADER} header; expected a dotted numeric " f"version such as {settings.VERSION}.",
+            f"Malformed {API_VERSION_HEADER} header; expected a dotted numeric version such as {settings.VERSION}.",
             request,
         )
 

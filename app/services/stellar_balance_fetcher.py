@@ -2,10 +2,10 @@
 instead of deriving fabricated values from boolean flags.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 
-def fetch_wallet_balances(public_key: str, horizon_client, simulated_fallback: Dict[str, Any]) -> Dict[str, Any]:
+def fetch_wallet_balances(public_key: str, horizon_client, simulated_fallback: dict[str, Any]) -> dict[str, Any]:
     """Return live balances when reachable, else an explicitly-flagged simulation."""
     try:
         account = horizon_client.accounts().account_id(public_key).call()

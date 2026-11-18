@@ -40,7 +40,7 @@ def _create_webhook(secret: str = "plain-secret-value"):
     with SessionLocal() as db:
         webhook = Webhook(
             name=f"test-hook-{uuid4().hex[:8]}",
-            url="https://example.com/hook",
+            url=f"https://example.com/hook/{uuid4().hex}",
             secret=secret,
             events='["sla.violation"]',
             max_retries=3,

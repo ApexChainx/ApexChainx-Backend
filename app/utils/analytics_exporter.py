@@ -91,8 +91,8 @@ def export_performance_aggregation(aggregation: SLAPerformanceAggregation, forma
 
 
 def export_analytics_summary(
-    kpi: SLADashboardKPI,
-    trends: list[SLATrendPoint],
+    kpi: SLADashboardKPI | dict[str, Any],
+    trends: list[SLATrendPoint] | None = None,
     aggregation: SLAPerformanceAggregation | None = None,
     format: str = "json",
 ) -> Any:
@@ -108,11 +108,13 @@ def export_analytics_summary(
         Exported data in specified format
     """
     format = format.lower()
+    trend_points = trends or []
+    kpi_data = kpi if isinstance(kpi, dict) else kpi.model_dump(mode="json")
 
     summary = {
-        "kpi": kpi.model_dump(mode="json"),
-        "trends": [trend.model_dump(mode="json") for trend in trends],
-        "trend_count": len(trends),
+        "kpi": kpi_data,
+        "trends": [trend.model_dump(mode="json") for trend in trend_points],
+        "trend_count": len(trend_points),
     }
 
     if aggregation:
@@ -125,4 +127,8 @@ def export_analytics_summary(
         raise ValueError("Unsupported export format. Use 'json' or 'csv'.")
 
     # CSV export includes only KPI metrics; trends and aggregation are available via JSON.
-    return export_dashboard_kpi(kpi, format="csv")
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(kpi_data.keys()))
+    writer.writeheader()
+    writer.writerow(kpi_data)
+    return buffer.getvalue()

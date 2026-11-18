@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,7 +24,11 @@ from app.services.block_poller_health import build_block_poller_report
 @pytest.fixture
 def db() -> Session:
     """A session against an in-memory SQLite holding the payment table."""
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine, tables=[PaymentTransactionORM.__table__])
     session_factory = sessionmaker(bind=engine)
     session = session_factory()

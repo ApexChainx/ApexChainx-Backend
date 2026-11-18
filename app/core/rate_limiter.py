@@ -11,12 +11,18 @@ Error handling
   ``backend``, ``error_type``, ``attempt``) so alerting can key off it.
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import logging
 import random
+import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass
 from time import sleep as _time_sleep
 from time import time
 from typing import ClassVar
@@ -27,9 +33,16 @@ from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services import metrics
 from app.services.auth_attempt_ledger import record_rate_limit_attempt
 
 logger = logging.getLogger(__name__)
+
+EMPTY_RATE_LIMIT_KEY = "anonymous"
+RATE_LIMIT_KEY_MAX_LENGTH = 128
+REDIS_DENY_CACHE_SECONDS = 2
+REDIS_DENY_CACHE_MAX_KEYS = 1024
+UNKNOWN_SCOPE = "unknown"
 
 #: Redis attempts per check before the circuit is tripped.
 REDIS_MAX_ATTEMPTS: int = 3
@@ -76,6 +89,81 @@ return 1
 # grown, and every request still prunes its own key first.
 SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD = 1024
 
+_SAFE_KEY_RE = re.compile(r"[^A-Za-z0-9:._-]")
+_SCOPE_PREFIXES = (
+    "login_ip",
+    "register_ip",
+    "refresh_ip",
+    "profile_update",
+    "impersonate",
+)
+
+
+@dataclass(frozen=True)
+class RateLimitPolicy:
+    """Per-scope rate-limit configuration."""
+
+    limit: int
+    window_seconds: int
+
+
+RATE_LIMIT_POLICIES: dict[str, RateLimitPolicy] = {}
+RATE_LIMITED_RESPONSE = {
+    429: {
+        "description": "Rate limit exceeded",
+        "content": {
+            "application/problem+json": {
+                "example": {
+                    "type": "about:blank",
+                    "title": "Too Many Requests",
+                    "status": 429,
+                    "detail": "Rate limit exceeded",
+                    "error_code": "rate_limited",
+                }
+            }
+        },
+    }
+}
+
+
+def sanitize_rate_limit_key(key: object) -> str:
+    """Return a bounded, control-free key suitable for Redis/in-memory maps."""
+    if key is None:
+        raw = ""
+    else:
+        raw = str(key)
+    normalized = unicodedata.normalize("NFKC", raw).strip()
+    if not normalized:
+        return EMPTY_RATE_LIMIT_KEY
+    sanitized = "".join("_" if unicodedata.category(ch).startswith("C") else ch for ch in normalized)
+    sanitized = _SAFE_KEY_RE.sub("_", sanitized)
+    if not sanitized:
+        return EMPTY_RATE_LIMIT_KEY
+    if len(sanitized) > RATE_LIMIT_KEY_MAX_LENGTH:
+        return hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    return sanitized
+
+
+def rate_limit_scope(key: str) -> str:
+    sanitized = sanitize_rate_limit_key(key)
+    for prefix in _SCOPE_PREFIXES:
+        if sanitized.startswith(prefix):
+            return prefix
+    return UNKNOWN_SCOPE
+
+
+def resolve_policy(key: str, policy: RateLimitPolicy | None = None) -> RateLimitPolicy:
+    if policy is not None:
+        return policy
+    scope = rate_limit_scope(key)
+    scoped = RATE_LIMIT_POLICIES.get(scope)
+    if scoped is not None:
+        return scoped
+    return RateLimitPolicy(
+        limit=int(settings.AUTH_RATE_LIMIT_REQUESTS),
+        window_seconds=int(settings.AUTH_RATE_LIMIT_WINDOW_SECONDS),
+    )
+
 
 class RateLimitError(Exception):
     """Raised when a key has exceeded its rate limit.
@@ -109,69 +197,82 @@ class SimpleRateLimiter:
     def __init__(self) -> None:
         self.requests = SimpleRateLimiter._shared
 
-    def is_allowed(self, key: str, db: Session | None = None) -> bool:
+    def _prune(self, key: str, *, window_seconds: int, now: float) -> list[float]:
+        window_start = now - window_seconds
+        hits = [t for t in self.requests.get(key, []) if t > window_start]
+        if hits:
+            self.requests[key] = hits
+        elif key in self.requests:
+            del self.requests[key]
+        return hits
+
+    def is_allowed(self, key: str, db: Session | None = None, policy: RateLimitPolicy | None = None) -> bool:
         """Check the persistent ledger when an authentication session is available."""
+        raw_key = key
+        safe_key = sanitize_rate_limit_key(raw_key)
+        resolved = resolve_policy(safe_key, policy)
+        scope = rate_limit_scope(safe_key)
         if db is not None:
-            return record_rate_limit_attempt(
-                db,
-                key,
-                settings.AUTH_RATE_LIMIT_REQUESTS,
-                settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+            allowed = record_rate_limit_attempt(db, safe_key, resolved.limit, resolved.window_seconds)
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "ledger", "scope": scope, "outcome": "allowed" if allowed else "rejected"},
             )
+            return allowed
 
         now = time()
-        window_start = now - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
-        self.requests[key] = [t for t in self.requests[key] if t > window_start]
-        if len(self.requests) > SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD:
+        hits = self._prune(safe_key, window_seconds=resolved.window_seconds, now=now)
+        if len(self.requests) + 1 > SIMPLE_RATE_LIMITER_SWEEP_THRESHOLD:
             self.cull_expired(now=now)
-        if len(self.requests[key]) >= settings.AUTH_RATE_LIMIT_REQUESTS:
+            hits = self._prune(safe_key, window_seconds=resolved.window_seconds, now=now)
+        if len(hits) >= resolved.limit:
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "memory", "scope": scope, "outcome": "rejected"},
+            )
             return False
 
-        self.requests[key].append(now)
+        self.requests[safe_key] = [*hits, now]
+        metrics.increment_counter(
+            "rate_limiter_requests_total",
+            tags={"backend": "memory", "scope": scope, "outcome": "allowed"},
+        )
+        metrics.set_gauge("rate_limiter_memory_keys", float(len(self.requests)))
         return True
 
     def cull_expired(self, now: float | None = None) -> int:
-        """Drop keys whose every recorded hit is older than the window.
-
-        `is_allowed` only prunes the key it was handed, so a client that stops
-        appearing — an admin key used once, a scanner that rotates addresses —
-        kept its list in `_shared` for the lifetime of the process. Nothing else
-        reclaimed it: `_shared` is class-level state, so the entries outlive both
-        the limiter instance and the request (#544).
-
-        Returns:
-            Number of keys removed.
-        """
+        """Drop keys whose every recorded hit is older than their scope window."""
         current = now if now is not None else time()
-        window_start = current - settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
-        expired = [key for key, hits in self.requests.items() if not hits or hits[-1] <= window_start]
+        expired: list[str] = []
+        for key, hits in list(self.requests.items()):
+            resolved = resolve_policy(key)
+            window_start = current - resolved.window_seconds
+            fresh = [t for t in hits if t > window_start]
+            if fresh:
+                self.requests[key] = fresh
+            else:
+                expired.append(key)
         for key in expired:
-            del self.requests[key]
+            self.requests.pop(key, None)
+        if expired:
+            metrics.increment_counter("rate_limiter_keys_culled_total", len(expired))
+        metrics.set_gauge("rate_limiter_memory_keys", float(len(self.requests)))
         return len(expired)
 
-    def check_or_raise(self, key: str, db: Session | None = None) -> None:
-        """Check the rate limit and raise :class:`RateLimitError` if exceeded.
-
-        Args:
-            key: The identifier to rate-limit (for example an IP address).
-            db: Optional database session; when supplied the persistent attempt
-                ledger is consulted instead of the in-memory window.
-
-        Raises:
-            RateLimitError: When the key is over its configured limit.
-        """
-        if self.is_allowed(key, db=db):
+    def check_or_raise(self, key: str, db: Session | None = None, policy: RateLimitPolicy | None = None) -> None:
+        """Check the rate limit and raise :class:`RateLimitError` if exceeded."""
+        if self.is_allowed(key, db=db, policy=policy):
             return
 
         logger.warning(
             "Rate limit exceeded",
             extra={
-                "rate_limiter_key": key,
+                "rate_limiter_key": sanitize_rate_limit_key(key),
                 "backend": "ledger" if db is not None else "memory",
                 "circuit_open": False,
             },
         )
-        raise RateLimitError(key)
+        raise RateLimitError(sanitize_rate_limit_key(key))
 
 
 class RedisRateLimiter:
@@ -190,18 +291,52 @@ class RedisRateLimiter:
         self.client = redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
         self.async_client = redis_async.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
         self._sleep = sleep or _time_sleep
+        self.deny_cache: dict[str, float] = {}
+        self._deny_cache_ttl_seconds = REDIS_DENY_CACHE_SECONDS
 
     def _key_namespace(self, key: str) -> str:
-        bounded_key = key if len(key) <= 128 else hashlib.sha256(key.encode("utf-8")).hexdigest()
-        return f"auth_rate_limiter:{bounded_key}"
+        return f"auth_rate_limiter:{sanitize_rate_limit_key(key)}"
+
+    def _deny_cache_ttl(self) -> int:
+        return min(
+            int(getattr(settings, "AUTH_RATE_LIMIT_WINDOW_SECONDS", REDIS_DENY_CACHE_SECONDS)),
+            int(self._deny_cache_ttl_seconds),
+        )
+
+    def clear_cache(self) -> None:
+        self.deny_cache.clear()
+
+    def _cached_denied(self, key: str) -> bool:
+        expires_at = self.deny_cache.get(key)
+        if expires_at is None:
+            return False
+        if expires_at <= time():
+            self.deny_cache.pop(key, None)
+            return False
+        return True
+
+    def _cache_denial(self, key: str) -> None:
+        ttl = self._deny_cache_ttl()
+        if ttl <= 0:
+            return
+        self.deny_cache[key] = time() + ttl
+        while len(self.deny_cache) > REDIS_DENY_CACHE_MAX_KEYS:
+            oldest = min(self.deny_cache, key=self.deny_cache.get)
+            self.deny_cache.pop(oldest, None)
 
     def _is_circuit_open(self) -> bool:
         return self.disabled_until is not None and time() < self.disabled_until
 
     def _trip_circuit(self) -> None:
         self.disabled_until = time() + CIRCUIT_RESET_SECONDS
+        metrics.set_gauge("rate_limiter_circuit_open", 1.0)
 
-    def _lua_args(self, key: str) -> tuple[str, int, int, int, str]:
+    def _reset_circuit(self) -> None:
+        if self.disabled_until is not None and time() >= self.disabled_until:
+            self.disabled_until = None
+            metrics.set_gauge("rate_limiter_circuit_open", 0.0)
+
+    def _lua_args(self, key: str, policy: RateLimitPolicy) -> tuple[str, int, int, int, str]:
         if not settings.CELERY_BROKER_URL.strip():
             raise RedisError("CELERY_BROKER_URL is empty")
         encoded_key = self._key_namespace(key)
@@ -210,18 +345,18 @@ class RedisRateLimiter:
         return (
             encoded_key,
             now_ts,
-            settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
-            settings.AUTH_RATE_LIMIT_REQUESTS,
+            policy.window_seconds,
+            policy.limit,
             member,
         )
 
-    def _eval(self, key: str) -> bool:
-        encoded_key, now_ts, window, limit, member = self._lua_args(key)
+    def _eval(self, key: str, policy: RateLimitPolicy) -> bool:
+        encoded_key, now_ts, window, limit, member = self._lua_args(key, policy)
         result = self.client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
         return bool(result)
 
-    async def _eval_async(self, key: str) -> bool:
-        encoded_key, now_ts, window, limit, member = self._lua_args(key)
+    async def _eval_async(self, key: str, policy: RateLimitPolicy) -> bool:
+        encoded_key, now_ts, window, limit, member = self._lua_args(key, policy)
         result = await self.async_client.eval(RATE_LIMITER_LUA, 1, encoded_key, now_ts, window, limit, member)
         return bool(result)
 
@@ -255,30 +390,22 @@ class RedisRateLimiter:
             },
         )
 
-    def _eval_with_retry(self, key: str) -> bool:
-        """Run :meth:`_eval`, retrying transient failures with backoff.
-
-        Raises:
-            Exception: The last error once every attempt has failed.
-        """
+    def _eval_with_retry(self, key: str, policy: RateLimitPolicy) -> bool:
+        """Run :meth:`_eval`, retrying transient failures with backoff."""
         for attempt in range(1, REDIS_MAX_ATTEMPTS + 1):
             try:
-                return self._eval(key)
+                return self._eval(key, policy)
             except RETRYABLE_REDIS_ERRORS as exc:
                 if attempt >= REDIS_MAX_ATTEMPTS:
                     raise
                 self._sleep(self._log_retry(key, exc, attempt))
         raise AssertionError("unreachable")  # pragma: no cover
 
-    async def _eval_async_with_retry(self, key: str) -> bool:
-        """Run :meth:`_eval_async`, retrying transient failures with backoff.
-
-        Raises:
-            Exception: The last error once every attempt has failed.
-        """
+    async def _eval_async_with_retry(self, key: str, policy: RateLimitPolicy) -> bool:
+        """Run :meth:`_eval_async`, retrying transient failures with backoff."""
         for attempt in range(1, REDIS_MAX_ATTEMPTS + 1):
             try:
-                return await self._eval_async(key)
+                return await self._eval_async(key, policy)
             except RETRYABLE_REDIS_ERRORS as exc:
                 if attempt >= REDIS_MAX_ATTEMPTS:
                     raise
@@ -286,119 +413,209 @@ class RedisRateLimiter:
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")  # pragma: no cover
 
-    def is_allowed(self, key: str, db: Session | None = None) -> bool:
+    def _run_coroutine(self, coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        raise RuntimeError("async event loop running; use is_allowed_async")
+
+    def is_allowed(self, key: str, db: Session | None = None, policy: RateLimitPolicy | None = None) -> bool:
+        self._reset_circuit()
+        safe_key = sanitize_rate_limit_key(key)
+        resolved = resolve_policy(safe_key, policy)
+        scope = rate_limit_scope(safe_key)
+
         if db is not None:
-            if not record_rate_limit_attempt(
-                db,
-                key,
-                settings.AUTH_RATE_LIMIT_REQUESTS,
-                settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
-            ):
+            ledger_allowed = record_rate_limit_attempt(db, safe_key, resolved.limit, resolved.window_seconds)
+            if not ledger_allowed:
+                metrics.increment_counter(
+                    "rate_limiter_requests_total",
+                    tags={"backend": "ledger", "scope": scope, "outcome": "rejected"},
+                )
                 return False
             if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
+                metrics.increment_counter(
+                    "rate_limiter_requests_total",
+                    tags={"backend": "ledger", "scope": scope, "outcome": "allowed"},
+                )
                 return True
             if self._is_circuit_open():
+                metrics.increment_counter(
+                    "rate_limiter_requests_total",
+                    tags={"backend": "ledger", "scope": scope, "outcome": "allowed"},
+                )
                 return True
-
             try:
-                return self._run_coroutine(self._is_allowed_async(key))
+                redis_allowed = self._eval_with_retry(safe_key, resolved)
             except RETRYABLE_REDIS_ERRORS as exc:
-                self._log_unavailable(key, exc, REDIS_MAX_ATTEMPTS, "persistent attempt ledger")
+                self._log_unavailable(safe_key, exc, REDIS_MAX_ATTEMPTS, "persistent attempt ledger")
                 self._trip_circuit()
+                metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "redis_error"})
+                metrics.increment_counter(
+                    "rate_limiter_requests_total",
+                    tags={"backend": "ledger", "scope": scope, "outcome": "allowed"},
+                )
                 return True
-            except Exception as exc:  # noqa: BLE001 - never let the limiter break auth
+            except Exception as exc:
                 logger.warning(
                     "Unexpected rate limiter error; using persistent attempt ledger",
                     extra={
-                        "rate_limiter_key": key,
+                        "rate_limiter_key": safe_key,
                         "backend": "ledger",
                         "error_type": type(exc).__name__,
                     },
                 )
                 self._trip_circuit()
+                metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "unexpected_error"})
+                metrics.increment_counter(
+                    "rate_limiter_requests_total",
+                    tags={"backend": "ledger", "scope": scope, "outcome": "allowed"},
+                )
                 return True
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "redis", "scope": scope, "outcome": "allowed" if redis_allowed else "rejected"},
+            )
+            if not redis_allowed:
+                self._cache_denial(safe_key)
+            return redis_allowed
 
         if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
-            return self.fallback.is_allowed(key)
+            return self.fallback.is_allowed(safe_key, policy=resolved)
         if self._is_circuit_open():
-            return self.fallback.is_allowed(key)
+            metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "circuit_open"})
+            return self.fallback.is_allowed(safe_key, policy=resolved)
+        if self._cached_denied(safe_key):
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "redis", "scope": scope, "outcome": "rejected"},
+            )
+            return False
 
         try:
-            return self._eval_with_retry(key)
+            allowed = self._eval_with_retry(safe_key, resolved)
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "redis", "scope": scope, "outcome": "allowed" if allowed else "rejected"},
+            )
+            if not allowed:
+                self._cache_denial(safe_key)
+            else:
+                self.deny_cache.pop(safe_key, None)
+            return allowed
         except RETRYABLE_REDIS_ERRORS as exc:
-            self._log_unavailable(key, exc, REDIS_MAX_ATTEMPTS, "in-memory limiter")
+            self._log_unavailable(safe_key, exc, REDIS_MAX_ATTEMPTS, "in-memory limiter")
             self._trip_circuit()
-            return self.fallback.is_allowed(key)
-        except Exception as exc:  # noqa: BLE001 - never let the limiter break auth
+            metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "redis_error"})
+            return self.fallback.is_allowed(safe_key, policy=resolved)
+        except Exception as exc:
             logger.warning(
                 "Unexpected rate limiter error, falling back to in-memory limiter",
                 extra={
-                    "rate_limiter_key": key,
+                    "rate_limiter_key": safe_key,
                     "backend": "memory",
                     "error_type": type(exc).__name__,
                 },
             )
             self._trip_circuit()
-            return self.fallback.is_allowed(key)
+            metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "unexpected_error"})
+            return self.fallback.is_allowed(safe_key, policy=resolved)
 
-    async def is_allowed_async(self, key: str) -> bool:
+    async def is_allowed_async(self, key: str, policy: RateLimitPolicy | None = None) -> bool:
+        self._reset_circuit()
+        safe_key = sanitize_rate_limit_key(key)
+        resolved = resolve_policy(safe_key, policy)
+        scope = rate_limit_scope(safe_key)
+
         if not settings.USE_REDIS_RATE_LIMITER or settings.CELERY_TASK_ALWAYS_EAGER:
-            return self.fallback.is_allowed(key)
-
+            return self.fallback.is_allowed(safe_key, policy=resolved)
         if self._is_circuit_open():
-            return self.fallback.is_allowed(key)
+            metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "circuit_open"})
+            return self.fallback.is_allowed(safe_key, policy=resolved)
+        if self._cached_denied(safe_key):
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "redis", "scope": scope, "outcome": "rejected"},
+            )
+            return False
 
         try:
-            return await self._eval_async_with_retry(key)
+            allowed = await self._eval_async_with_retry(safe_key, resolved)
+            metrics.increment_counter(
+                "rate_limiter_requests_total",
+                tags={"backend": "redis", "scope": scope, "outcome": "allowed" if allowed else "rejected"},
+            )
+            if not allowed:
+                self._cache_denial(safe_key)
+            else:
+                self.deny_cache.pop(safe_key, None)
+            return allowed
         except RETRYABLE_REDIS_ERRORS as exc:
-            self._log_unavailable(key, exc, REDIS_MAX_ATTEMPTS, "in-memory limiter")
+            self._log_unavailable(safe_key, exc, REDIS_MAX_ATTEMPTS, "in-memory limiter")
             self._trip_circuit()
-            return self.fallback.is_allowed(key)
-        except Exception as exc:  # noqa: BLE001 - never let the limiter break auth
+            metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "redis_error"})
+            return self.fallback.is_allowed(safe_key, policy=resolved)
+        except Exception as exc:
             logger.warning(
                 "Unexpected rate limiter error, falling back to in-memory limiter",
                 extra={
-                    "rate_limiter_key": key,
+                    "rate_limiter_key": safe_key,
                     "backend": "memory",
                     "error_type": type(exc).__name__,
                 },
             )
             self._trip_circuit()
-            return self.fallback.is_allowed(key)
+            metrics.increment_counter("rate_limiter_fallback_total", tags={"reason": "unexpected_error"})
+            return self.fallback.is_allowed(safe_key, policy=resolved)
 
-    def check_or_raise(self, key: str, db: Session | None = None) -> None:
-        """Check the rate limit and raise :class:`RateLimitError` if exceeded.
-
-        Args:
-            key: The identifier to rate-limit (for example an IP address).
-            db: Optional database session forwarded to :meth:`is_allowed`.
-
-        Raises:
-            RateLimitError: When the key is over its configured limit, whether
-                the decision came from Redis, the ledger, or the in-memory
-                fallback.
-        """
-        if self.is_allowed(key, db=db):
+    def check_or_raise(self, key: str, db: Session | None = None, policy: RateLimitPolicy | None = None) -> None:
+        """Check the rate limit and raise :class:`RateLimitError` if exceeded."""
+        if self.is_allowed(key, db=db, policy=policy):
             return
 
         circuit_open = self._is_circuit_open()
         logger.warning(
             "Rate limit exceeded",
             extra={
-                "rate_limiter_key": key,
+                "rate_limiter_key": sanitize_rate_limit_key(key),
                 "backend": "ledger" if db is not None else ("memory" if circuit_open else "redis"),
                 "circuit_open": circuit_open,
             },
         )
-        raise RateLimitError(key)
+        raise RateLimitError(sanitize_rate_limit_key(key))
 
 
 # Shared fallback for RedisRateLimiter instances so that in-memory rate-limiting
 # state is consistent across all instances when Redis is unavailable.
 _shared_fallback = SimpleRateLimiter()
 
-rate_limiter = (
-    RedisRateLimiter()
-    if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER
-    else SimpleRateLimiter()
-)
+
+def create_rate_limiter() -> SimpleRateLimiter | RedisRateLimiter:
+    if settings.USE_REDIS_RATE_LIMITER and not settings.CELERY_TASK_ALWAYS_EAGER:
+        return RedisRateLimiter()
+    return SimpleRateLimiter()
+
+
+rate_limiter = create_rate_limiter()
+
+
+def with_rate_limit_responses(
+    responses: dict[int | str, dict[str, object]] | None = None,
+) -> dict[int | str, dict[str, object]]:
+    """Merge endpoint responses with a standard 429 rate-limit response for OpenAPI."""
+    merged: dict[int | str, dict[str, object]] = deepcopy(RATE_LIMITED_RESPONSE)
+    if responses:
+        for code, payload in responses.items():
+            if code == 429 and isinstance(payload, dict) and isinstance(merged.get(429), dict):
+                existing = merged[429]  # type: ignore[index]
+                # Keep custom description but ensure schema/content is documented.
+                if "description" in payload:
+                    existing["description"] = payload["description"]
+                if "content" in payload:
+                    existing["content"] = payload["content"]
+                else:
+                    existing.setdefault("content", RATE_LIMITED_RESPONSE[429]["content"])
+            else:
+                merged[code] = deepcopy(payload)
+    return merged

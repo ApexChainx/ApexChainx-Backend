@@ -30,7 +30,7 @@ class CorrelationIdFilter(logging.Filter):
     string so the format string remains valid.
     """
 
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+    def filter(self, record: logging.LogRecord) -> bool:
         record.correlation_id = get_correlation_id() or ""
         return True
 

@@ -13,8 +13,8 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.endpoints.webhooks import require_admin
 from app.api.v1.endpoints.webhook_errors import WebhookHTTPException
+from app.api.v1.endpoints.webhooks import require_admin
 from app.db.session import get_db
 from app.main import app
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent

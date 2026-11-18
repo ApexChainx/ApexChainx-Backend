@@ -20,7 +20,6 @@ from app.core.config import settings
 from app.core.security import hash_token, require_admin
 from app.db.session import get_db
 from app.models.webhook import Webhook, WebhookDelivery, WebhookDeliveryStatus, WebhookEvent
-
 from app.services.audit_log import audit_log
 from app.services.formatters import canonical_json
 from app.services.metrics import increment_counter, set_gauge
@@ -322,11 +321,12 @@ def _count_event_subscriptions(db: Session) -> int:
     query portable across the SQLite test database.
     """
     total = 0
-    for (raw_events,) in db.query(Webhook.events).all():
+    for row in db.query(Webhook.events).all():
+        raw_events = row[0]
         if not raw_events:
             continue
         try:
-            parsed = json.loads(raw_events)
+            parsed = json.loads(str(raw_events))
         except (TypeError, ValueError):
             logger.warning("Webhook events column is not valid JSON; excluded from fan-out count")
             continue
@@ -498,6 +498,17 @@ def update_webhook(
         resolved_ips = validate_webhook_url(url)
         webhook.url = url
         webhook.resolved_ips = canonical_json(resolved_ips)
+    if payload.events is not None:
+        webhook.events = canonical_json([e.value for e in payload.events])
+    if payload.max_retries is not None:
+        webhook.max_retries = payload.max_retries
+    if payload.is_active is not None:
+        webhook.is_active = payload.is_active
+    if payload.secret_grace_hours is not None:
+        # #582: make the per-webhook grace window settable so the rotation
+        # path's honouring of it (and the 1..MAX bound in the schema) is
+        # reachable from the API rather than only from the DB.
+        webhook.secret_grace_hours = payload.secret_grace_hours
     if payload.secret is not None:
         # #581: PATCH used to overwrite the signing secret in place — no
         # version bump, no history entry, no grace window, no audit event —
@@ -511,17 +522,6 @@ def update_webhook(
             actor=getattr(current_user, "email", "unknown"),
             source="patch",
         )
-    if payload.events is not None:
-        webhook.events = canonical_json([e.value for e in payload.events])
-    if payload.max_retries is not None:
-        webhook.max_retries = payload.max_retries
-    if payload.is_active is not None:
-        webhook.is_active = payload.is_active
-    if payload.secret_grace_hours is not None:
-        # #582: make the per-webhook grace window settable so the rotation
-        # path's honouring of it (and the 1..MAX bound in the schema) is
-        # reachable from the API rather than only from the DB.
-        webhook.secret_grace_hours = payload.secret_grace_hours
 
     db.commit()
     db.refresh(webhook)

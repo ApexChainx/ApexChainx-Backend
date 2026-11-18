@@ -2,8 +2,6 @@
 unbounded full-table response.
 """
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 DEFAULT_PAGE_SIZE = 50
@@ -11,5 +9,5 @@ MAX_PAGE_SIZE = 200
 
 
 class AuditListParams(BaseModel):
-    cursor: Optional[str] = None
+    cursor: str | None = None
     limit: int = Field(default=DEFAULT_PAGE_SIZE, le=MAX_PAGE_SIZE, gt=0)

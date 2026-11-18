@@ -57,7 +57,7 @@ def test_retry_after_reports_the_remaining_window():
 
 
 def test_cull_expired_drops_subscribers_that_stopped_receiving():
-    limiter = EventRateLimiter(None, limit=5, window_seconds=60)
+    limiter = EventRateLimiter(None, limit=5, window_seconds=60, clock=lambda: 0.0)
     limiter.allow("sub-1")
 
     assert limiter.cull_expired(now=0.0) == 0

@@ -128,7 +128,9 @@ class TestPolicies:
 
     def test_ledger_receives_policy(self, policies, monkeypatch):
         seen = []
-        monkeypatch.setattr(rl_mod, "record_rate_limit_attempt", lambda db, key, limit, window: seen.append((limit, window)) or True)
+        monkeypatch.setattr(
+            rl_mod, "record_rate_limit_attempt", lambda db, key, limit, window: seen.append((limit, window)) or True
+        )
         policies["register_ip"] = RateLimitPolicy(limit=4, window_seconds=30)
         monkeypatch.setattr(settings, "USE_REDIS_RATE_LIMITER", False)
         SimpleRateLimiter().is_allowed("register_ip_1", db=object())
@@ -154,28 +156,41 @@ class TestMetrics:
         limiter.is_allowed("impersonate_1")
         limiter.is_allowed("impersonate_1")
 
-        assert counter("rate_limiter_requests_total", backend="memory", scope="impersonate", outcome="allowed") == allowed + 1
-        assert counter("rate_limiter_requests_total", backend="memory", scope="impersonate", outcome="rejected") == rejected + 1
+        assert (
+            counter("rate_limiter_requests_total", backend="memory", scope="impersonate", outcome="allowed")
+            == allowed + 1
+        )
+        assert (
+            counter("rate_limiter_requests_total", backend="memory", scope="impersonate", outcome="rejected")
+            == rejected + 1
+        )
 
     def test_redis_decisions_are_counted(self):
         before = counter("rate_limiter_requests_total", backend="redis", scope="login_ip", outcome="rejected")
         limiter = RedisRateLimiter()
         limiter.client = ScriptedClient([0])
         limiter.is_allowed("login_ip_5.5.5.5")
-        assert counter("rate_limiter_requests_total", backend="redis", scope="login_ip", outcome="rejected") == before + 1
+        assert (
+            counter("rate_limiter_requests_total", backend="redis", scope="login_ip", outcome="rejected") == before + 1
+        )
 
     def test_async_redis_decisions_are_counted(self):
         before = counter("rate_limiter_requests_total", backend="redis", scope="refresh_ip", outcome="allowed")
         limiter = RedisRateLimiter()
         limiter.async_client = AsyncScriptedClient([1])
         assert asyncio.run(limiter.is_allowed_async("refresh_ip_1")) is True
-        assert counter("rate_limiter_requests_total", backend="redis", scope="refresh_ip", outcome="allowed") == before + 1
+        assert (
+            counter("rate_limiter_requests_total", backend="redis", scope="refresh_ip", outcome="allowed") == before + 1
+        )
 
     def test_ledger_decisions_are_counted(self, monkeypatch):
         monkeypatch.setattr(rl_mod, "record_rate_limit_attempt", lambda *a: False)
         before = counter("rate_limiter_requests_total", backend="ledger", scope="register_ip", outcome="rejected")
         RedisRateLimiter().is_allowed("register_ip_1", db=object())
-        assert counter("rate_limiter_requests_total", backend="ledger", scope="register_ip", outcome="rejected") == before + 1
+        assert (
+            counter("rate_limiter_requests_total", backend="ledger", scope="register_ip", outcome="rejected")
+            == before + 1
+        )
 
     def test_redis_failure_counts_fallback_and_opens_circuit(self):
         before = counter("rate_limiter_fallback_total", reason="redis_error")

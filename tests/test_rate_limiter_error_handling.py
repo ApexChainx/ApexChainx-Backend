@@ -444,7 +444,7 @@ class TestPersistentLedgerPath:
 
     def test_redis_failure_falls_back_to_ledger(self, redis_limiter: RedisRateLimiter, monkeypatch) -> None:
         monkeypatch.setattr(rl_mod, "record_rate_limit_attempt", lambda *a, **k: True)
-        use_client(redis_limiter, async_client=FakeAsyncRedisClient(fail_with=RedisError("down")))
+        use_client(redis_limiter, sync_client=FakeRedisClient(fail_with=RedisError("down")))
 
         assert redis_limiter.is_allowed("ledger-fallback-key", db=object()) is True
         assert redis_limiter._is_circuit_open() is True

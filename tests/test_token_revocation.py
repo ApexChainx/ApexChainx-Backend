@@ -139,14 +139,14 @@ class TestRevokeRedisFailure:
         with patch.object(revocation_module, "_get_redis", return_value=broken):
             with caplog.at_level(logging.WARNING, logger="app.services.token_revocation"):
                 revoke(TOKEN_HASH, TTL)
-        assert any("revocation write failed" in r.message.lower() for r in caplog.records)
+        assert any("revocation write failed" in r.getMessage().lower() for r in caplog.records)
 
     def test_revoke_warning_includes_token_hash(self, caplog):
         broken = _make_broken_redis()
         with patch.object(revocation_module, "_get_redis", return_value=broken):
             with caplog.at_level(logging.WARNING, logger="app.services.token_revocation"):
                 revoke(TOKEN_HASH, TTL)
-        assert any(TOKEN_HASH in r.message for r in caplog.records)
+        assert any(TOKEN_HASH in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -180,14 +180,14 @@ class TestIsRevokedRedisFailure:
         with patch.object(revocation_module, "_get_redis", return_value=broken):
             with caplog.at_level(logging.WARNING, logger="app.services.token_revocation"):
                 is_revoked(TOKEN_HASH)
-        assert any("revocation read failed" in r.message.lower() for r in caplog.records)
+        assert any("revocation read failed" in r.getMessage().lower() for r in caplog.records)
 
     def test_is_revoked_warning_includes_token_hash(self, caplog):
         broken = _make_broken_redis()
         with patch.object(revocation_module, "_get_redis", return_value=broken):
             with caplog.at_level(logging.WARNING, logger="app.services.token_revocation"):
                 is_revoked(TOKEN_HASH)
-        assert any(TOKEN_HASH in r.message for r in caplog.records)
+        assert any(TOKEN_HASH in r.getMessage() for r in caplog.records)
 
     def test_repeated_failures_do_not_accumulate_exceptions(self):
         broken = _make_broken_redis()

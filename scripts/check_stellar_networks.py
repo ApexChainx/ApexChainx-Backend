@@ -9,6 +9,7 @@ Checks:
 - If STELLAR_NETWORK=mainnet, STELLAR_POOL_SECRET_KEY must start with 'S'
 - If STRICT_NETWORK_KEY_CHECK=true, validates horizon URL matches network
 """
+
 import argparse
 import os
 import sys

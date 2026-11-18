@@ -8,6 +8,7 @@ Revision ID: 0021_sla_compute_hash
 Revises: 0020_audit_immutable
 Create Date: 2026-07-29
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa

@@ -50,7 +50,7 @@ def verify_webhook(
     max_skew_seconds: int = MAX_SKEW_SECONDS,
 ) -> bool:
     """Verify a v2 (timestamped) webhook signature and its freshness."""
-    provided_signature = signature_header.removeprefix('sha256=')
+    provided_signature = signature_header.removeprefix("sha256=")
 
     # 1. Freshness: a stale or unparseable timestamp is rejected outright.
     sent_at = datetime.fromisoformat(timestamp_header)
@@ -61,9 +61,7 @@ def verify_webhook(
 
     # 2. Signature over "{timestamp}.{payload}".
     expected_signature = hmac.new(
-        secret.encode(),
-        f"{timestamp_header}.{request_body}".encode(),
-        hashlib.sha256
+        secret.encode(), f"{timestamp_header}.{request_body}".encode(), hashlib.sha256
     ).hexdigest()
 
     return hmac.compare_digest(expected_signature, provided_signature)
@@ -165,6 +163,7 @@ it is checked before the signature is trusted.
 ```python
 from datetime import datetime, timedelta
 
+
 def validate_webhook_freshness(
     webhook_timestamp: str,
     max_age_seconds: int = 3600,  # 1 hour grace period
@@ -173,14 +172,14 @@ def validate_webhook_freshness(
     event_time = datetime.fromisoformat(webhook_timestamp)
     current_time = datetime.utcnow()
     age = (current_time - event_time).total_seconds()
-    
+
     if age > max_age_seconds:
         # Log and reject as suspicious/stale
         return False
     if age < 0:
         # Clock skew or future event
         return False
-    
+
     return True
 ```
 
@@ -195,20 +194,22 @@ Correlate event occurrence time with delivery/processing time:
 ```python
 def audit_webhook_delivery(delivery_record):
     """Create audit trail with timing information."""
-    event_occurred = parse_iso8601(delivery_record['timestamp'])
-    delivery_attempted = delivery_record['created_at']
-    delivery_succeeded = delivery_record['delivered_at']
-    
+    event_occurred = parse_iso8601(delivery_record["timestamp"])
+    delivery_attempted = delivery_record["created_at"]
+    delivery_succeeded = delivery_record["delivered_at"]
+
     latency_seconds = (delivery_attempted - event_occurred).total_seconds()
     processing_time = (delivery_succeeded - delivery_attempted).total_seconds()
-    
-    audit_log({
-        'event_type': delivery_record['event'],
-        'event_occurred': event_occurred,
-        'latency': latency_seconds,
-        'processing_time': processing_time,
-        'delivered': delivery_succeeded is not None,
-    })
+
+    audit_log(
+        {
+            "event_type": delivery_record["event"],
+            "event_occurred": event_occurred,
+            "latency": latency_seconds,
+            "processing_time": processing_time,
+            "delivered": delivery_succeeded is not None,
+        }
+    )
 ```
 
 ## Signature Version Evolution
@@ -233,9 +234,7 @@ The explicit `X-Webhook-Signature-Version` header enables safe algorithm evoluti
 
 3. **Version Migration Example** (the v1 → v2 change actually shipped in #538):
    ```python
-   def sign_payload(
-       secret: str, payload: str, version: int = 2, timestamp: str | None = None
-   ) -> tuple[str, int, str]:
+   def sign_payload(secret: str, payload: str, version: int = 2, timestamp: str | None = None) -> tuple[str, int, str]:
        if version == 1:
            return sign_payload_v1(secret, payload), version, timestamp or ""
        if version == 2:

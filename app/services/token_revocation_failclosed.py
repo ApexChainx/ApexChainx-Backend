@@ -2,7 +2,7 @@
 request instead of silently treating it as 'not revoked'.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 
 class RevocationCheckUnavailable(Exception):

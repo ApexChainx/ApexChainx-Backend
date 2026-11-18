@@ -20,7 +20,6 @@ from app.core.security import require_engineer
 from app.db.session import get_db
 from app.main import app
 from app.models.orm.wallet import WalletORM
-from app.models.wallet import WalletCreateRequest, WalletLinkRequest
 from app.repositories.wallet_repository import WalletRepository, _validate_input
 from app.services.wallet_registry import WalletRegistry
 
@@ -270,7 +269,6 @@ class TestDistributedTracing:
         """create_wallet must have the @traced wrapper applied."""
         # The __wrapped__ attribute is set by functools.wraps, confirming the
         # decorator was applied.  We check the span name via the closure.
-        import inspect
 
         fn = WalletRegistry.create_wallet
         # functools.wraps preserves __wrapped__
@@ -333,8 +331,6 @@ class TestDistributedTracing:
             mock_span.__enter__ = lambda s: s
             mock_span.__exit__ = MagicMock(return_value=False)
             mock_tracer.start_as_current_span.return_value = mock_span
-
-            from app.repositories.wallet_repository import _validate_input
 
             with pytest.raises(ValueError):
                 WalletRegistry.get_wallet(db, "'; DROP TABLE wallets;--")

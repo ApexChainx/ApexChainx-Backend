@@ -18,7 +18,7 @@ from app.models.payment import PaginatedPayments, PaymentTransaction, PaymentTra
 from app.repositories.payment_repository import PaymentRepository
 from app.services.audit_log import audit_log
 from app.services.single_use_token_store import SingleUseTokenStore
-from app.utils.cursor import CursorPage, encode_cursor, decode_cursor
+from app.utils.cursor import decode_cursor
 
 router = APIRouter()
 
@@ -168,6 +168,134 @@ def payments_ping():
     return {"message": "payments ok"}
 
 
+class PaymentRetryQueueItem(BaseModel):
+    """A payment in the retry queue with backoff metadata."""
+
+    id: str
+    transaction_hash: str
+    type: str
+    amount: float
+    status: str
+    outage_id: str
+    attempt_count: int
+    next_retry_at: datetime | None
+    backoff_seconds: int
+    created_at: datetime
+    last_retried_at: datetime | None
+
+
+class ProviderCallbackRequest(BaseModel):
+    transaction_id: str
+    status: str
+    provider_ref: str | None = None
+    # BE-028 / #264: callers MUST supply a per-request nonce for replay
+    # protection. The nonce must be unique within the
+    # CALLBACK_NONCE_TTL_SECONDS window; nonce-less callbacks are rejected
+    # with a dedicated 400 error.
+    nonce: str | None = None
+
+
+def _verify_callback_signature(
+    transaction_id: str,
+    status: str,
+    nonce: str | None,
+    signature: str,
+    secret: str,
+) -> bool:
+    """HMAC-SHA256 verification.
+
+    Canonical message: ``<transaction_id>:<status>:<nonce>``
+    Including the nonce in the signed payload binds the signature to this
+    specific request so that replaying a captured (signature, payload) pair
+    against a different nonce produces a different expected signature.
+    """
+    message = f"{transaction_id}:{status}:{nonce or ''}"
+    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@router.get("/retry-queue", response_model=list[PaymentRetryQueueItem])
+def list_retry_queue(
+    cursor: str | None = Query(default=None, description="Cursor for pagination."),
+    limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
+    current_user=Depends(require_engineer),
+    db: Session = Depends(get_db),
+):
+    """Return payments eligible for retry with computed backoff metadata.
+
+    Supports cursor-based pagination. The cursor encodes
+    ``(created_at, id)`` of the last item on the previous page.
+    """
+    repo = PaymentRepository(db)
+    items, _ = repo.list(status="failed")
+
+    decoded = decode_cursor(cursor)
+    if decoded is not None:
+        cursor_id, cursor_created_at_str = decoded
+        items = [p for p in items if (p.created_at.isoformat(), p.id) < (cursor_created_at_str, cursor_id)]
+
+    page_items = items[:limit]
+
+    result: list[PaymentRetryQueueItem] = []
+    for p in page_items:
+        next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
+        backoff = min(_RETRY_BASE_SECONDS * (2**p.retry_count), _RETRY_MAX_SECONDS)
+        result.append(
+            PaymentRetryQueueItem(
+                id=p.id,
+                transaction_hash=p.transaction_hash,
+                type=p.type,
+                amount=p.amount,
+                status=p.status,
+                outage_id=p.outage_id,
+                attempt_count=p.retry_count,
+                next_retry_at=next_at,
+                backoff_seconds=backoff,
+                created_at=p.created_at,
+                last_retried_at=p.last_retried_at,
+            )
+        )
+
+    return result
+
+
+@router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
+def retry_now(
+    transaction_id: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: trigger an immediate retry, bypassing exponential backoff."""
+    repo = PaymentRepository(db)
+    existing = repo.get(transaction_id)
+    if not existing:
+        raise CodedHTTPException(status_code=404, detail="Payment not found")
+    try:
+        payment = repo.retry(transaction_id)
+    except PaymentTransitionError as exc:
+        raise CodedHTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "current_status": exc.current,
+                "requested_status": exc.next_status,
+                "allowed_transitions": list(exc.allowed),
+            },
+        )
+    if not payment:
+        raise CodedHTTPException(status_code=409, detail="Max retries reached")
+    audit_log.log(
+        "payment_retried",
+        {
+            "id": transaction_id,
+            "retry_count": payment.retry_count,
+            "actor": current_user.email,
+            "override": True,
+        },
+    )
+    return payment
+
+
 @router.get("/{transaction_id}/history", response_model=list[dict[str, Any]])
 def get_payment_history(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
     repo = PaymentRepository(db)
@@ -285,145 +413,11 @@ _RETRY_MAX_SECONDS = 3600
 
 def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -> datetime | None:
     """Return the datetime when the next retry should occur, or None if at max."""
-    if retry_count >= PaymentRepository.MAX_RETRIES:
+    if retry_count == PaymentRepository.MAX_RETRIES:
         return None
     delay = min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
     anchor = last_retried_at or datetime.now(UTC)
     return anchor + timedelta(seconds=delay)
-
-
-class PaymentRetryQueueItem(BaseModel):
-    """A payment in the retry queue with backoff metadata."""
-
-    id: str
-    transaction_hash: str
-    type: str
-    amount: float
-    status: str
-    outage_id: str
-    attempt_count: int
-    next_retry_at: datetime | None
-    backoff_seconds: int
-    created_at: datetime
-    last_retried_at: datetime | None
-
-
-@router.get("/retry-queue", response_model=CursorPage)
-def list_retry_queue(
-    cursor: str | None = Query(default=None, description="Cursor for pagination."),
-    limit: int = Query(default=20, ge=1, le=100, description="Max items per page."),
-    current_user=Depends(require_engineer),
-    db: Session = Depends(get_db),
-):
-    """Return payments eligible for retry with computed backoff metadata.
-
-    Supports cursor-based pagination. The cursor encodes
-    ``(created_at, id)`` of the last item on the previous page.
-    """
-    repo = PaymentRepository(db)
-    items, _ = repo.list(status="failed")
-
-    decoded = decode_cursor(cursor)
-    if decoded is not None:
-        cursor_id, cursor_created_at_str = decoded
-        items = [p for p in items if (p.created_at.isoformat(), p.id) < (cursor_created_at_str, cursor_id)]
-
-    page_items = items[:limit]
-    has_more = len(items) > limit
-
-    result: list[PaymentRetryQueueItem] = []
-    for p in page_items:
-        next_at = _compute_next_retry_at(p.retry_count, p.last_retried_at)
-        backoff = min(_RETRY_BASE_SECONDS * (2**p.retry_count), _RETRY_MAX_SECONDS)
-        result.append(
-            PaymentRetryQueueItem(
-                id=p.id,
-                transaction_hash=p.transaction_hash,
-                type=p.type,
-                amount=p.amount,
-                status=p.status,
-                outage_id=p.outage_id,
-                attempt_count=p.retry_count,
-                next_retry_at=next_at,
-                backoff_seconds=backoff,
-                created_at=p.created_at,
-                last_retried_at=p.last_retried_at,
-            )
-        )
-
-    next_cursor = None
-    if has_more and result:
-        last = result[-1]
-        next_cursor = encode_cursor(last.id, last.created_at.isoformat())
-
-    return CursorPage(items=result, next_cursor=next_cursor, has_more=has_more)
-
-
-@router.post("/retry-queue/{transaction_id}/retry", response_model=PaymentTransaction)
-def retry_now(
-    transaction_id: str,
-    current_user=Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin endpoint: trigger an immediate retry, bypassing exponential backoff."""
-    repo = PaymentRepository(db)
-    existing = repo.get(transaction_id)
-    if not existing:
-        raise CodedHTTPException(status_code=404, detail="Payment not found")
-    try:
-        payment = repo.retry(transaction_id)
-    except PaymentTransitionError as exc:
-        raise CodedHTTPException(
-            status_code=422,
-            detail={
-                "message": str(exc),
-                "current_status": exc.current,
-                "requested_status": exc.next_status,
-                "allowed_transitions": list(exc.allowed),
-            },
-        )
-    if not payment:
-        raise CodedHTTPException(status_code=409, detail="Max retries reached")
-    audit_log.log(
-        "payment_retried",
-        {
-            "id": transaction_id,
-            "retry_count": payment.retry_count,
-            "actor": current_user.email,
-            "override": True,
-        },
-    )
-    return payment
-
-
-class ProviderCallbackRequest(BaseModel):
-    transaction_id: str
-    status: str
-    provider_ref: str | None = None
-    # BE-028 / #264: callers MUST supply a per-request nonce for replay
-    # protection. The nonce must be unique within the
-    # CALLBACK_NONCE_TTL_SECONDS window; nonce-less callbacks are rejected
-    # with a dedicated 400 error.
-    nonce: str | None = None
-
-
-def _verify_callback_signature(
-    transaction_id: str,
-    status: str,
-    nonce: str | None,
-    signature: str,
-    secret: str,
-) -> bool:
-    """HMAC-SHA256 verification.
-
-    Canonical message: ``<transaction_id>:<status>:<nonce>``
-    Including the nonce in the signed payload binds the signature to this
-    specific request so that replaying a captured (signature, payload) pair
-    against a different nonce produces a different expected signature.
-    """
-    message = f"{transaction_id}:{status}:{nonce or ''}"
-    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
 
 
 @router.post("/provider-callback", response_model=PaymentTransaction)
@@ -491,20 +485,19 @@ def provider_callback(
             )
             raise CodedHTTPException(status_code=401, detail="Invalid webhook signature")
 
-    if effective_nonce:
-        if _is_replay(effective_nonce):
-            audit_log.log(
-                "callback_rejected_replay",
-                {
-                    "transaction_id": payload.transaction_id,
-                    "nonce": effective_nonce,
-                    "provider_ref": payload.provider_ref,
-                },
-            )
-            raise CodedHTTPException(
-                status_code=409,
-                detail="Duplicate callback nonce – possible replay attack",
-            )
+    if effective_nonce and _is_replay(effective_nonce):
+        audit_log.log(
+            "callback_rejected_replay",
+            {
+                "transaction_id": payload.transaction_id,
+                "nonce": effective_nonce,
+                "provider_ref": payload.provider_ref,
+            },
+        )
+        raise CodedHTTPException(
+            status_code=409,
+            detail="Duplicate callback nonce – possible replay attack",
+        )
 
     repo = PaymentRepository(db)
     existing = repo.get(payload.transaction_id)

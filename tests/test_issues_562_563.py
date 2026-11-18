@@ -157,9 +157,9 @@ class TestWebhookUniqueness:
                 patch(
                     "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
                 ),
+                TestClient(app, raise_server_exceptions=False) as c,
             ):
-                with TestClient(app, raise_server_exceptions=False) as c:
-                    resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
+                resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
         finally:
             _inner_app.dependency_overrides.pop(get_db, None)
 
@@ -194,9 +194,9 @@ class TestWebhookUniqueness:
                 patch(
                     "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
                 ),
+                TestClient(app, raise_server_exceptions=False) as c,
             ):
-                with TestClient(app, raise_server_exceptions=False) as c:
-                    resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
+                resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
         finally:
             _inner_app.dependency_overrides.pop(get_db, None)
 
@@ -224,9 +224,9 @@ class TestWebhookUniqueness:
                 patch(
                     "app.api.v1.endpoints.webhooks._enforce_webhook_registration_cap",
                 ),
+                TestClient(app, raise_server_exceptions=False) as c,
             ):
-                with TestClient(app, raise_server_exceptions=False) as c:
-                    resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
+                resp = c.post(CREATE_URL, json=VALID_PAYLOAD)
         finally:
             _inner_app.dependency_overrides.pop(get_db, None)
 

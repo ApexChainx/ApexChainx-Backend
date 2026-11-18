@@ -37,14 +37,18 @@ class ApexNotFoundError(ApexException):
     """Resource not found (404)."""
 
     def __init__(self, detail: str = "Resource not found.", **kwargs: Any) -> None:
-        super().__init__(detail=detail, error_code="not_found", status_code=404, **kwargs)
+        kwargs.setdefault("error_code", "not_found")
+        kwargs.setdefault("status_code", 404)
+        super().__init__(detail=detail, **kwargs)
 
 
 class ApexTransientError(ApexException):
     """Transient / retryable error (503 by default)."""
 
     def __init__(self, detail: str = "A transient error occurred.", **kwargs: Any) -> None:
-        super().__init__(detail=detail, error_code="transient_error", status_code=503, **kwargs)
+        kwargs.setdefault("error_code", "transient_error")
+        kwargs.setdefault("status_code", 503)
+        super().__init__(detail=detail, **kwargs)
 
 
 class ApexConflictError(ApexException):

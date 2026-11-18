@@ -5,7 +5,7 @@ naive datetimes, and ISO strings for the same sort key, which can raise
 TypeError or silently drop rows when compared directly.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Union
 
 CursorKey = Union[str, datetime]
@@ -17,6 +17,6 @@ def normalize_cursor_key(value: CursorKey) -> str:
         return value
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat()
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).isoformat()
     raise TypeError(f"Unsupported cursor key type: {type(value)!r}")

@@ -199,7 +199,8 @@ def get_current_traceparent() -> str | None:
     # flags. The flags field used to be prefixed with an extra "0", which made
     # the header 3 characters wide and invalid, so receivers silently dropped
     # the context instead of continuing the trace.
-    return f"00-{span_context.trace_id:032x}-{span_context.span_id:016x}-{span_context.trace_flags:02x}"
+    flags = 1 if span_context.trace_flags.sampled else 0
+    return f"00-{span_context.trace_id:032x}-{span_context.span_id:016x}-{flags:02x}"
 
 
 def traced(name: str | None = None, attributes: dict[str, Any] | None = None):

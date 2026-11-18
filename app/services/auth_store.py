@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -72,7 +71,7 @@ class AuthStore:
 
         if not validate_password_policy(payload.password):
             raise ValueError(
-                "Password does not meet policy requirements (min 8 chars, " "uppercase, lowercase, digit, special char)"
+                "Password does not meet policy requirements (min 8 chars, uppercase, lowercase, digit, special char)"
             )
 
         hashed_password = get_password_hash(payload.password)
@@ -107,7 +106,7 @@ class AuthStore:
 
         if not validate_password_policy(password):
             raise ValueError(
-                "Password does not meet policy requirements (min 8 chars, " "uppercase, lowercase, digit, special char)"
+                "Password does not meet policy requirements (min 8 chars, uppercase, lowercase, digit, special char)"
             )
 
         hashed_password = get_password_hash(password)

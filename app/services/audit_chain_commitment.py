@@ -3,7 +3,7 @@ retention pruning of older JSONL archive chunks.
 """
 
 import hashlib
-from typing import Iterable
+from collections.abc import Iterable
 
 
 def compute_chunk_root(entry_hashes: Iterable[str]) -> str:

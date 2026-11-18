@@ -19,8 +19,8 @@ from app.main import app
 from app.repositories.tx_indexer_repository import TxIndexerRepository
 from app.services.tx_indexer import IndexedTransaction, TxIndexerRecordError
 from app.services.tx_indexer_input import (
-    TxIndexFilters,
     TxIndexerValidationError,
+    TxIndexFilters,
     sanitize_account,
     sanitize_asset_code,
     sanitize_bound,
@@ -257,7 +257,6 @@ def repo_calls(monkeypatch):
 
     def fake_get(self, transaction_hash):
         calls["get"] = {"transaction_hash": transaction_hash}
-        return None
 
     monkeypatch.setattr(TxIndexerRepository, "list_indexed", fake_list)
     monkeypatch.setattr(TxIndexerRepository, "get_by_hash", fake_get)

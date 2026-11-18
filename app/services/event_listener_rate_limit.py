@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from threading import Lock
 
 from redis import Redis
@@ -41,7 +42,9 @@ class EventRateLimiter:
         *,
         limit: int | None = None,
         window_seconds: int | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
+        self._clock = clock or time.monotonic
         self._redis = redis_client
         self._limit = limit if limit is not None else settings.EVENT_LISTENER_RATE_LIMIT_PER_SUBSCRIBER
         self._window = (
@@ -60,7 +63,7 @@ class EventRateLimiter:
 
     def _allow_local(self, subscriber_id: str) -> bool:
         """Sliding-window check against the in-process counter."""
-        now = time.monotonic()
+        now = self._clock()
         window_start = now - self._window
         with self._lock:
             hits = [stamp for stamp in self._hits[subscriber_id] if stamp > window_start]
@@ -136,7 +139,7 @@ class EventRateLimiter:
             if not hits:
                 return 0
             oldest = min(hits)
-            remaining = self._window - (time.monotonic() - oldest)
+            remaining = self._window - (self._clock() - oldest)
             return max(0, int(remaining) + 1)
 
     def cull_expired(self, now: float | None = None) -> int:
@@ -149,7 +152,7 @@ class EventRateLimiter:
         Returns:
             The number of subscribers removed.
         """
-        current = now if now is not None else time.monotonic()
+        current = now if now is not None else self._clock()
         window_start = current - self._window
         with self._lock:
             expired = [

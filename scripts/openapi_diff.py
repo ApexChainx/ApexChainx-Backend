@@ -11,6 +11,7 @@ Exits 1 and prints a diff when the live schema has drifted from the snapshot.
 To update the snapshot after an intentional schema change:
     make openapi-update
 """
+
 from __future__ import annotations
 
 import json
@@ -60,8 +61,7 @@ def diff_lines(snapshot_text: str, live_text: str) -> list[str]:
 def main() -> int:
     if not SNAPSHOT_PATH.exists():
         print(
-            f"ERROR: Snapshot file not found at {SNAPSHOT_PATH}\n"
-            "Run `make openapi-update` to generate it.",
+            f"ERROR: Snapshot file not found at {SNAPSHOT_PATH}\nRun `make openapi-update` to generate it.",
             file=sys.stderr,
         )
         return 1

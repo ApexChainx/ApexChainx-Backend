@@ -7,6 +7,7 @@ Revision ID: 0017_audit_chain
 Revises: 0016_outage_event_schema_version
 Create Date: 2026-07-28
 """
+
 import hashlib
 import json
 
@@ -28,10 +29,7 @@ def upgrade() -> None:
 
     connection = op.get_bind()
     rows = connection.execute(
-        sa.text(
-            "SELECT id, event_type, details, correlation_id, created_at "
-            "FROM audit_logs ORDER BY id ASC"
-        )
+        sa.text("SELECT id, event_type, details, correlation_id, created_at FROM audit_logs ORDER BY id ASC")
     ).fetchall()
 
     prev_hash = None
@@ -55,9 +53,7 @@ def upgrade() -> None:
             ).encode()
         ).hexdigest()
         connection.execute(
-            sa.text(
-                "UPDATE audit_logs SET prev_hash = :prev, entry_hash = :hash WHERE id = :id"
-            ),
+            sa.text("UPDATE audit_logs SET prev_hash = :prev, entry_hash = :hash WHERE id = :id"),
             {"prev": prev_hash, "hash": entry_hash, "id": row.id},
         )
         prev_hash = entry_hash

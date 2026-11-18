@@ -9,6 +9,7 @@ Revises: 0016_webhook_sig_versioning
 Depends on: 0016_outage_event_schema_version
 Create Date: 2026-07-28
 """
+
 from alembic import op
 
 revision = "0020_audit_immutable"

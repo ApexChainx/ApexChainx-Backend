@@ -3,21 +3,28 @@
 Validates HTTP response shapes and audit logging for governance operations.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.security import require_admin
 from app.main import app
-
 
 client = TestClient(app)
 
 
 @pytest.fixture
 def admin_headers():
-    """Bypass auth for testing — return minimal headers that pass require_admin."""
-    return {}
+    """Substitute an authenticated admin identity for require_admin."""
+
+    def _fake_admin():
+        return SimpleNamespace(email="admin@example.com", id="user_admin", role="admin")
+
+    app.dependency_overrides[require_admin] = _fake_admin
+    yield {}
+    app.dependency_overrides.pop(require_admin, None)
 
 
 class TestProposeAdminEndpoint:

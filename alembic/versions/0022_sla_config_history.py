@@ -7,6 +7,7 @@ Revision ID: 0022_sla_config_history
 Revises: 0021_sla_compute_hash
 Create Date: 2026-07-29
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa

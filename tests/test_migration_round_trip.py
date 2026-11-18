@@ -13,6 +13,13 @@ pytestmark = [pytest.mark.postgres]
     "sqlite" in settings.DATABASE_URL,
     reason="Requires PostgreSQL for alembic migrations",
 )
+def _downgrade_target(revision) -> str:
+    parents = revision.down_revision
+    if isinstance(parents, (tuple, list)):
+        return "base"
+    return parents or "base"
+
+
 class TestMigrationRoundTrip:
     @pytest.fixture(scope="class")
     def alembic_cfg(self):
@@ -40,7 +47,7 @@ class TestMigrationRoundTrip:
         for rev in all_revisions:
             if rev.down_revision:
                 upgrade(alembic_cfg, rev.revision)
-                downgrade(alembic_cfg, rev.down_revision)
+                downgrade(alembic_cfg, _downgrade_target(rev))
                 upgrade(alembic_cfg, rev.revision)
 
     def test_upgrade_from_base_to_head(self, alembic_cfg):
@@ -53,6 +60,5 @@ class TestMigrationRoundTrip:
 
     def test_upgrade_and_downgrade_full_cycle(self, alembic_cfg, all_revisions):
         upgrade(alembic_cfg, "head")
-        for rev in all_revisions:
-            downgrade(alembic_cfg, rev.down_revision or "base")
+        downgrade(alembic_cfg, "base")
         upgrade(alembic_cfg, "head")

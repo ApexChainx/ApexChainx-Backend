@@ -72,9 +72,7 @@ def _dlq_depth(engine: Engine, warn_threshold: int = 1000) -> ComponentStatus:
             # large DLQ does not add full-table-scan load on every probe.
             result = conn.execute(
                 text(
-                    "SELECT COUNT(*) FROM ("
-                    "SELECT 1 FROM webhook_deliveries WHERE status = 'DEAD_LETTER' LIMIT :cap"
-                    ") t"
+                    "SELECT COUNT(*) FROM (SELECT 1 FROM webhook_deliveries WHERE status = 'DEAD_LETTER' LIMIT :cap) t"
                 ),
                 {"cap": warn_threshold + 1},
             )
