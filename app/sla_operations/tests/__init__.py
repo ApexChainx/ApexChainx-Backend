@@ -1,1 +1,1 @@
-"""Tests for the SLA operations workspace."""
+"""Tests for isolated SLA operations workspace helpers."""
