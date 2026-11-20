@@ -42,3 +42,10 @@ This package is the dedicated, project-specific contribution area for the ApexCh
 - Keep modules deterministic, typed, and testable.
 - Do not introduce breaking changes to existing routed API behavior.
 - Preserve security practices (no secrets in code/logs, validate inputs, respect auditability).
+
+## SLA metrics aggregation
+
+`services/sla_metrics_aggregation.py` provides a pure, database-independent
+aggregation service. It accepts dictionaries or objects with `status`,
+`mttr_minutes`, and `amount` fields and returns total outages, violation rate,
+average MTTR, and payout sum.
