@@ -1,1 +1,1 @@
-"""Deterministic sample data for SLA operations tests and demos."""
+"""Reusable sample data for SLA operations workspace tests."""
