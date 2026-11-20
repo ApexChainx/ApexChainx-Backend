@@ -1,1 +1,1 @@
-"""SLA operations workspace services."""
+"""Service helpers for the SLA operations workspace."""

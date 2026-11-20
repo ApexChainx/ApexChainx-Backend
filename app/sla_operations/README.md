@@ -25,6 +25,14 @@ This package is the dedicated, project-specific contribution area for the ApexCh
 - `tests/` or colocated `test_*.py` – tests for contributed modules
 - `docs/` – module-level documentation
 
+## API scaffolding
+`api/router.py` exposes an aggregate router factory for composing workspace-owned
+subrouters. The module-level `router` is intentionally not wired into the core
+application; maintainers can compose subrouters and integrate it later.
+`api/dependencies.py` resolves services registered on
+`app.state.sla_operations_services`, while `api/responses.py` and
+`api/request_parsing.py` provide typed response and request-parameter helpers.
+
 ## Contributor workflow
 1. Select an assigned issue scoped to `app/sla_operations/`.
 2. Create a branch: `feat/issue-<number>-short-description` or `fix/issue-<number>-short-description`.
