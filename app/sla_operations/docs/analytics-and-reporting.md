@@ -37,3 +37,64 @@ touching the core FastAPI application.
 
 Every path in this document is relative to `app/sla_operations/` unless stated
 otherwise.
+
+## Analytics query flow
+
+`schemas/analytics_queries.py` is the entry contract. Callers submit an
+`AnalyticsQueryParams` model and receive an `AnalyticsAggregateResponse`; the
+workspace does not read the clock or database while validating.
+
+### Request expectations
+
+- `period_start` and `period_end` must both be timezone-aware, and the end must
+  be strictly after the start. The span may not exceed `MAX_QUERY_RANGE_DAYS`
+  (366 days).
+- `granularity` is one of `hour`, `day`, `week`, `month`.
+- `metrics` must contain 1 to `MAX_METRICS_PER_QUERY` (10) unique values from
+  `outage_count`, `violation_count`, `availability_percentage`, `mttr_minutes`,
+  `penalty_amount`, and `reward_amount`. Monetary metrics are expressed in
+  **major currency units**, never minor units.
+- `group_by` is optional (`severity`, `site_id`, or `status`). Ungrouped buckets
+  carry `dimension_value = null`.
+- `site_ids` holds at most `MAX_SITE_IDS_PER_QUERY` (100) unique non-blank
+  identifiers; `severities` holds unique values from `critical`, `high`,
+  `medium`, and `low`.
+- `order_by` is `bucket_start` or `sample_count`; `sort_direction` is `asc` or
+  `desc`. `limit` is 1 to `MAX_BUCKETS_PER_PAGE` (1000) and `offset` is
+  non-negative.
+- `include_partial` opts in to buckets whose period has not closed yet. Unknown
+  fields are rejected (`extra="forbid"`).
+
+Example request payload:
+
+```json
+{
+  "period_start": "2026-01-01T00:00:00Z",
+  "period_end": "2026-01-08T00:00:00Z",
+  "granularity": "day",
+  "metrics": ["outage_count", "mttr_minutes"],
+  "group_by": "severity",
+  "order_by": "bucket_start",
+  "sort_direction": "asc",
+  "limit": 50,
+  "offset": 0,
+  "include_partial": false
+}
+```
+
+### Bucket and response expectations
+
+Each `AnalyticsBucket` has aware `bucket_start`/`bucket_end` with end after
+start, an optional `dimension_value`, a `metric_values` map whose values are
+non-negative numbers, and a non-negative `sample_count` of source records.
+
+`AnalyticsAggregateResponse` enforces the pagination contract:
+
+- `returned_buckets` equals `len(buckets)` and never exceeds `total_buckets`.
+- A page never has more buckets than `query.limit`.
+- The sum of returned `sample_count` values never exceeds `total_records`.
+- `totals` contains every requested metric, and buckets contain only requested
+  metrics.
+- `has_more` is exactly `query.offset + returned_buckets < total_buckets`.
+- `generated_at` is timezone-aware; callers should generate it at the boundary
+  so the aggregation itself stays deterministic.
