@@ -153,3 +153,72 @@ ratios), rounded to four decimals, and are `0.0` for an empty dataset.
 `services/sla_metrics_aggregation_kpis.py` derives presentation-ready KPIs from
 the same aggregation inputs. Keep new KPI helpers in this module rather than
 adding presentation logic to the core aggregation service.
+
+## Export flow
+
+Export requests and artifact metadata live in `schemas/exports.py`; the
+deterministic rendering pipeline lives in `services/export_preparation.py`.
+
+### Request validation
+
+`ExportRequest` accepts a `resource` (`outages`, `timeline_events`,
+`sla_results`, `disputes`, `payments`, `annotations`), a `format` (`csv`, `json`,
+`xlsx`, `pdf`), and optional filters, field projection, date bounds, a metadata
+flag, and a `requested_by` identifier.
+
+- `filters` may contain at most `MAX_FILTER_KEYS` (50) keys and no blank keys.
+  Keys are service-defined exact-match filters.
+- `fields` may contain at most `MAX_FIELDS` (100) entries. An empty list is
+  invalid; omit the field to export all available columns.
+- `date_from` and `date_to` must be timezone-aware, are normalized to UTC, and
+  `date_from` may not be after `date_to`.
+- `requested_by` is an audit identifier, not an authorization credential. Do not
+  place secrets in filters or fields.
+
+### Preparing a dataset
+
+`prepare_export_dataset()` (aliased as `prepare_export`) accepts mappings,
+Pydantic-style objects with `model_dump()`, or plain attribute objects.
+Behavior worth relying on:
+
+- Column order is explicit when `columns` is supplied, otherwise it follows
+  first appearance across records. Blank, excluded, and duplicate keys are
+  skipped.
+- `sort_by` produces a stable total ordering across booleans, finite numbers,
+  and normalized strings; `descending` reverses it. `max_rows` is applied
+  **after** sorting and must be non-negative.
+- `None` becomes an empty string, enums unwrap to their values, dates and
+  datetimes use ISO-8601, nested containers become compact sorted-key JSON,
+  bytes decode as UTF-8 with replacement, and non-finite floats/`Decimal`
+  values become strings.
+- `ExportDataset` exposes `headers`, `row_count`, `to_records()`, `to_csv()`
+  (LF line endings), `to_json()`, and `to_dict()`.
+
+### Artifact metadata and job status
+
+`ExportArtifact` carries a filename, content type, byte size, a 64-character
+hex SHA-256 digest of the artifact bytes, an opaque `storage_key`, and aware
+`generated_at`/`expires_at` timestamps normalized to UTC. Expiry may not precede
+generation. `storage_key` must never be a signed download URL or credential.
+
+`ExportResponse` tracks `pending`, `processing`, `completed`, `failed`, or
+`expired` jobs. A `completed` job requires an artifact; a `failed` job requires
+an error message of at most `MAX_ERROR_LENGTH` (1000) characters;
+`completed_at` may not precede `requested_at`.
+
+## Integration notes for contributors
+
+1. Add new analytics or report helpers under `services/` with matching schemas
+   in `schemas/` and focused tests in `tests/`.
+2. Keep helpers deterministic: no wall-clock reads, database sessions, or
+   application state inside the workspace service layer. Pass timestamps and
+   records in from the caller.
+3. Prefer additive changes. Do not alter core endpoints, ORM models, or
+   migrations for a workspace-only feature.
+4. If an HTTP surface is needed, define a workspace subrouter and compose it
+   with `api/router.py::create_workspace_router()`; core router inclusion is a
+   maintainer decision.
+5. Reuse `fixtures/` samples for representative inputs and cover edge cases
+   (empty inputs, unknown labels, reversed ranges, maximum bounds).
+6. Run the repository's lint/format/type/test checks before opening a PR, even
+   though this document does not prescribe tool versions.
