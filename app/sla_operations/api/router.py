@@ -4,6 +4,13 @@ from collections.abc import Sequence
 
 from fastapi import APIRouter
 
+from app.sla_operations.api import (
+    bulk_validation_router,
+    health_indicators_router,
+    timeline_router,
+    webhook_monitoring_router,
+)
+
 
 def create_workspace_router(
     *subrouters: APIRouter,
@@ -17,4 +24,9 @@ def create_workspace_router(
     return aggregate
 
 
-router = create_workspace_router()
+router = create_workspace_router(
+    timeline_router.router,
+    webhook_monitoring_router.router,
+    bulk_validation_router.router,
+    health_indicators_router.router,
+)
