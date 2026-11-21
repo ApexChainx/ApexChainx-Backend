@@ -98,3 +98,58 @@ non-negative numbers, and a non-negative `sample_count` of source records.
 - `has_more` is exactly `query.offset + returned_buckets < total_buckets`.
 - `generated_at` is timezone-aware; callers should generate it at the boundary
   so the aggregation itself stays deterministic.
+
+## Report aggregation flows
+
+The reporting services are pure transforms over caller-supplied records. They
+never open a session, read application state, or mutate their inputs, so the same
+records always produce the same report.
+
+### SLA metrics rollup
+
+`SLAMetricsAggregationService.aggregate()` (aliased as
+`SlaMetricsAggregationService`, with `aggregate_sla_metrics()` as the
+function-style entry point) accepts mappings or attribute objects with:
+
+- `status` — non-blank string; `violated`, `breached`, and `violation` count as
+  violations (case-insensitive, trimmed).
+- `mttr_minutes` — finite number that must not be negative.
+- `amount` — finite number, treated as a major-unit payout.
+
+The result `SLAMetricsAggregation` exposes `total_outages`, `violation_rate`,
+`avg_mttr`, and `payout_sum`. Rates are rounded to four decimals; averages and
+payout sums to two. An empty input yields all zeroes. Missing fields, booleans
+in numeric positions, negative MTTR, non-finite numbers, `None`, strings, and
+mappings passed as the record collection are rejected with clear errors.
+`to_dict()` and `model_dump()` provide serialization for downstream consumers.
+
+### MTTR analysis
+
+`analyze_outage_mttr()` in `services/outage_mttr_analysis.py` accepts
+`OutageMTTRRecord` instances or mappings. MTTR can be supplied directly as
+`mttr_minutes` or derived from `detected_at`/`resolved_at`; naive timestamps are
+treated as UTC. The `granularity` argument accepts `day`, `week`, or `month`
+and falls back to `day`; invalid samples are excluded and counted in
+`exclusion_reasons` rather than silently corrupting the summary.
+
+Outputs include `MTTRSummary` (count, mean, median, min, max, p90, p95),
+band counts for `<=15`, `<=30`, `<=60`, `<=120`, `>120`, a per-severity
+breakdown, an ordered trend series, and unresolved/excluded record counts. All
+numeric outputs honor the `precision` argument (default 2).
+
+### Severity distribution
+
+`compute_severity_distribution()` in
+`services/severity_distribution_report.py` normalizes labels by trimming and
+lower-casing. Blank or non-string severity/status values go to `unknown`.
+Canonical severities (`critical`, `high`, `medium`, `low`, `unknown`) and
+statuses (`open`, `resolved`, `unknown`) are always present with zero values;
+extra observed labels are appended in sorted order. Ratios are counts over the
+total processed rows (or over a severity bucket for per-severity status
+ratios), rounded to four decimals, and are `0.0` for an empty dataset.
+
+### KPI views
+
+`services/sla_metrics_aggregation_kpis.py` derives presentation-ready KPIs from
+the same aggregation inputs. Keep new KPI helpers in this module rather than
+adding presentation logic to the core aggregation service.
