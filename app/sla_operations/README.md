@@ -57,3 +57,9 @@ application; maintainers can compose subrouters and integrate it later.
 aggregation service. It accepts dictionaries or objects with `status`,
 `mttr_minutes`, and `amount` fields and returns total outages, violation rate,
 average MTTR, and payout sum.
+
+## Documentation
+
+- `docs/analytics-and-reporting.md` – analytics query contracts, report
+  aggregation flows, export pipeline, data expectations, and integration
+  boundaries for workspace contributors.
