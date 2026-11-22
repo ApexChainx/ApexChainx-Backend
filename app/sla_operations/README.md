@@ -57,3 +57,19 @@ application; maintainers can compose subrouters and integrate it later.
 aggregation service. It accepts dictionaries or objects with `status`,
 `mttr_minutes`, and `amount` fields and returns total outages, violation rate,
 average MTTR, and payout sum.
+
+## Pagination service
+
+`services/pagination_service.py` paginates and slices in-memory collections
+(lists, tuples, ranges, generators) without touching the database. It reuses
+`schemas/pagination.py` and returns `PaginatedResult`/`CursorPage` envelopes:
+
+- `paginate(items, params)` – offset pagination with consistent `PageMeta`.
+- `normalize_pagination(page, page_size)` – lenient clamping of untrusted values.
+- `slice_page(items, page, page_size)` – just the items of one page.
+- `paginate_cursor(items, params)` – opaque offset cursors; a malformed cursor
+  raises `InvalidCursorError` (a `ValueError`).
+- `total_pages(total, page_size)` – page count helper.
+
+Empty or invalid collections give an empty page, and a page past the end returns no
+items with `has_more=False`.

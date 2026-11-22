@@ -1,207 +1,208 @@
-"""Settlement reports router for the SLA operations workspace.
+"""Workspace-local router module for SLA operations settlement reports.
 
-This module exposes a small, self-contained FastAPI router that serves
-deterministic, in-memory settlement report summaries. It is intentionally
-isolated from the core application routers and does not import ``app.main``
-or any maintainer-owned modules. It reuses the workspace-local schemas and
-response/error helpers so that behavior stays consistent with the rest of the
-SLA operations workspace.
+This module provides an isolated, integration-ready FastAPI router for
+settlement breakdown/report endpoints. It is intentionally *not* wired into
+``app/api/v1/router.py`` or ``app/main.py``; maintainers may register it later.
+
+Design notes
+------------
+* All handlers are read-only and side-effect free.
+* Responses are deterministic for sample inputs by relying on fixture data
+  exposed through the workspace service layer.
+* Inputs/outputs are validated via explicit Pydantic schemas from
+  ``app.sla_operations.schemas.settlement_reports``.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, FastAPI, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, status
 
-from app.sla_operations.api.error_mapping import to_http_exception
-from app.sla_operations.api.responses import success_response
 from app.sla_operations.schemas.settlement_reports import (
-    SettlementReportFilter,
-    SettlementReportRow,
-    SettlementSummaryEnvelope,
+    SettlementBreakdownItem,
+    SettlementBreakdownResponse,
+    SettlementReportListResponse,
+    SettlementReportQuery,
+    SettlementReportSummary,
 )
+from app.sla_operations.services import settlement_breakdown as settlement_service
 
 router = APIRouter(
     prefix="/settlement-reports",
-    tags=["sla-operations", "settlement-reports"],
+    tags=["SLA Operations Settlement Reports"],
 )
 
 
-# ---------------------------------------------------------------------------
-# Deterministic in-memory data source
-# ---------------------------------------------------------------------------
+def _build_breakdown_response(
+    query: SettlementReportQuery,
+) -> SettlementBreakdownResponse:
+    """Build a deterministic breakdown response for the given query.
 
-# A fixed reference "now" keeps generated timestamps deterministic across runs.
-_REFERENCE_NOW = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-
-# Static, deterministic rows used to build settlement summaries. Each row is
-# keyed by a stable identifier so filtering produces predictable output.
-_IN_MEMORY_ROWS: List[SettlementReportRow] = [
-    SettlementReportRow(
-        settlement_id="stl-0001",
-        account_id="acct-alpha",
-        asset_code="XLM",
-        amount=Decimal("100.0000000"),
-        status="settled",
-        created_at=_REFERENCE_NOW,
-    ),
-    SettlementReportRow(
-        settlement_id="stl-0002",
-        account_id="acct-alpha",
-        asset_code="USDC",
-        amount=Decimal("250.5000000"),
-        status="pending",
-        created_at=_REFERENCE_NOW,
-    ),
-    SettlementReportRow(
-        settlement_id="stl-0003",
-        account_id="acct-beta",
-        asset_code="XLM",
-        amount=Decimal("42.0000000"),
-        status="settled",
-        created_at=_REFERENCE_NOW,
-    ),
-    SettlementReportRow(
-        settlement_id="stl-0004",
-        account_id="acct-beta",
-        asset_code="USDC",
-        amount=Decimal("17.2500000"),
-        status="failed",
-        created_at=_REFERENCE_NOW,
-    ),
-]
-
-
-def _matches_filter(row: SettlementReportRow, filters: SettlementReportFilter) -> bool:
-    """Return ``True`` when ``row`` satisfies every provided filter field."""
-
-    if filters.account_id is not None and row.account_id != filters.account_id:
-        return False
-    if filters.asset_code is not None and row.asset_code != filters.asset_code:
-        return False
-    if filters.status is not None and row.status != filters.status:
-        return False
-    if filters.settlement_id is not None and row.settlement_id != filters.settlement_id:
-        return False
-    return True
-
-
-def _build_summary(filters: SettlementReportFilter) -> SettlementSummaryEnvelope:
-    """Build a deterministic summary envelope for the given filters."""
-
-    matched = [row for row in _IN_MEMORY_ROWS if _matches_filter(row, filters)]
-
-    total_amount = sum((row.amount for row in matched), Decimal("0"))
-    settled_count = sum(1 for row in matched if row.status == "settled")
-    pending_count = sum(1 for row in matched if row.status == "pending")
-    failed_count = sum(1 for row in matched if row.status == "failed")
-
-    return SettlementSummaryEnvelope(
-        generated_at=_REFERENCE_NOW,
-        filters=filters,
-        total_count=len(matched),
-        settled_count=settled_count,
-        pending_count=pending_count,
-        failed_count=failed_count,
+    Delegates data retrieval to the workspace service layer so that this
+    router stays free of persistence or fixture coupling.
+    """
+    items: List[SettlementBreakdownItem] = settlement_service.get_settlement_breakdown(
+        outage_id=query.outage_id,
+        asset_code=query.asset_code,
+        start_date=query.start_date,
+        end_date=query.end_date,
+    )
+    total_amount = settlement_service.sum_breakdown_amounts(items)
+    return SettlementBreakdownResponse(
+        outage_id=query.outage_id,
+        asset_code=query.asset_code,
+        start_date=query.start_date,
+        end_date=query.end_date,
         total_amount=total_amount,
-        rows=matched,
+        item_count=len(items),
+        items=items,
     )
 
 
-# ---------------------------------------------------------------------------
-# Dependency: resolve and validate query filters
-# ---------------------------------------------------------------------------
+@router.get(
+    "/breakdown",
+    response_model=SettlementBreakdownResponse,
+    summary="Get settlement breakdown for an outage",
+    description=(
+        "Returns a deterministic settlement breakdown for the requested "
+        "outage and optional filters. Read-only and side-effect free."
+    ),
+)
+def get_settlement_breakdown(
+    outage_id: str = Query(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Outage identifier to build the settlement breakdown for.",
+    ),
+    asset_code: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description="Optional asset code filter (e.g. 'USDC').",
+    ),
+    start_date: Optional[str] = Query(
+        default=None,
+        max_length=32,
+        description="Optional inclusive start date filter (ISO-8601).",
+    ),
+    end_date: Optional[str] = Query(
+        default=None,
+        max_length=32,
+        description="Optional inclusive end date filter (ISO-8601).",
+    ),
+) -> SettlementBreakdownResponse:
+    """Return the settlement breakdown for the requested outage."""
+    try:
+        query = SettlementReportQuery(
+            outage_id=outage_id,
+            asset_code=asset_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as exc:  # pragma: no cover - defensive validation
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    return _build_breakdown_response(query)
 
 
-def get_settlement_report_filter(
-    account_id: Optional[str] = Query(default=None, description="Filter by account id."),
-    asset_code: Optional[str] = Query(default=None, description="Filter by asset code."),
-    status: Optional[str] = Query(default=None, description="Filter by settlement status."),
-    settlement_id: Optional[str] = Query(default=None, description="Filter by settlement id."),
-    start_date: Optional[date] = Query(default=None, description="Inclusive start date."),
-    end_date: Optional[date] = Query(default=None, description="Inclusive end date."),
-) -> SettlementReportFilter:
-    """Construct a validated :class:`SettlementReportFilter` from query params.
+@router.get(
+    "/summary",
+    response_model=SettlementReportSummary,
+    summary="Get settlement report summary",
+    description=(
+        "Returns a deterministic aggregate summary of settlement reports "
+        "for the requested outage. Read-only and side-effect free."
+    ),
+)
+def get_settlement_summary(
+    outage_id: str = Query(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Outage identifier to summarize settlement reports for.",
+    ),
+    asset_code: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description="Optional asset code filter (e.g. 'USDC').",
+    ),
+) -> SettlementReportSummary:
+    """Return an aggregate settlement summary for the requested outage."""
+    try:
+        query = SettlementReportQuery(
+            outage_id=outage_id,
+            asset_code=asset_code,
+        )
+    except ValueError as exc:  # pragma: no cover - defensive validation
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
-    Validation errors raised by the schema are surfaced as HTTP 422 responses
-    with the stable workspace error shape via the router's exception handler.
-    """
-
-    return SettlementReportFilter(
-        account_id=account_id,
-        asset_code=asset_code,
-        status=status,
-        settlement_id=settlement_id,
-        start_date=start_date,
-        end_date=end_date,
+    return settlement_service.get_settlement_summary(
+        outage_id=query.outage_id,
+        asset_code=query.asset_code,
     )
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.get("", response_model=None)
+@router.get(
+    "/reports",
+    response_model=SettlementReportListResponse,
+    summary="List settlement reports",
+    description=(
+        "Returns a deterministic list of settlement reports for the "
+        "requested outage. Read-only and side-effect free."
+    ),
+)
 def list_settlement_reports(
-    filters: SettlementReportFilter = Depends(get_settlement_report_filter),
-) -> JSONResponse:
-    """Return a deterministic settlement summary for the provided filters."""
+    outage_id: str = Query(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Outage identifier to list settlement reports for.",
+    ),
+    asset_code: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description="Optional asset code filter (e.g. 'USDC').",
+    ),
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum number of reports to return.",
+    ),
+) -> SettlementReportListResponse:
+    """Return a deterministic list of settlement reports."""
+    try:
+        query = SettlementReportQuery(
+            outage_id=outage_id,
+            asset_code=asset_code,
+        )
+    except ValueError as exc:  # pragma: no cover - defensive validation
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
-    summary = _build_summary(filters)
-    return success_response(summary)
-
-
-# ---------------------------------------------------------------------------
-# Exception handling
-# ---------------------------------------------------------------------------
-
-
-def _handle_workspace_error(request: Request, exc: Exception) -> JSONResponse:
-    """Map workspace validation errors to the stable error response shape."""
-
-    http_exc = to_http_exception(exc)
-    return JSONResponse(
-        status_code=http_exc.status_code,
-        content=http_exc.detail,
+    reports = settlement_service.list_settlement_reports(
+        outage_id=query.outage_id,
+        asset_code=query.asset_code,
+        limit=limit,
+    )
+    return SettlementReportListResponse(
+        outage_id=query.outage_id,
+        asset_code=query.asset_code,
+        count=len(reports),
+        reports=reports,
     )
 
 
-def register_exception_handlers(app: FastAPI) -> None:
-    """Register workspace exception handlers on ``app``.
-
-    Kept as an explicit helper so tests can attach handlers to an isolated
-    ``FastAPI`` instance without touching the core application.
-    """
-
-    app.add_exception_handler(Exception, _handle_workspace_error)
-
-
-# Register handlers on the router so that including the router in an app also
-# wires up the workspace error mapping. FastAPI routers do not expose a direct
-# exception-handler API, so we attach handlers when the router is included.
-def _attach_handlers(app: FastAPI) -> None:
-    register_exception_handlers(app)
-
-
-# Provide a convenience factory for tests and isolated usage.
-def create_app() -> FastAPI:
-    """Create a minimal FastAPI app exposing only the settlement reports router."""
-
-    app = FastAPI(title="SLA Operations - Settlement Reports")
-    app.include_router(router)
-    register_exception_handlers(app)
-    return app
-
-
-__all__ = [
-    "router",
-    "create_app",
-    "register_exception_handlers",
-    "get_settlement_report_filter",
-    "list_settlement_reports",
-]
+__all__ = ["router"]

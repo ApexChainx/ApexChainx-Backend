@@ -1,156 +1,228 @@
-from collections.abc import Iterable, Mapping
-from typing import Any, Dict, Hashable, List, Sequence
+"""Generic, pure aggregation helpers for the SLA operations workspace.
+
+This module provides dependency-light, reusable aggregation utilities
+(counts, sums, averages, and group-by) that operate over arbitrary
+iterables. The helpers are intentionally independent of any application
+state, database, or framework so they can be safely reused by workspace
+services, schemas, and reporting code.
+
+All functions are pure: they do not mutate their inputs and produce
+deterministic results for a given input.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any, TypeVar
 
 __all__ = [
+    "count_values",
     "sum_values",
-    "count_by",
+    "average",
     "group_by",
-    "bucket_by",
 ]
 
+T = TypeVar("T")
+K = TypeVar("K")
+V = TypeVar("V")
 
-def _validate_records(records: Iterable[Mapping]) -> List[Mapping]:
-    """Validate that ``records`` is an iterable of mappings.
 
-    Returns the materialized list of records so callers can iterate multiple
-    times without re-consuming a generator.
+def _ensure_iterable(items: Iterable[T]) -> Iterable[T]:
+    """Validate that ``items`` is iterable and return it unchanged.
+
+    Parameters:
+        items: The candidate iterable.
+
+    Returns:
+        The same object, typed as an iterable.
+
+    Raises:
+        TypeError: If ``items`` is not iterable (e.g. ``None`` or an int).
     """
-    if records is None:
-        raise TypeError("records must be an iterable of mappings, got None")
-    if isinstance(records, (str, bytes)):
-        raise TypeError("records must be an iterable of mappings, not a string")
-    if not isinstance(records, Iterable):
-        raise TypeError(
-            f"records must be an iterable of mappings, got {type(records).__name__}"
-        )
-
-    materialized: List[Mapping] = []
-    for index, item in enumerate(records):
-        if not isinstance(item, Mapping):
-            raise TypeError(
-                f"record at index {index} must be a mapping, "
-                f"got {type(item).__name__}"
-            )
-        materialized.append(item)
-    return materialized
-
-
-def _get_value(record: Mapping, key: Hashable, index: int) -> Any:
-    """Fetch ``key`` from ``record`` or raise a descriptive ``KeyError``."""
+    if items is None:
+        raise TypeError("items must be an iterable, got None")
     try:
-        return record[key]
-    except KeyError:
-        raise KeyError(
-            f"record at index {index} is missing required key {key!r}"
-        ) from None
+        iter(items)
+    except TypeError as exc:
+        raise TypeError(
+            f"items must be an iterable, got {type(items).__name__!r}"
+        ) from exc
+    return items
 
 
-def sum_values(records: Iterable[Mapping], key: Hashable) -> float:
-    """Sum the numeric values stored under ``key`` across ``records``.
+def _is_number(value: Any) -> bool:
+    """Return ``True`` if ``value`` is a real numeric value (not bool)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-    Returns ``0`` for empty input. Raises ``TypeError`` for non-iterable
-    records or non-mapping items, ``KeyError`` when ``key`` is missing, and
-    ``ValueError`` when a value is not numeric.
+
+def count_values(
+    items: Iterable[T],
+    predicate: Callable[[T], bool] | None = None,
+) -> int:
+    """Count items in an iterable, optionally filtered by a predicate.
+
+    Parameters:
+        items: Any iterable of values to count.
+        predicate: Optional callable applied to each item. Only items for
+            which ``predicate(item)`` returns a truthy value are counted.
+            When ``None`` (default), every item is counted.
+
+    Returns:
+        The number of matching items. Returns ``0`` for an empty iterable.
+
+    Raises:
+        TypeError: If ``items`` is not iterable, or if ``predicate`` is
+            provided but is not callable.
+
+    Edge behavior:
+        - Empty input yields ``0``.
+        - ``predicate`` results are evaluated for truthiness, so any
+          truthy return value counts the item.
     """
-    materialized = _validate_records(records)
-    total: float = 0
-    for index, record in enumerate(materialized):
-        value = _get_value(record, key, index)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(
-                f"value at record index {index} for key {key!r} must be "
-                f"numeric, got {type(value).__name__}"
+    _ensure_iterable(items)
+    if predicate is not None and not callable(predicate):
+        raise TypeError("predicate must be callable or None")
+
+    if predicate is None:
+        return sum(1 for _ in items)
+    return sum(1 for item in items if predicate(item))
+
+
+def sum_values(
+    items: Iterable[T],
+    value_extractor: Callable[[T], float] | None = None,
+) -> float:
+    """Sum numeric values extracted from an iterable.
+
+    Parameters:
+        items: Any iterable of values to sum.
+        value_extractor: Optional callable mapping each item to a numeric
+            value. When ``None`` (default), items are assumed to be numeric
+            themselves.
+
+    Returns:
+        The total as a ``float``. Returns ``0.0`` for an empty iterable.
+
+    Raises:
+        TypeError: If ``items`` is not iterable, if ``value_extractor`` is
+            provided but is not callable, or if any extracted value is not
+            a real number (``int``/``float``, excluding ``bool``).
+
+    Edge behavior:
+        - Empty input yields ``0.0``.
+        - ``None`` and non-numeric values are rejected with ``TypeError``
+          rather than silently skipped, so callers can detect bad data.
+        - Booleans are rejected as non-numeric to avoid surprising sums.
+    """
+    _ensure_iterable(items)
+    if value_extractor is not None and not callable(value_extractor):
+        raise TypeError("value_extractor must be callable or None")
+
+    total = 0.0
+    for item in items:
+        value = item if value_extractor is None else value_extractor(item)
+        if not _is_number(value):
+            raise TypeError(
+                "sum_values encountered a non-numeric value: "
+                f"{value!r} ({type(value).__name__})"
             )
-        total += value
+        total += float(value)
     return total
 
 
-def count_by(records: Iterable[Mapping], key: Hashable) -> Dict[Any, int]:
-    """Count occurrences of each distinct value stored under ``key``.
+def average(
+    items: Iterable[T],
+    value_extractor: Callable[[T], float] | None = None,
+) -> float | None:
+    """Compute the arithmetic mean of numeric values from an iterable.
 
-    Returns an empty dict for empty input. Raises ``TypeError`` for
-    non-iterable records or non-mapping items and ``KeyError`` when ``key``
-    is missing.
+    Parameters:
+        items: Any iterable of values to average.
+        value_extractor: Optional callable mapping each item to a numeric
+            value. When ``None`` (default), items are assumed to be numeric
+            themselves.
+
+    Returns:
+        The mean as a ``float``, or ``None`` for an empty iterable (the
+        average of no values is undefined).
+
+    Raises:
+        TypeError: If ``items`` is not iterable, if ``value_extractor`` is
+            provided but is not callable, or if any extracted value is not
+            a real number (``int``/``float``, excluding ``bool``).
+
+    Edge behavior:
+        - Empty input yields ``None``.
+        - ``None`` and non-numeric values are rejected with ``TypeError``.
+        - Booleans are rejected as non-numeric.
     """
-    materialized = _validate_records(records)
-    counts: Dict[Any, int] = {}
-    for index, record in enumerate(materialized):
-        value = _get_value(record, key, index)
-        counts[value] = counts.get(value, 0) + 1
-    return counts
+    _ensure_iterable(items)
+    if value_extractor is not None and not callable(value_extractor):
+        raise TypeError("value_extractor must be callable or None")
 
-
-def group_by(records: Iterable[Mapping], key: Hashable) -> Dict[Any, List[Mapping]]:
-    """Group records by the value stored under ``key``.
-
-    Returns an empty dict for empty input. Raises ``TypeError`` for
-    non-iterable records or non-mapping items and ``KeyError`` when ``key``
-    is missing.
-    """
-    materialized = _validate_records(records)
-    groups: Dict[Any, List[Mapping]] = {}
-    for index, record in enumerate(materialized):
-        value = _get_value(record, key, index)
-        groups.setdefault(value, []).append(record)
-    return groups
-
-
-def bucket_by(
-    records: Iterable[Mapping],
-    key: Hashable,
-    buckets: Sequence[float],
-) -> Dict[float, List[Mapping]]:
-    """Bucket records by numeric value stored under ``key``.
-
-    ``buckets`` must be a non-empty sequence of ascending numeric upper
-    bounds. Each record is assigned to the first bucket whose upper bound is
-    greater than or equal to the record's value. Values exceeding the largest
-    bound are assigned to that largest bound.
-
-    Returns a dict keyed by each bucket bound (in the provided order) with
-    lists of matching records; buckets with no matches map to empty lists.
-    Raises ``TypeError`` for invalid records or non-numeric bucket bounds,
-    ``ValueError`` for empty or non-ascending bounds or non-numeric record
-    values, and ``KeyError`` when ``key`` is missing.
-    """
-    if buckets is None:
-        raise TypeError("buckets must be a non-empty sequence of numbers")
-    if isinstance(buckets, (str, bytes)):
-        raise TypeError("buckets must be a sequence of numbers, not a string")
-    if not isinstance(buckets, Sequence):
-        raise TypeError(
-            f"buckets must be a sequence of numbers, got {type(buckets).__name__}"
-        )
-    if len(buckets) == 0:
-        raise ValueError("buckets must contain at least one bound")
-
-    bounds: List[float] = []
-    for index, bound in enumerate(buckets):
-        if isinstance(bound, bool) or not isinstance(bound, (int, float)):
-            raise ValueError(
-                f"bucket bound at index {index} must be numeric, "
-                f"got {type(bound).__name__}"
+    total = 0.0
+    count = 0
+    for item in items:
+        value = item if value_extractor is None else value_extractor(item)
+        if not _is_number(value):
+            raise TypeError(
+                "average encountered a non-numeric value: "
+                f"{value!r} ({type(value).__name__})"
             )
-        bounds.append(bound)
-    for index in range(1, len(bounds)):
-        if bounds[index] < bounds[index - 1]:
-            raise ValueError("buckets must be provided in ascending order")
+        total += float(value)
+        count += 1
 
-    materialized = _validate_records(records)
-    result: Dict[float, List[Mapping]] = {bound: [] for bound in bounds}
+    if count == 0:
+        return None
+    return total / count
 
-    for index, record in enumerate(materialized):
-        value = _get_value(record, key, index)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(
-                f"value at record index {index} for key {key!r} must be "
-                f"numeric, got {type(value).__name__}"
-            )
-        target = bounds[-1]
-        for bound in bounds:
-            if value <= bound:
-                target = bound
-                break
-        result[target].append(record)
 
-    return result
+def group_by(
+    items: Iterable[T],
+    key_extractor: Callable[[T], K],
+    value_extractor: Callable[[T], V] | None = None,
+) -> dict[K, list[V]]:
+    """Group items into lists keyed by a computed key.
+
+    Parameters:
+        items: Any iterable of values to group.
+        key_extractor: Callable mapping each item to a hashable grouping
+            key. Required.
+        value_extractor: Optional callable mapping each item to the value
+            stored in the group. When ``None`` (default), the original item
+            is stored.
+
+    Returns:
+        A ``dict`` mapping each key to the list of values for items that
+        produced that key. The dict preserves first-seen key order, and each
+        group preserves input order, making the result deterministic.
+
+    Raises:
+        TypeError: If ``items`` is not iterable, if ``key_extractor`` is not
+            callable, if ``value_extractor`` is provided but not callable,
+            or if a computed key is unhashable.
+
+    Edge behavior:
+        - Empty input yields an empty ``dict``.
+        - Keys may be any hashable value, including ``None``.
+        - Unhashable keys raise ``TypeError``.
+    """
+    _ensure_iterable(items)
+    if not callable(key_extractor):
+        raise TypeError("key_extractor must be callable")
+    if value_extractor is not None and not callable(value_extractor):
+        raise TypeError("value_extractor must be callable or None")
+
+    grouped: dict[K, list[V]] = {}
+    for item in items:
+        key = key_extractor(item)
+        try:
+            hash(key)
+        except TypeError as exc:
+            raise TypeError(
+                f"group_by produced an unhashable key: {key!r} "
+                f"({type(key).__name__})"
+            ) from exc
+        value = item if value_extractor is None else value_extractor(item)
+        grouped.setdefault(key, []).append(value)  # type: ignore[arg-type]
+    return grouped

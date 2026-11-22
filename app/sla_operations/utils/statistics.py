@@ -1,178 +1,249 @@
+"""Pure statistical helper utilities for the SLA operations workspace.
+
+This module provides small, dependency-light, well-typed helpers for computing
+basic descriptive statistics over numeric iterables. It is intended for reuse by
+analytics, reporting, validation, and operational-insight modules within the
+``app.sla_operations`` workspace package.
+
+Design notes
+------------
+* All helpers are pure functions: they do not read or mutate global state.
+* Inputs are materialized into a list of floats before computation, so any
+  iterable (generators, tuples, sets, etc.) is accepted.
+* ``bool`` values are explicitly rejected even though ``bool`` is a subclass of
+  ``int`` in Python, because treating ``True``/``False`` as ``1``/``0`` is
+  almost always a bug in analytics code.
+* Non-numeric values, ``NaN``, and infinite values raise ``ValueError``.
+* Empty inputs raise ``ValueError`` for every helper in this module.
+
+Percentile method
+-----------------
+``percentile`` uses linear interpolation between closest ranks (the same method
+as ``numpy.percentile`` with ``method="linear"`` and ``statistics.quantiles``
+with ``method="inclusive"``). For a sorted sample of ``n`` values and a
+percentile ``p`` in ``[0, 100]``, the rank is computed as::
+
+    rank = (p / 100) * (n - 1)
+
+The result is the linear interpolation between ``sorted_values[floor(rank)]``
+and ``sorted_values[ceil(rank)]``. This yields ``p=0`` equal to the minimum and
+``p=100`` equal to the maximum.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from math import sqrt
-from typing import Dict, Iterable, List, Sequence, Union
+import math
+from typing import Iterable, List
 
-Number = Union[int, float]
+__all__ = [
+    "minimum",
+    "maximum",
+    "mean",
+    "median",
+    "percentile",
+]
 
 
-def _to_list(values: Iterable[Number]) -> List[Number]:
-    """Materialize an iterable of numbers, validating each element.
+def _to_float_list(values: Iterable[float]) -> List[float]:
+    """Validate and materialize an iterable of numbers into a list of floats.
 
-    Raises:
-        TypeError: If any element is not an int or float (bool excluded).
-        ValueError: If the sequence is empty.
+    Parameters
+    ----------
+    values:
+        An iterable of numeric values. ``bool`` values are rejected.
+
+    Returns
+    -------
+    list[float]
+        The validated values as floats, in their original order.
+
+    Raises
+    ------
+    ValueError
+        If ``values`` is empty, contains a ``bool``, contains a non-numeric
+        value, or contains ``NaN`` or an infinite value.
+    TypeError
+        If ``values`` is not iterable.
     """
-    if isinstance(values, (str, bytes)):
-        raise TypeError("values must be an iterable of numbers, not a string")
+    if values is None:
+        raise ValueError("values must be a non-empty iterable of numbers")
 
     try:
-        items = list(values)
-    except TypeError as exc:
+        iterator = iter(values)
+    except TypeError as exc:  # pragma: no cover - defensive
         raise TypeError("values must be an iterable of numbers") from exc
 
-    if not items:
-        raise ValueError("values must not be empty")
-
-    for item in items:
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            raise TypeError(
-                f"all values must be numeric, got {type(item).__name__}"
+    result: List[float] = []
+    for item in iterator:
+        if isinstance(item, bool):
+            raise ValueError("boolean values are not allowed in numeric input")
+        if not isinstance(item, (int, float)):
+            raise ValueError(
+                f"non-numeric value encountered: {item!r} (type {type(item).__name__})"
             )
+        as_float = float(item)
+        if math.isnan(as_float):
+            raise ValueError("NaN values are not allowed in numeric input")
+        if math.isinf(as_float):
+            raise ValueError("infinite values are not allowed in numeric input")
+        result.append(as_float)
 
-    return items
+    if not result:
+        raise ValueError("values must be a non-empty iterable of numbers")
 
-
-def mean(values: Iterable[Number]) -> float:
-    """Return the arithmetic mean of ``values``.
-
-    Raises:
-        TypeError: If any value is non-numeric.
-        ValueError: If ``values`` is empty.
-    """
-    items = _to_list(values)
-    return sum(items) / len(items)
+    return result
 
 
-def median(values: Iterable[Number]) -> float:
-    """Return the median of ``values``.
-
-    For an even number of values, returns the average of the two middle values.
-
-    Raises:
-        TypeError: If any value is non-numeric.
-        ValueError: If ``values`` is empty.
-    """
-    items = sorted(_to_list(values))
-    n = len(items)
-    mid = n // 2
-    if n % 2 == 1:
-        return float(items[mid])
-    return (items[mid - 1] + items[mid]) / 2.0
-
-
-def percentile(values: Iterable[Number], p: float) -> float:
-    """Return the ``p``-th percentile of ``values`` using linear interpolation.
-
-    ``p`` must be within the inclusive range [0, 100]. Uses the same
-    interpolation method as ``numpy.percentile`` with ``method="linear"``.
-
-    Raises:
-        TypeError: If any value is non-numeric or ``p`` is not numeric.
-        ValueError: If ``values`` is empty or ``p`` is outside [0, 100].
-    """
-    if isinstance(p, bool) or not isinstance(p, (int, float)):
-        raise TypeError("p must be numeric")
-    if p < 0 or p > 100:
-        raise ValueError("p must be between 0 and 100 inclusive")
-
-    items = sorted(_to_list(values))
-    n = len(items)
-    if n == 1:
-        return float(items[0])
-
-    rank = (p / 100.0) * (n - 1)
-    lower_index = int(rank)
-    upper_index = min(lower_index + 1, n - 1)
-    fraction = rank - lower_index
-
-    lower = items[lower_index]
-    upper = items[upper_index]
-    return float(lower + (upper - lower) * fraction)
-
-
-def stddev(values: Iterable[Number], sample: bool = True) -> float:
-    """Return the standard deviation of ``values``.
-
-    Args:
-        values: Sequence of numbers.
-        sample: If True (default), compute the sample standard deviation
-            (denominator ``n - 1``). If False, compute the population
-            standard deviation (denominator ``n``).
-
-    Raises:
-        TypeError: If any value is non-numeric.
-        ValueError: If ``values`` is empty, or if ``sample`` is True and
-            fewer than two values are provided.
-    """
-    items = _to_list(values)
-    n = len(items)
-
-    if sample and n < 2:
-        raise ValueError("sample standard deviation requires at least two values")
-
-    avg = sum(items) / n
-    squared_diffs = sum((x - avg) ** 2 for x in items)
-    denominator = (n - 1) if sample else n
-    return sqrt(squared_diffs / denominator)
-
-
-def minimum(values: Iterable[Number]) -> Number:
+def minimum(values: Iterable[float]) -> float:
     """Return the smallest value in ``values``.
 
-    Raises:
-        TypeError: If any value is non-numeric.
-        ValueError: If ``values`` is empty.
+    Parameters
+    ----------
+    values:
+        A non-empty iterable of numeric values.
+
+    Returns
+    -------
+    float
+        The minimum value.
+
+    Raises
+    ------
+    ValueError
+        If ``values`` is empty or contains invalid entries (bools, non-numeric,
+        ``NaN``, or infinite values).
     """
-    return min(_to_list(values))
+    return min(_to_float_list(values))
 
 
-def maximum(values: Iterable[Number]) -> Number:
+def maximum(values: Iterable[float]) -> float:
     """Return the largest value in ``values``.
 
-    Raises:
-        TypeError: If any value is non-numeric.
-        ValueError: If ``values`` is empty.
+    Parameters
+    ----------
+    values:
+        A non-empty iterable of numeric values.
+
+    Returns
+    -------
+    float
+        The maximum value.
+
+    Raises
+    ------
+    ValueError
+        If ``values`` is empty or contains invalid entries (bools, non-numeric,
+        ``NaN``, or infinite values).
     """
-    return max(_to_list(values))
+    return max(_to_float_list(values))
 
 
-@dataclass(frozen=True)
-class StatisticsSummary:
-    """Aggregated statistics for a sequence of numbers."""
+def mean(values: Iterable[float]) -> float:
+    """Return the arithmetic mean of ``values``.
 
-    count: int
-    mean: float
-    median: float
-    minimum: Number
-    maximum: Number
-    stddev: float
-    p25: float
-    p50: float
-    p75: float
+    Parameters
+    ----------
+    values:
+        A non-empty iterable of numeric values.
 
-    def as_dict(self) -> Dict[str, Number]:
-        """Return the summary as a plain dictionary."""
-        return asdict(self)
+    Returns
+    -------
+    float
+        The arithmetic mean.
 
-
-def summary(values: Sequence[Number]) -> StatisticsSummary:
-    """Return a :class:`StatisticsSummary` for ``values``.
-
-    Raises:
-        TypeError: If any value is non-numeric.
-        ValueError: If ``values`` is empty.
+    Raises
+    ------
+    ValueError
+        If ``values`` is empty or contains invalid entries (bools, non-numeric,
+        ``NaN``, or infinite values).
     """
-    items = _to_list(values)
-    return StatisticsSummary(
-        count=len(items),
-        mean=mean(items),
-        median=median(items),
-        minimum=minimum(items),
-        maximum=maximum(items),
-        stddev=stddev(items, sample=True),
-        p25=percentile(items, 25),
-        p50=percentile(items, 50),
-        p75=percentile(items, 75),
-    )
+    data = _to_float_list(values)
+    return sum(data) / len(data)
+
+
+def median(values: Iterable[float]) -> float:
+    """Return the median of ``values``.
+
+    For an even number of values, the median is the average of the two middle
+    values after sorting.
+
+    Parameters
+    ----------
+    values:
+        A non-empty iterable of numeric values.
+
+    Returns
+    -------
+    float
+        The median value.
+
+    Raises
+    ------
+    ValueError
+        If ``values`` is empty or contains invalid entries (bools, non-numeric,
+        ``NaN``, or infinite values).
+    """
+    data = sorted(_to_float_list(values))
+    n = len(data)
+    mid = n // 2
+    if n % 2 == 1:
+        return data[mid]
+    return (data[mid - 1] + data[mid]) / 2.0
+
+
+def percentile(values: Iterable[float], p: float) -> float:
+    """Return the ``p``-th percentile of ``values`` using linear interpolation.
+
+    The percentile is computed by sorting the input and interpolating linearly
+    between the closest ranks (equivalent to ``numpy.percentile`` with
+    ``method="linear"``). ``p=0`` returns the minimum and ``p=100`` returns the
+    maximum.
+
+    Parameters
+    ----------
+    values:
+        A non-empty iterable of numeric values.
+    p:
+        The percentile to compute, as a number in the inclusive range
+        ``[0, 100]``.
+
+    Returns
+    -------
+    float
+        The interpolated percentile value.
+
+    Raises
+    ------
+    ValueError
+        If ``p`` is a ``bool``, non-numeric, ``NaN``, infinite, or outside the
+        range ``[0, 100]``; or if ``values`` is empty or contains invalid
+        entries (bools, non-numeric, ``NaN``, or infinite values).
+    """
+    if isinstance(p, bool):
+        raise ValueError("percentile p must be a number, not a bool")
+    if not isinstance(p, (int, float)):
+        raise ValueError(
+            f"percentile p must be numeric, got {type(p).__name__}"
+        )
+    p_float = float(p)
+    if math.isnan(p_float) or math.isinf(p_float):
+        raise ValueError("percentile p must be a finite number")
+    if p_float < 0.0 or p_float > 100.0:
+        raise ValueError("percentile p must be within the range [0, 100]")
+
+    data = sorted(_to_float_list(values))
+    n = len(data)
+    if n == 1:
+        return data[0]
+
+    rank = (p_float / 100.0) * (n - 1)
+    lower_index = int(math.floor(rank))
+    upper_index = int(math.ceil(rank))
+
+    if lower_index == upper_index:
+        return data[lower_index]
+
+    lower_value = data[lower_index]
+    upper_value = data[upper_index]
+    fraction = rank - lower_index
+    return lower_value + (upper_value - lower_value) * fraction
