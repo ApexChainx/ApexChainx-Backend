@@ -1,63 +1,68 @@
-"""Pure, dependency-light helper utilities for the SLA operations workspace.
+"""SLA operations workspace utilities.
 
-This subpackage groups small, side-effect-free helper modules that support
-analytics, reporting, validation, and operational insight use cases within
-``app.sla_operations``. The helpers are intentionally independent of core
-application state (no database, ORM, or settings imports) so they can be
-reused freely by workspace services and schemas.
+This package exposes lightweight, dependency-free helpers used by workspace
+services and schemas for filtering, sorting, severity normalization, and text
+sanitization of in-memory operational records.
 
-Modules
--------
-- ``thresholds``: compare observed metrics against SLA thresholds.
-- ``aggregation``: generic counts, sums, averages, and group-by helpers.
-- ``identifiers``: validation and formatting of operational identifiers.
-- ``statistics``: basic statistical helpers (min/max/mean/median/percentiles).
+Public helpers are re-exported here for convenient access::
 
-Public helpers from each module are re-exported here for convenience, e.g.::
+    from app.sla_operations.utils import normalize_severity, sanitize_text
 
-    from app.sla_operations.utils import mean, is_within_threshold
+The modules in this package intentionally avoid importing core application
+state (database sessions, ORM models, settings, etc.) so they remain pure and
+easily testable.
 """
 
-from app.sla_operations.utils.aggregation import (
-    average,
-    count,
-    group_by,
-    sum_values,
+from __future__ import annotations
+
+from .filtering import (
+    FilterOperator,
+    FilterPredicate,
+    apply_filters,
+    matches_filter,
+    matches_filters,
 )
-from app.sla_operations.utils.identifiers import (
-    format_identifier,
-    is_valid_identifier,
-    normalize_identifier,
+from .sanitization import (
+    collapse_whitespace,
+    sanitize_text,
+    strip_control_characters,
+    truncate_text,
 )
-from app.sla_operations.utils.statistics import (
-    maximum,
-    mean,
-    median,
-    minimum,
-    percentile,
+from .severity import (
+    SEVERITY_RANK,
+    is_valid_severity,
+    normalize_severity,
+    severity_rank,
+    sort_by_severity,
 )
-from app.sla_operations.utils.thresholds import (
-    compare_to_threshold,
-    is_within_threshold,
+from .sorting import (
+    SortDirection,
+    SortKey,
+    apply_sorting,
+    sort_records,
 )
 
 __all__ = [
-    # thresholds
-    "compare_to_threshold",
-    "is_within_threshold",
-    # aggregation
-    "average",
-    "count",
-    "group_by",
-    "sum_values",
-    # identifiers
-    "format_identifier",
-    "is_valid_identifier",
-    "normalize_identifier",
-    # statistics
-    "maximum",
-    "mean",
-    "median",
-    "minimum",
-    "percentile",
+    # filtering
+    "FilterOperator",
+    "FilterPredicate",
+    "apply_filters",
+    "matches_filter",
+    "matches_filters",
+    # sorting
+    "SortDirection",
+    "SortKey",
+    "apply_sorting",
+    "sort_records",
+    # severity
+    "SEVERITY_RANK",
+    "is_valid_severity",
+    "normalize_severity",
+    "severity_rank",
+    "sort_by_severity",
+    # sanitization
+    "collapse_whitespace",
+    "sanitize_text",
+    "strip_control_characters",
+    "truncate_text",
 ]
