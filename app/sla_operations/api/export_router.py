@@ -1,111 +1,243 @@
+"""Workspace-local export router for the SLA operations package.
+
+This module provides an isolated FastAPI ``APIRouter`` for preparing export
+payloads and metadata. It is intentionally *not* wired into the core
+``app/api/v1/router.py`` or ``app/main.py``; maintainers may integrate it later.
+
+The module is importable standalone and has no side effects on core systems.
+"""
+
 from __future__ import annotations
 
-import csv
-import io
-from datetime import datetime, timezone
-from typing import Any, Dict, List, TypedDict
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Sequence
 
-from fastapi import APIRouter
-from fastapi.responses import Response
+from fastapi import APIRouter, status
+from pydantic import BaseModel, Field
 
-router = APIRouter()
+from app.sla_operations.api.error_mapping import to_http_exception
+from app.sla_operations.api.responses import success_response
+from app.sla_operations.schemas.exports import (
+    ExportArtifact,
+    ExportFormat,
+    ExportRequest,
+    ExportResource,
+    ExportResponse,
+    ExportStatus,
+)
+from app.sla_operations.services.export_preparation import prepare_export_dataset
 
-EXPORT_FILENAME = "sla_operations_export.csv"
-EXPORT_CONTENT_TYPE = "text/csv"
+router = APIRouter(tags=["sla-operations-export"])
 
-# Small, deterministic in-module sample dataset used for workspace-local exports.
-SAMPLE_EXPORT_ROWS: List[Dict[str, Any]] = [
-    {
-        "sla_id": "SLA-001",
-        "service": "payments",
-        "status": "met",
-        "target_minutes": 60,
-        "actual_minutes": 42,
-    },
-    {
-        "sla_id": "SLA-002",
-        "service": "settlement",
-        "status": "breached",
-        "target_minutes": 120,
-        "actual_minutes": 155,
-    },
-    {
-        "sla_id": "SLA-003",
-        "service": "webhooks",
-        "status": "met",
-        "target_minutes": 30,
-        "actual_minutes": 18,
-    },
-]
-
-EXPORT_FIELDNAMES: List[str] = [
-    "sla_id",
-    "service",
-    "status",
-    "target_minutes",
-    "actual_minutes",
-]
+# Default artifact lifetime for prepared exports.
+DEFAULT_EXPORT_TTL = timedelta(hours=1)
 
 
-class ExportMetadata(TypedDict):
-    filename: str
-    content_type: str
-    row_count: int
-    generated_at: str
+class ExportFormatsResponse(BaseModel):
+    """Response model describing the supported export formats."""
+
+    formats: List[ExportFormat] = Field(
+        ..., description="Supported export formats with metadata."
+    )
 
 
-def prepare_export_metadata(
-    rows: List[Dict[str, Any]] | None = None,
-    *,
-    filename: str = EXPORT_FILENAME,
-    content_type: str = EXPORT_CONTENT_TYPE,
-    generated_at: datetime | None = None,
-) -> ExportMetadata:
-    """Build typed metadata describing a CSV export.
+def _derive_column_order(
+    fields: Optional[Sequence[str]],
+    records: Sequence[Dict[str, Any]],
+) -> List[str]:
+    """Derive a deterministic column order for the export.
 
-    Args:
-        rows: Rows included in the export. Defaults to the sample dataset.
-        filename: Name of the exported file.
-        content_type: MIME type of the exported content.
-        generated_at: Timestamp of generation. Defaults to the current UTC time.
-
-    Returns:
-        A typed dict with filename, content type, row count, and generated timestamp.
+    If ``fields`` is provided, its order is preserved (deduplicated). Otherwise
+    the order is derived from the first appearance of each key across records.
     """
-    export_rows = SAMPLE_EXPORT_ROWS if rows is None else rows
-    timestamp = generated_at if generated_at is not None else datetime.now(timezone.utc)
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    if fields:
+        seen: Dict[str, None] = {}
+        for name in fields:
+            if name not in seen:
+                seen[name] = None
+        return list(seen.keys())
 
-    return ExportMetadata(
-        filename=filename,
-        content_type=content_type,
-        row_count=len(export_rows),
-        generated_at=timestamp.isoformat(),
+    ordered: Dict[str, None] = {}
+    for record in records:
+        for key in record.keys():
+            if key not in ordered:
+                ordered[key] = None
+    return list(ordered.keys())
+
+
+def _apply_filters(
+    records: Sequence[Dict[str, Any]],
+    filters: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Apply exact-match filtering to records.
+
+    A record is retained only when every filter key exists in the record and
+    its value equals the filter value exactly.
+    """
+    if not filters:
+        return [dict(record) for record in records]
+
+    filtered: List[Dict[str, Any]] = []
+    for record in records:
+        if all(
+            key in record and record[key] == value
+            for key, value in filters.items()
+        ):
+            filtered.append(dict(record))
+    return filtered
+
+
+def _project_records(
+    records: Sequence[Dict[str, Any]],
+    columns: Sequence[str],
+) -> List[Dict[str, Any]]:
+    """Project records onto the given columns, preserving column order."""
+    return [{column: record.get(column) for column in columns} for record in records]
+
+
+def _render_bytes(
+    records: Sequence[Dict[str, Any]],
+    columns: Sequence[str],
+    export_format: ExportFormat,
+) -> bytes:
+    """Render the export dataset to bytes for the requested format.
+
+    Rendering is deterministic: records are serialized in the order provided and
+    keys follow the derived column order.
+    """
+    projected = _project_records(records, columns)
+
+    if export_format == ExportFormat.CSV:
+        header = ",".join(columns)
+        lines = [header]
+        for record in projected:
+            row = ",".join(_stringify(record.get(column)) for column in columns)
+            lines.append(row)
+        return ("\n".join(lines) + "\n").encode("utf-8")
+
+    if export_format == ExportFormat.JSON:
+        return json.dumps(
+            projected, sort_keys=False, separators=(",", ":"), default=str
+        ).encode("utf-8")
+
+    # Fallback: treat unknown formats as JSON for deterministic behavior.
+    return json.dumps(
+        projected, sort_keys=False, separators=(",", ":"), default=str
+    ).encode("utf-8")
+
+
+def _stringify(value: Any) -> str:
+    """Convert a value to a CSV-safe string representation."""
+    if value is None:
+        return ""
+    text = str(value)
+    if any(char in text for char in (",", '"', "\n", "\r")):
+        escaped = text.replace('"', '""')
+        return f'"{escaped}"'
+    return text
+
+
+def _checksum_sha256(payload: bytes) -> str:
+    """Compute the SHA-256 hex digest of the rendered payload."""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _build_filename(resource: ExportResource, export_format: ExportFormat) -> str:
+    """Build a deterministic filename for the export artifact."""
+    return f"{resource.value}_export.{export_format.value}"
+
+
+def _build_storage_key(
+    resource: ExportResource,
+    export_format: ExportFormat,
+    checksum: str,
+) -> str:
+    """Build a deterministic storage key for the export artifact."""
+    return f"sla_operations/exports/{resource.value}/{checksum}.{export_format.value}"
+
+
+def build_export_dataset(request: ExportRequest) -> Dict[str, Any]:
+    """Build the export dataset for a request.
+
+    Delegates to :func:`prepare_export_dataset` to obtain the raw records, then
+    applies exact-match filters and derives a deterministic column order.
+
+    Returns a dictionary with ``columns`` and ``records`` keys.
+    """
+    dataset = prepare_export_dataset(request)
+
+    if isinstance(dataset, dict):
+        raw_records = dataset.get("records", [])
+    else:
+        raw_records = list(dataset)
+
+    records = [dict(record) for record in raw_records]
+    records = _apply_filters(records, getattr(request, "filters", None))
+    columns = _derive_column_order(getattr(request, "fields", None), records)
+
+    return {"columns": columns, "records": records}
+
+
+def prepare_export_response(request: ExportRequest) -> ExportResponse:
+    """Prepare a deterministic :class:`ExportResponse` for a request."""
+    dataset = build_export_dataset(request)
+    columns: List[str] = dataset["columns"]
+    records: List[Dict[str, Any]] = dataset["records"]
+
+    payload = _render_bytes(records, columns, request.format)
+    checksum = _checksum_sha256(payload)
+
+    now = datetime.now(timezone.utc)
+    generated_at = now
+    expires_at = now + DEFAULT_EXPORT_TTL
+
+    artifact = ExportArtifact(
+        filename=_build_filename(request.resource, request.format),
+        content_type=request.format.content_type,
+        size_bytes=len(payload),
+        checksum_sha256=checksum,
+        storage_key=_build_storage_key(request.resource, request.format, checksum),
+        generated_at=generated_at,
+        expires_at=expires_at,
+    )
+
+    return ExportResponse(
+        status=ExportStatus.READY,
+        resource=request.resource,
+        format=request.format,
+        artifact=artifact,
+        record_count=len(records),
+        columns=columns,
     )
 
 
-def _render_csv(rows: List[Dict[str, Any]]) -> str:
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=EXPORT_FIELDNAMES, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-    return buffer.getvalue()
+@router.get(
+    "/exports/formats",
+    response_model=ExportFormatsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List supported export formats",
+)
+def list_export_formats() -> ExportFormatsResponse:
+    """Return the supported export formats with their metadata."""
+    return ExportFormatsResponse(formats=list(ExportFormat))
 
 
-@router.get("/export")
-def export_sla_operations() -> Response:
-    """Return the SLA operations sample dataset as a CSV download."""
-    metadata = prepare_export_metadata(SAMPLE_EXPORT_ROWS)
-    body = _render_csv(SAMPLE_EXPORT_ROWS)
-    headers = {
-        "Content-Disposition": f'attachment; filename="{metadata["filename"]}"',
-        "X-Export-Row-Count": str(metadata["row_count"]),
-        "X-Export-Generated-At": metadata["generated_at"],
-    }
-    return Response(
-        content=body,
-        media_type=metadata["content_type"],
-        headers=headers,
-    )
+@router.post(
+    "/exports/prepare",
+    status_code=status.HTTP_200_OK,
+    summary="Prepare an export payload and metadata",
+)
+def prepare_export(request: ExportRequest) -> Any:
+    """Validate an :class:`ExportRequest` and prepare export metadata.
+
+    Returns a success envelope wrapping the prepared :class:`ExportResponse`.
+    Errors are translated into HTTP exceptions via ``to_http_exception``.
+    """
+    try:
+        response = prepare_export_response(request)
+    except Exception as exc:  # noqa: BLE001 - mapped to HTTP error below
+        raise to_http_exception(exc) from exc
+
+    return success_response(response)
