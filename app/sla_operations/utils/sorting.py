@@ -1,247 +1,311 @@
-"""Sorting utilities for the SLA operations workspace.
-
-This module provides deterministic, stable sorting helpers used by the SLA
-operations workspace. It is intentionally self-contained and only depends on
-workspace-local modules so that it can be exercised in isolation from the core
-application.
-
-Ordering rules
---------------
-``sort_items`` applies the following rules, in order:
-
-1. ``None`` values are always grouped together. By default they are placed at
-   the end of the result (``none_last=True``); when ``none_last=False`` they are
-   placed at the beginning. This placement is independent of ``direction`` so
-   that ``None`` handling is predictable regardless of ascending/descending
-   order.
-2. Non-``None`` values are grouped by their type name (e.g. ``"int"``,
-   ``"str"``). Groups are ordered by type name so that mixed-type inputs sort
-   deterministically. Within a group, values are compared using their natural
-   ordering.
-3. If values within a type group are not mutually orderable (e.g. custom
-   objects without rich comparison), comparison falls back to the ``str``
-   representation of the values.
-4. The sort is stable: items that compare equal retain their original relative
-   order.
-
-The input sequence is never mutated; a new list is always returned.
-"""
-
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, List, Optional, Sequence, TypeVar, Union
+from functools import cmp_to_key
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
-try:  # pragma: no cover - import shim for workspace-local enum
-    from app.sla_operations.schemas.pagination import SortDirection
-except Exception:  # pragma: no cover - fallback when enum is unavailable
-    SortDirection = None  # type: ignore[assignment]
+__all__ = [
+    "sort_records",
+    "make_comparator",
+    "multi_key_sort",
+]
 
 
-T = TypeVar("T")
+def _validate_field(field: Any) -> str:
+    """Validate that a field name is a non-empty string.
 
+    Parameters:
+        field: The candidate field name.
 
-class SortingError(ValueError):
-    """Raised when a sorting operation cannot be performed.
+    Returns:
+        The field name as a ``str``.
 
-    Subclasses :class:`ValueError` so callers may catch either the specific
-    error or the broader built-in exception.
+    Raises:
+        TypeError: If ``field`` is not a string.
+        ValueError: If ``field`` is an empty (or whitespace-only) string.
     """
+    if not isinstance(field, str):
+        raise TypeError(
+            f"field name must be a string, got {type(field).__name__}"
+        )
+    if not field.strip():
+        raise ValueError("field name must be a non-empty string")
+    return field
 
 
-def _normalize_direction(direction: Union[str, "SortDirection", None]) -> str:
-    """Normalize a direction argument to ``"asc"`` or ``"desc"``.
+def _validate_descending(descending: Any) -> bool:
+    """Validate a ``descending`` flag.
 
-    Accepts the string values ``"asc"``/``"desc"`` (case-insensitive) as well
-    as a workspace-local ``SortDirection`` enum member. Raises
-    :class:`SortingError` for any other value.
+    Parameters:
+        descending: The candidate flag.
+
+    Returns:
+        The flag as a ``bool``.
+
+    Raises:
+        TypeError: If ``descending`` is not a boolean.
     """
-    if direction is None:
-        return "asc"
+    if not isinstance(descending, bool):
+        raise TypeError(
+            f"descending must be a bool, got {type(descending).__name__}"
+        )
+    return descending
 
-    # Handle enum members (works for str-based enums and plain enums).
-    value: Any = direction
-    if SortDirection is not None and isinstance(direction, SortDirection):
-        value = getattr(direction, "value", direction)
 
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in ("asc", "desc"):
-            return normalized
+def _validate_none_last(none_last: Any) -> bool:
+    """Validate a ``none_last`` flag.
 
-    raise SortingError(
-        f"Unknown sort direction: {direction!r}. Expected 'asc' or 'desc'."
+    Parameters:
+        none_last: The candidate flag.
+
+    Returns:
+        The flag as a ``bool``.
+
+    Raises:
+        TypeError: If ``none_last`` is not a boolean.
+    """
+    if not isinstance(none_last, bool):
+        raise TypeError(
+            f"none_last must be a bool, got {type(none_last).__name__}"
+        )
+    return none_last
+
+
+def _get_field(record: Any, field: str) -> Any:
+    """Extract a field value from a mapping-like record.
+
+    Missing fields are treated as ``None``. Records that are not mapping-like
+    (i.e. do not support ``__getitem__``) are rejected.
+
+    Parameters:
+        record: A mapping-like object (e.g. ``dict``).
+        field: The field name to look up.
+
+    Returns:
+        The field value, or ``None`` if the field is absent.
+
+    Raises:
+        TypeError: If ``record`` is not mapping-like.
+    """
+    if isinstance(record, Mapping):
+        return record.get(field)
+    if hasattr(record, "__getitem__"):
+        try:
+            return record[field]
+        except (KeyError, IndexError):
+            return None
+    raise TypeError(
+        "record must be mapping-like (support __getitem__), "
+        f"got {type(record).__name__}"
     )
 
 
-def _type_group_name(value: Any) -> str:
-    """Return a deterministic grouping name for a value's type."""
-    return type(value).__name__
-
-
-def _safe_compare(a: Any, b: Any) -> int:
-    """Compare two values, falling back to string comparison if needed.
-
-    Returns a negative, zero, or positive integer following the convention of
-    :func:`cmp`. Values that cannot be compared directly are compared by their
-    ``str`` representation.
-    """
-    try:
-        if a < b:
-            return -1
-        if a > b:
-            return 1
-        return 0
-    except TypeError:
-        sa, sb = str(a), str(b)
-        if sa < sb:
-            return -1
-        if sa > sb:
-            return 1
-        return 0
-
-
-def _make_sort_key(
-    key: Union[str, Callable[[Any], Any], None],
-    direction: str,
+def _compare_values(
+    left: Any,
+    right: Any,
+    descending: bool,
     none_last: bool,
-) -> Callable[[Any], tuple]:
-    """Build a sort key function implementing the documented ordering rules."""
+) -> int:
+    """Compare two field values with deterministic ``None`` placement.
 
-    def extract(item: Any) -> Any:
-        if key is None:
-            return item
-        if callable(key):
-            return key(item)
-        if isinstance(key, str):
-            if isinstance(item, dict):
-                if key not in item:
-                    raise SortingError(
-                        f"Missing key {key!r} in item: {item!r}"
-                    )
-                return item[key]
-            try:
-                return getattr(item, key)
-            except AttributeError as exc:
-                raise SortingError(
-                    f"Missing attribute {key!r} on item: {item!r}"
-                ) from exc
-        raise SortingError(
-            f"Invalid key: {key!r}. Expected a string, callable, or None."
+    ``None`` values are ordered according to ``none_last`` regardless of
+    ``descending``: when ``none_last`` is ``True`` they sort after all
+    non-``None`` values, otherwise before them. Non-``None`` values are
+    compared with the natural ordering of their types; ``descending`` inverts
+    that comparison.
+
+    Parameters:
+        left: Left-hand value.
+        right: Right-hand value.
+        descending: Whether non-``None`` ordering is reversed.
+        none_last: Whether ``None`` values sort last.
+
+    Returns:
+        ``-1``, ``0`` or ``1``.
+
+    Raises:
+        TypeError: If two non-``None`` values are not mutually comparable.
+    """
+    left_none = left is None
+    right_none = right is None
+
+    if left_none and right_none:
+        return 0
+    if left_none:
+        return 1 if none_last else -1
+    if right_none:
+        return -1 if none_last else 1
+
+    try:
+        if left < right:
+            result = -1
+        elif left > right:
+            result = 1
+        else:
+            result = 0
+    except TypeError as exc:
+        raise TypeError(
+            "values are not mutually comparable: "
+            f"{type(left).__name__} vs {type(right).__name__}"
+        ) from exc
+
+    return -result if descending else result
+
+
+def make_comparator(
+    field: str,
+    descending: bool = False,
+    none_last: bool = True,
+) -> Callable[[Any, Any], int]:
+    """Build a ``cmp``-style comparator over a single record field.
+
+    The returned callable accepts two mapping-like records and returns a
+    negative integer, zero, or a positive integer following the semantics of
+    ``functools.cmp_to_key``.
+
+    Parameters:
+        field: Field name to compare. Must be a non-empty string.
+        descending: If ``True``, reverse the ordering of non-``None`` values.
+        none_last: If ``True`` (default), ``None`` values sort after all
+            non-``None`` values; otherwise they sort before them. This
+            placement is independent of ``descending``.
+
+    Returns:
+        A comparator ``(left, right) -> int``.
+
+    Raises:
+        TypeError: If ``field`` is not a string or the flags are not booleans.
+        ValueError: If ``field`` is empty or whitespace-only.
+
+    Edge behavior:
+        - Missing fields are treated as ``None``.
+        - Records that are not mapping-like raise ``TypeError`` when compared.
+        - Values of incompatible types raise ``TypeError`` when compared.
+    """
+    field = _validate_field(field)
+    descending = _validate_descending(descending)
+    none_last = _validate_none_last(none_last)
+
+    def comparator(left: Any, right: Any) -> int:
+        left_value = _get_field(left, field)
+        right_value = _get_field(right, field)
+        return _compare_values(left_value, right_value, descending, none_last)
+
+    return comparator
+
+
+def sort_records(
+    records: Optional[Iterable[Any]],
+    key: str,
+    descending: bool = False,
+    none_last: bool = True,
+) -> list[Any]:
+    """Sort mapping-like records by a single field.
+
+    Parameters:
+        records: Iterable of mapping-like records. ``None`` is treated as an
+            empty iterable.
+        key: Field name to sort by. Must be a non-empty string.
+        descending: If ``True``, reverse the ordering of non-``None`` values.
+        none_last: If ``True`` (default), records whose field is missing or
+            ``None`` sort last; otherwise they sort first. This placement is
+            independent of ``descending``.
+
+    Returns:
+        A new list of records in sorted order. The input is never mutated.
+
+    Raises:
+        TypeError: If ``key`` is not a string, the flags are not booleans, or
+            a record is not mapping-like.
+        ValueError: If ``key`` is empty or whitespace-only.
+
+    Edge behavior:
+        - ``records`` of ``None`` or an empty iterable yields ``[]``.
+        - Missing fields are treated as ``None``.
+        - Sorting is stable: records comparing equal retain input order.
+    """
+    key = _validate_field(key)
+    descending = _validate_descending(descending)
+    none_last = _validate_none_last(none_last)
+
+    if records is None:
+        return []
+
+    comparator = make_comparator(key, descending=descending, none_last=none_last)
+    return sorted(records, key=cmp_to_key(comparator))
+
+
+def multi_key_sort(
+    records: Optional[Iterable[Any]],
+    keys: Sequence[Tuple[str, bool]],
+) -> list[Any]:
+    """Sort mapping-like records by multiple fields in priority order.
+
+    Fields are applied in the order given: the first tuple is the primary
+    sort key, the second breaks ties, and so on. ``None`` values (including
+    missing fields) always sort last within each field, independent of that
+    field's ``descending`` flag.
+
+    Parameters:
+        records: Iterable of mapping-like records. ``None`` is treated as an
+            empty iterable.
+        keys: Sequence of ``(field, descending)`` tuples. Each ``field`` must
+            be a non-empty string and each ``descending`` a boolean.
+
+    Returns:
+        A new list of records in sorted order. The input is never mutated.
+
+    Raises:
+        TypeError: If ``keys`` is not a sequence of tuples, a field is not a
+            string, a ``descending`` flag is not a boolean, or a record is not
+            mapping-like.
+        ValueError: If a field is empty or whitespace-only.
+
+    Edge behavior:
+        - ``records`` of ``None`` or an empty iterable yields ``[]``.
+        - An empty ``keys`` sequence yields the records in their original
+          order (a shallow copy).
+        - Sorting is stable: records comparing equal on all keys retain input
+          order.
+    """
+    if keys is None:
+        raise TypeError("keys must be a sequence of (field, descending) tuples")
+    if isinstance(keys, (str, bytes)):
+        raise TypeError("keys must be a sequence of (field, descending) tuples")
+
+    normalized: list[Tuple[str, bool]] = []
+    for entry in keys:
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            raise TypeError(
+                "each key must be a (field, descending) tuple, "
+                f"got {entry!r}"
+            )
+        field, descending = entry
+        normalized.append(
+            (_validate_field(field), _validate_descending(descending))
         )
 
-    def sort_key(item: Any) -> tuple:
-        value = extract(item)
+    if records is None:
+        return []
 
-        if value is None:
-            # None group: rank 0 when placed first, rank 2 when placed last.
-            none_rank = 2 if none_last else 0
-            return (none_rank, "", 0, "")
+    result = list(records)
+    if not normalized:
+        return result
 
-        group = _type_group_name(value)
-        # Non-None group rank sits between the two None ranks.
-        group_rank = 1
+    # Apply keys from least to most significant so that Python's stable sort
+    # produces the correct multi-field ordering.
+    for field, descending in reversed(normalized):
+        comparator = make_comparator(
+            field, descending=descending, none_last=True
+        )
+        result.sort(key=cmp_to_key(comparator))
 
-        # For descending order we invert the comparison result. Because Python
-        # sorts ascending, we negate the comparison by using a wrapper that
-        # reverses ordering. We achieve this by returning a tuple whose
-        # comparison-relevant component is negated via a small helper object.
-        return (group_rank, group, _Comparable(value, direction), "")
-
-    return sort_key
-
-
-class _Comparable:
-    """Wrapper that reverses comparison order for descending sorts.
-
-    This keeps the sort key a plain tuple while allowing per-value direction
-    handling and the string fallback for unorderable values.
-    """
-
-    __slots__ = ("value", "direction")
-
-    def __init__(self, value: Any, direction: str) -> None:
-        self.value = value
-        self.direction = direction
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, _Comparable):
-            return NotImplemented
-        return _safe_compare(self.value, other.value) == 0
-
-    def __lt__(self, other: "_Comparable") -> bool:
-        result = _safe_compare(self.value, other.value)
-        if self.direction == "desc":
-            return result > 0
-        return result < 0
-
-    def __le__(self, other: "_Comparable") -> bool:
-        return self == other or self < other
-
-    def __gt__(self, other: "_Comparable") -> bool:
-        return not self <= other
-
-    def __ge__(self, other: "_Comparable") -> bool:
-        return not self < other
-
-    def __hash__(self) -> int:  # pragma: no cover - not used by sorting
-        return hash((type(self.value).__name__, str(self.value)))
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"_Comparable({self.value!r}, {self.direction!r})"
-
-
-def sort_items(
-    items: Iterable[T],
-    key: Union[str, Callable[[T], Any], None] = None,
-    direction: Union[str, "SortDirection"] = "asc",
-    none_last: bool = True,
-) -> List[T]:
-    """Return a new list of ``items`` sorted according to the module rules.
-
-    Parameters
-    ----------
-    items:
-        An iterable of items to sort. The input is not mutated.
-    key:
-        Either a string (dict key or attribute name), a callable that extracts a
-        sort value from each item, or ``None`` to sort the items themselves.
-    direction:
-        ``"asc"`` or ``"desc"`` (case-insensitive), or a workspace-local
-        ``SortDirection`` enum member. Defaults to ``"asc"``.
-    none_last:
-        When ``True`` (default), ``None`` values are placed at the end of the
-        result regardless of ``direction``. When ``False`` they are placed at
-        the beginning.
-
-    Returns
-    -------
-    list
-        A new, stably sorted list.
-
-    Raises
-    ------
-    SortingError
-        If ``direction`` is unknown, ``key`` is an empty string, a required key
-        is missing from an item, or ``key`` is of an unsupported type.
-    """
-    if isinstance(key, str) and key == "":
-        raise SortingError("Sort key must not be an empty string.")
-
-    normalized_direction = _normalize_direction(direction)
-
-    # Materialize the input so we can iterate multiple times without mutating.
-    materialized: List[T] = list(items)
-
-    sort_key = _make_sort_key(key, normalized_direction, none_last)
-
-    # Pre-validate keys so that missing-key errors are raised deterministically
-    # before sorting begins (and independent of sort internals).
-    for item in materialized:
-        # Calling the key function validates extraction; the returned tuple is
-        # discarded here.
-        sort_key(item)
-
-    return sorted(materialized, key=sort_key)
-
-
-__all__ = ["SortingError", "sort_items"]
+    return result
+</parameter>

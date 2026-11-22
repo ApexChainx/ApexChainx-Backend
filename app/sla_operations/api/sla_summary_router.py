@@ -1,87 +1,159 @@
-"""SLA summary router for the SLA operations workspace.
+"""Workspace-local SLA summary API router.
 
-This module exposes a single read-only endpoint that returns an aggregated
-SLA operation summary for a given query window. It is intentionally free of
-database and core-application imports so that it can be exercised in
-isolation by the workspace test-suite.
+This module exposes example read-only SLA summary endpoints backed by
+workspace services and deterministic fixtures. It is intentionally isolated
+from the core application routing (``app/api/v1/router.py`` and
+``app/main.py``) and can be imported independently.
 
-Dependency override
--------------------
-The data provider is injected through the FastAPI dependency named
-``get_sla_summary_provider``. Tests (and other consumers) can override it via
-``app.dependency_overrides[get_sla_summary_provider]`` to return a deterministic
-``SLAOperationSummary`` or to raise a workspace error.
+Assumptions:
+- The workspace schemas live in ``app/sla_operations/schemas/sla_summary.py``.
+- The aggregation helpers live in
+  ``app/sla_operations/services/sla_metrics_aggregation.py``.
+- Deterministic sample data lives in
+  ``app/sla_operations/fixtures/sla_metrics_fixtures.py``.
+
+All handlers are side-effect free and return deterministic responses for the
+provided sample inputs.
 """
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Query, status
 
-from app.sla_operations.api.error_mapping import map_workspace_error, to_http_exception
-from app.sla_operations.api.responses import ResponseEnvelope, success_response
-from app.sla_operations.schemas.sla_summary import SLASummaryQuery, SLAOperationSummary
+from app.sla_operations.fixtures import sla_metrics_fixtures
+from app.sla_operations.schemas.sla_summary import (
+    SlaSummaryListResponse,
+    SlaSummaryQuery,
+    SlaSummaryResponse,
+)
+from app.sla_operations.services import sla_metrics_aggregation
 
-__all__ = [
-    "router",
-    "get_sla_summary_provider",
-    "SLAOperationSummaryProvider",
-    "read_sla_summary",
-]
-
-
-# A provider is any callable that accepts a validated query and returns a
-# summary, or raises ``WorkspaceAPIError`` / ``LookupError`` / ``ValueError``.
-SLAOperationSummaryProvider = Callable[[SLASummaryQuery], SLAOperationSummary]
+router = APIRouter(
+    prefix="/sla-summary",
+    tags=["SLA Operations Summary"],
+)
 
 
-def get_sla_summary_provider() -> SLAOperationSummaryProvider:
-    """Return the default SLA summary data provider.
-
-    The default provider is a placeholder that raises ``LookupError`` so that
-    the endpoint is meaningful (returns a mapped 404) until a real provider is
-    wired in. Tests should override this dependency with a deterministic
-    provider.
-    """
-
-    def _default_provider(query: SLASummaryQuery) -> SLAOperationSummary:
-        raise LookupError(
-            "No SLA summary provider configured for the requested window."
-        )
-
-    return _default_provider
-
-
-router = APIRouter(prefix="/sla-summary", tags=["sla-operations"])
+def _build_query(
+    service: Optional[str],
+    region: Optional[str],
+    window_days: int,
+) -> SlaSummaryQuery:
+    """Construct and validate a summary query from raw request params."""
+    return SlaSummaryQuery(
+        service=service,
+        region=region,
+        window_days=window_days,
+    )
 
 
 @router.get(
     "",
-    response_model=ResponseEnvelope[SLAOperationSummary],
-    summary="Get SLA operation summary",
+    response_model=SlaSummaryListResponse,
+    summary="List deterministic SLA summaries",
     description=(
-        "Return an aggregated SLA operation summary for the requested window. "
-        "The underlying data provider is injected via the "
-        "``get_sla_summary_provider`` dependency and may be overridden."
+        "Return a deterministic list of SLA summary records for the "
+        "workspace sample data. Read-only and side-effect free."
     ),
 )
-def read_sla_summary(
-    query: SLASummaryQuery = Depends(),
-    provider: SLAOperationSummaryProvider = Depends(get_sla_summary_provider),
-) -> ResponseEnvelope[SLAOperationSummary]:
-    """Return the SLA operation summary for ``query``.
+def list_sla_summaries(
+    service: Optional[str] = Query(
+        default=None,
+        description="Optional service name filter.",
+    ),
+    region: Optional[str] = Query(
+        default=None,
+        description="Optional region filter.",
+    ),
+    window_days: int = Query(
+        default=30,
+        ge=1,
+        le=365,
+        description="Aggregation window in days (1-365).",
+    ),
+) -> SlaSummaryListResponse:
+    """List SLA summaries filtered by the supplied query parameters."""
+    query = _build_query(service=service, region=region, window_days=window_days)
 
-    Errors raised by the provider are translated into HTTP responses using the
-    workspace error-mapping helpers.
-    """
+    records = sla_metrics_fixtures.get_sla_summary_fixtures()
+    filtered = sla_metrics_aggregation.filter_summaries(
+        records,
+        service=query.service,
+        region=query.region,
+    )
+    summaries = sla_metrics_aggregation.aggregate_summaries(
+        filtered,
+        window_days=query.window_days,
+    )
 
-    try:
-        summary = provider(query)
-    except (LookupError, ValueError) as exc:
-        workspace_error = map_workspace_error(exc)
-        raise to_http_exception(workspace_error) from exc
-    except HTTPException:
-        raise
+    return SlaSummaryListResponse(
+        items=[SlaSummaryResponse(**item) for item in summaries],
+        total=len(summaries),
+        window_days=query.window_days,
+    )
 
-    return success_response(summary)
+
+@router.get(
+    "/{service}",
+    response_model=SlaSummaryResponse,
+    summary="Get a deterministic SLA summary by service",
+    description=(
+        "Return a deterministic SLA summary for a single service from the "
+        "workspace sample data. Read-only and side-effect free."
+    ),
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "No summary found for the requested service.",
+        },
+    },
+)
+def get_sla_summary(
+    service: str,
+    region: Optional[str] = Query(
+        default=None,
+        description="Optional region filter.",
+    ),
+    window_days: int = Query(
+        default=30,
+        ge=1,
+        le=365,
+        description="Aggregation window in days (1-365).",
+    ),
+) -> SlaSummaryResponse:
+    """Return a single SLA summary for the given service."""
+    query = _build_query(service=service, region=region, window_days=window_days)
+
+    records = sla_metrics_fixtures.get_sla_summary_fixtures()
+    filtered = sla_metrics_aggregation.filter_summaries(
+        records,
+        service=query.service,
+        region=query.region,
+    )
+    summaries = sla_metrics_aggregation.aggregate_summaries(
+        filtered,
+        window_days=query.window_days,
+    )
+
+    if not summaries:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No SLA summary found for service '{service}'.",
+        )
+
+    return SlaSummaryResponse(**summaries[0])
+
+
+@router.get(
+    "/health",
+    response_model=dict,
+    summary="Workspace SLA summary router health check",
+    description="Simple deterministic health check for the workspace router.",
+)
+def health() -> dict:
+    """Return a deterministic health payload for the workspace router."""
+    return {"status": "ok", "module": "sla_summary_router"}
+
+
+__all__: List[str] = ["router"]
