@@ -128,6 +128,10 @@ class PageMeta(BaseModel):
     returned: int = Field(..., ge=0)
     has_more: bool
 
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.page_size
+
     @model_validator(mode="after")
     def validate_consistency(self) -> PageMeta:
         expected_returned = min(self.page_size, max(self.total - self.offset, 0))
