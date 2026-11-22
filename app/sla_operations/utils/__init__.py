@@ -1,31 +1,68 @@
-"""Utility helpers for the SLA operations workspace.
+"""SLA operations workspace utilities.
 
-This package exposes small, dependency-light helpers that can be reused by
-workspace services, schemas, and analytics code without pulling in core
-application state (database sessions, ORM models, settings, etc.).
+This package exposes lightweight, dependency-free helpers used by workspace
+services and schemas for filtering, sorting, severity normalization, and text
+sanitization of in-memory operational records.
 
-Currently exported helpers focus on status normalization for outage, payment,
-and webhook status values.
+Public helpers are re-exported here for convenient access::
+
+    from app.sla_operations.utils import normalize_severity, sanitize_text
+
+The modules in this package intentionally avoid importing core application
+state (database sessions, ORM models, settings, etc.) so they remain pure and
+easily testable.
 """
 
-from .statuses import (
-    CANONICAL_OUTAGE_STATUSES,
-    CANONICAL_PAYMENT_STATUSES,
-    CANONICAL_WEBHOOK_STATUSES,
-    InvalidStatusError,
-    normalize_outage_status,
-    normalize_payment_status,
-    normalize_status,
-    normalize_webhook_status,
+from __future__ import annotations
+
+from .filtering import (
+    FilterOperator,
+    FilterPredicate,
+    apply_filters,
+    matches_filter,
+    matches_filters,
+)
+from .sanitization import (
+    collapse_whitespace,
+    sanitize_text,
+    strip_control_characters,
+    truncate_text,
+)
+from .severity import (
+    SEVERITY_RANK,
+    is_valid_severity,
+    normalize_severity,
+    severity_rank,
+    sort_by_severity,
+)
+from .sorting import (
+    SortDirection,
+    SortKey,
+    apply_sorting,
+    sort_records,
 )
 
 __all__ = [
-    "CANONICAL_OUTAGE_STATUSES",
-    "CANONICAL_PAYMENT_STATUSES",
-    "CANONICAL_WEBHOOK_STATUSES",
-    "InvalidStatusError",
-    "normalize_outage_status",
-    "normalize_payment_status",
-    "normalize_status",
-    "normalize_webhook_status",
+    # filtering
+    "FilterOperator",
+    "FilterPredicate",
+    "apply_filters",
+    "matches_filter",
+    "matches_filters",
+    # sorting
+    "SortDirection",
+    "SortKey",
+    "apply_sorting",
+    "sort_records",
+    # severity
+    "SEVERITY_RANK",
+    "is_valid_severity",
+    "normalize_severity",
+    "severity_rank",
+    "sort_by_severity",
+    # sanitization
+    "collapse_whitespace",
+    "sanitize_text",
+    "strip_control_characters",
+    "truncate_text",
 ]
