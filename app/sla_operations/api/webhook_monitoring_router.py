@@ -1,39 +1,34 @@
-"""Webhook monitoring router for the SLA operations workspace.
+"""Workspace-local webhook monitoring router for SLA operations.
 
-This module exposes a small, self-contained FastAPI router that serves
-webhook monitoring views and health information derived from deterministic
-workspace fixtures. It intentionally avoids any dependency on core
-application state (databases, external services, etc.) so that it can be
-exercised safely in isolation.
+This module provides an isolated, integration-ready FastAPI router exposing
+read-only webhook health and delivery insight endpoints. It is intentionally
+NOT registered in ``app/api/v1/router.py`` or ``app/main.py``; maintainers may
+wire it later.
 
-Endpoints
----------
-POST /webhook-monitoring/view
-    Build a :class:`WebhookMonitoringView` for a requested time window.
-
-GET /webhook-monitoring/health
-    Return a list of :class:`WebhookHealth` entries computed from the
-    workspace webhook fixtures.
+Design notes / assumptions:
+- All handlers are read-only and side-effect free.
+- Responses are deterministic for sample inputs, backed by fixtures in
+  ``app/sla_operations/fixtures/webhook_fixtures.py`` and helpers in
+  ``app/sla_operations/services/webhook_delivery_insights.py``.
+- Explicit Pydantic request/response models provide input/output validation.
+- The module can be imported independently without core router changes.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, status
 
-from app.sla_operations.api.error_mapping import WorkspaceAPIError, to_http_exception
-from app.sla_operations.fixtures.webhook_fixtures import (
-    webhook_delivery_fixtures,
-    webhook_endpoint_fixtures,
-)
+from app.sla_operations.fixtures import webhook_fixtures
 from app.sla_operations.schemas.webhook_monitoring import (
-    WebhookDeliverySummary,
-    WebhookHealth,
+    WebhookDeliveryInsight,
+    WebhookDeliveryInsightListResponse,
+    WebhookHealthResponse,
+    WebhookHealthSummary,
     WebhookMonitoringQuery,
-    WebhookMonitoringView,
 )
+from app.sla_operations.services import webhook_delivery_insights
 
 router = APIRouter(
     prefix="/webhook-monitoring",
@@ -41,196 +36,97 @@ router = APIRouter(
 )
 
 
-# Maximum allowed window size for a monitoring query. This keeps responses
-# bounded and deterministic regardless of caller input.
-_MAX_WINDOW = timedelta(days=30)
+def _resolve_webhook_id(webhook_id: str) -> str:
+    """Normalize and validate a webhook identifier.
 
-
-def _resolve_window(
-    query: WebhookMonitoringQuery,
-) -> tuple[datetime, datetime]:
-    """Resolve the effective ``[start, end]`` window for a query.
-
-    The query may specify explicit ``start``/``end`` timestamps or a
-    ``window_hours`` value relative to ``now``. When neither is provided a
-    default 24 hour window ending at ``now`` is used.
-
-    Raises:
-        WorkspaceAPIError: If the window is invalid (end before start,
-            non-positive duration, or larger than the maximum allowed).
+    Raises ``HTTPException`` (404) when the identifier is unknown to the
+    deterministic fixture dataset.
     """
-
-    now = query.now or datetime.now(timezone.utc)
-
-    if query.start is not None or query.end is not None:
-        start = query.start
-        end = query.end
-        if start is None:
-            if end is None:  # pragma: no cover - defensive
-                raise WorkspaceAPIError(
-                    "Invalid monitoring window: missing start and end.",
-                    status_code=422,
-                )
-            start = end - timedelta(hours=24)
-        if end is None:
-            end = now
-    elif query.window_hours is not None:
-        if query.window_hours <= 0:
-            raise WorkspaceAPIError(
-                "Invalid monitoring window: window_hours must be positive.",
-                status_code=422,
-            )
-        end = now
-        start = end - timedelta(hours=query.window_hours)
-    else:
-        end = now
-        start = end - timedelta(hours=24)
-
-    if end < start:
-        raise WorkspaceAPIError(
-            "Invalid monitoring window: end must not precede start.",
-            status_code=422,
+    normalized = webhook_id.strip()
+    if not normalized or not webhook_fixtures.webhook_exists(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Webhook '{webhook_id}' not found.",
         )
-
-    if (end - start) > _MAX_WINDOW:
-        raise WorkspaceAPIError(
-            "Invalid monitoring window: window exceeds maximum of 30 days.",
-            status_code=422,
-        )
-
-    return start, end
+    return normalized
 
 
-def _filter_deliveries(
-    start: datetime,
-    end: datetime,
-    endpoint_id: Optional[str],
-) -> List[dict]:
-    """Return delivery fixtures that fall within the window and endpoint."""
-
-    results: List[dict] = []
-    for delivery in webhook_delivery_fixtures:
-        if endpoint_id is not None and delivery.get("endpoint_id") != endpoint_id:
-            continue
-        delivered_at = delivery.get("delivered_at")
-        if delivered_at is None:
-            continue
-        if start <= delivered_at <= end:
-            results.append(delivery)
-    return results
+@router.get(
+    "/health",
+    response_model=WebhookHealthSummary,
+    summary="Get aggregate webhook health summary",
+)
+def get_webhook_health_summary() -> WebhookHealthSummary:
+    """Return an aggregate, deterministic health summary for all webhooks."""
+    return webhook_delivery_insights.build_health_summary()
 
 
-def _build_view(
-    query: WebhookMonitoringQuery,
-    start: datetime,
-    end: datetime,
-) -> WebhookMonitoringView:
-    """Construct a :class:`WebhookMonitoringView` from fixtures."""
+@router.get(
+    "/health/{webhook_id}",
+    response_model=WebhookHealthResponse,
+    summary="Get health status for a single webhook",
+)
+def get_webhook_health(webhook_id: str) -> WebhookHealthResponse:
+    """Return deterministic health status for a single webhook."""
+    resolved_id = _resolve_webhook_id(webhook_id)
+    return webhook_delivery_insights.build_webhook_health(resolved_id)
 
-    deliveries = _filter_deliveries(start, end, query.endpoint_id)
 
-    summaries: List[WebhookDeliverySummary] = []
-    for delivery in deliveries:
-        summaries.append(
-            WebhookDeliverySummary(
-                delivery_id=delivery["delivery_id"],
-                endpoint_id=delivery["endpoint_id"],
-                status=delivery["status"],
-                delivered_at=delivery["delivered_at"],
-                attempts=delivery.get("attempts", 1),
-                response_code=delivery.get("response_code"),
-            )
-        )
+@router.get(
+    "/deliveries",
+    response_model=WebhookDeliveryInsightListResponse,
+    summary="List webhook delivery insights",
+)
+def list_webhook_deliveries(
+    webhook_id: Optional[str] = Query(
+        default=None,
+        description="Optional webhook identifier to filter deliveries.",
+    ),
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum number of delivery insights to return.",
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Number of delivery insights to skip.",
+    ),
+) -> WebhookDeliveryInsightListResponse:
+    """Return a deterministic, paginated list of webhook delivery insights."""
+    query = WebhookMonitoringQuery(
+        webhook_id=webhook_id.strip() if webhook_id else None,
+        limit=limit,
+        offset=offset,
+    )
 
-    total = len(summaries)
-    succeeded = sum(1 for s in summaries if s.status == "success")
-    failed = sum(1 for s in summaries if s.status == "failed")
-    pending = total - succeeded - failed
+    resolved_id: Optional[str] = None
+    if query.webhook_id is not None:
+        resolved_id = _resolve_webhook_id(query.webhook_id)
 
-    return WebhookMonitoringView(
-        start=start,
-        end=end,
-        endpoint_id=query.endpoint_id,
-        total_deliveries=total,
-        succeeded=succeeded,
-        failed=failed,
-        pending=pending,
-        deliveries=summaries,
+    return webhook_delivery_insights.list_delivery_insights(
+        webhook_id=resolved_id,
+        limit=query.limit,
+        offset=query.offset,
     )
 
 
-def _build_health() -> List[WebhookHealth]:
-    """Compute health entries for each configured webhook endpoint."""
-
-    health_entries: List[WebhookHealth] = []
-    for endpoint in webhook_endpoint_fixtures:
-        endpoint_id = endpoint["endpoint_id"]
-        deliveries = [
-            d
-            for d in webhook_delivery_fixtures
-            if d.get("endpoint_id") == endpoint_id
-        ]
-        total = len(deliveries)
-        failed = sum(1 for d in deliveries if d.get("status") == "failed")
-        last_delivery = max(
-            (d["delivered_at"] for d in deliveries if d.get("delivered_at")),
-            default=None,
+@router.get(
+    "/deliveries/{delivery_id}",
+    response_model=WebhookDeliveryInsight,
+    summary="Get a single webhook delivery insight",
+)
+def get_webhook_delivery(delivery_id: str) -> WebhookDeliveryInsight:
+    """Return a single deterministic delivery insight by identifier."""
+    normalized = delivery_id.strip()
+    insight = webhook_delivery_insights.get_delivery_insight(normalized)
+    if insight is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Webhook delivery '{delivery_id}' not found.",
         )
-
-        if total == 0:
-            status = "unknown"
-        elif failed == 0:
-            status = "healthy"
-        elif failed < total:
-            status = "degraded"
-        else:
-            status = "unhealthy"
-
-        health_entries.append(
-            WebhookHealth(
-                endpoint_id=endpoint_id,
-                url=endpoint.get("url", ""),
-                status=status,
-                total_deliveries=total,
-                failed_deliveries=failed,
-                last_delivery_at=last_delivery,
-            )
-        )
-
-    return health_entries
+    return insight
 
 
-@router.post("/view", response_model=WebhookMonitoringView)
-def get_monitoring_view(query: WebhookMonitoringQuery) -> WebhookMonitoringView:
-    """Return a monitoring view for the requested window."""
-
-    try:
-        start, end = _resolve_window(query)
-        view = _build_view(query, start, end)
-    except WorkspaceAPIError as exc:
-        raise to_http_exception(exc) from exc
-
-    if query.endpoint_id is not None and not any(
-        e.get("endpoint_id") == query.endpoint_id
-        for e in webhook_endpoint_fixtures
-    ):
-        raise to_http_exception(
-            WorkspaceAPIError(
-                f"Webhook endpoint '{query.endpoint_id}' not found.",
-                status_code=404,
-            )
-        )
-
-    return view
-
-
-@router.get("/health", response_model=List[WebhookHealth])
-def get_webhook_health() -> List[WebhookHealth]:
-    """Return health information for all configured webhook endpoints."""
-
-    try:
-        return _build_health()
-    except WorkspaceAPIError as exc:  # pragma: no cover - defensive
-        raise to_http_exception(exc) from exc
-    except HTTPException:  # pragma: no cover - defensive
-        raise
+__all__: List[str] = ["router"]
