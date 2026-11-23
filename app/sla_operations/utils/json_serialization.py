@@ -25,6 +25,7 @@ from uuid import UUID
 __all__ = [
     "DeterministicJSONEncoder",
     "dumps",
+    "dumps_pretty",
     "loads",
     "JSONDecodeError",
     "JSONEncodeError",
@@ -125,6 +126,33 @@ def dumps(
     except TypeError as exc:
         # Normalize stdlib TypeError into our explicit error type.
         raise JSONEncodeError(str(exc)) from exc
+
+
+def dumps_pretty(obj: Any, indent: int = 2, **kwargs: Any) -> str:
+    """Serialize ``obj`` to a human-readable, deterministic JSON string.
+
+    Convenience wrapper around :func:`dumps` intended for report exports and
+    debugging output. Key ordering and separators remain deterministic.
+
+    Parameters
+    ----------
+    obj:
+        The value to serialize.
+    indent:
+        Number of spaces used for indentation. Must be a non-negative ``int``.
+    **kwargs:
+        Additional keyword arguments forwarded to :func:`dumps`.
+
+    Raises
+    ------
+    ValueError
+        If ``indent`` is not a non-negative integer.
+    JSONEncodeError
+        If ``obj`` contains a value that cannot be serialized.
+    """
+    if isinstance(indent, bool) or not isinstance(indent, int) or indent < 0:
+        raise ValueError("indent must be a non-negative integer")
+    return dumps(obj, indent=indent, **kwargs)
 
 
 def loads(s: Union[str, bytes, bytearray]) -> Any:
